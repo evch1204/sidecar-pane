@@ -94,7 +94,10 @@ export type WorktreeRun = {
   parent: string;
 };
 
-type Remembered = {name: string; branch: string; head: string; at: number; mergedAt?: number};
+// `born` is the first head the pane ever saw the folder at. A folder whose head
+// has moved on from it made commits of its own, which is the only way to tell
+// a fast-forwarded branch from a fresh checkout of the same commit.
+type Remembered = {name: string; branch: string; head: string; at: number; mergedAt?: number; born?: string};
 type Memory = Record<string, Remembered>;
 
 type Memo = {
@@ -181,12 +184,20 @@ function statusFromState(root: string, state: GitState | null): {dirty: number; 
 
 // What a worktree changed against the point it left its parent. From the
 // folder itself the work tree counts too; once the folder is gone only its
-// commits are left to compare.
-async function changedIn(root: string, wt: {path: string; head: string; gone: boolean}, parent: string): Promise<FileStat[]> {
-  const base = (await git(root, ['merge-base', wt.head, parent]))?.trim();
+// commits are left to compare. `from` is that point when the caller already
+// knows it: once a branch has merged, the merge base with its parent is its
+// own head, and a diff from there is empty.
+async function changedIn(
+  root: string,
+  wt: {path: string; head: string; gone: boolean},
+  parent: string,
+  from?: string,
+): Promise<FileStat[]> {
+  const base = from ?? (await git(root, ['merge-base', wt.head, parent]))?.trim();
   if (!base) return [];
-  const where = wt.gone ? root : wt.path;
-  const range = wt.gone ? [base, wt.head] : [base];
+  const commitsOnly = wt.gone || from !== undefined;
+  const where = commitsOnly ? root : wt.path;
+  const range = commitsOnly ? [base, wt.head] : [base];
   const names = (await git(where, ['diff', '--name-status', '-z', '--find-renames', ...range])) ?? '';
   const counts = (await git(where, ['diff', '--numstat', '-z', '--find-renames', ...range])) ?? '';
   return parseStats(names, counts);
@@ -227,7 +238,11 @@ export async function readWorktrees(
     if (!wt.head || pathKey(wt.path) === rootKey) continue;
     const was = memory[wt.path];
     if (was?.head === wt.head && was.branch === wt.branch) continue;
-    memory[wt.path] = {name: path.basename(wt.path), branch: wt.branch, head: wt.head, at: now, mergedAt: was?.mergedAt};
+    // An entry written before `born` was kept has no first head, and the head
+    // it has now is not one: guessing would call it merged the day it moves.
+    memory[wt.path] = {
+      name: path.basename(wt.path), branch: wt.branch, head: wt.head, at: now, mergedAt: was?.mergedAt, born: was ? was.born : wt.head,
+    };
     changed = true;
   }
 
@@ -301,13 +316,25 @@ export async function readWorktrees(
       // The trunk cannot be merged into itself, and the folder the pane is in
       // is where everything else is going, so neither is asked.
       const trunkItself = wt.main && (wt.branch === trunk || `origin/${wt.branch}` === trunk);
-      if (!isHere && !trunkItself) {
-        merged = await isAncestor(root, wt.head, parent);
-        // The time a merge was made never changes, so it is written down with
-        // the head it belongs to and never worked out twice.
-        if (merged) {
-          mergedAt = memory[wt.path]?.mergedAt ?? (await landedIn(root, wt.head, parent))?.at ?? null;
-          if (mergedAt && memory[wt.path] && memory[wt.path]!.mergedAt !== mergedAt) {
+      let from: string | undefined;
+      if (!isHere && !trunkItself && (await isAncestor(root, wt.head, parent))) {
+        // Reachable is not the same as merged. A folder checked out at its
+        // parent's head, or at any older commit of it, and never committed
+        // in, is reachable too, and calling it merged put a landing in the
+        // stream for work that never happened. It merged only if it brought
+        // something: a merge commit took it in from off the parent's own
+        // line, or its head has moved on from the one it was first seen at.
+        const landing = await landedIn(root, wt.head, parent);
+        const born = memory[wt.path]?.born;
+        const viaMerge = Boolean(landing?.merge && landing.parent !== wt.head);
+        if (landing && (viaMerge || (born && born !== wt.head))) {
+          merged = true;
+          mergedAt = landing.at;
+          // What it brought is measured from the commit before it arrived:
+          // where it left the line the merge was made on, or the head it
+          // started from.
+          from = viaMerge ? (await git(root, ['merge-base', wt.head, landing.parent]))?.trim() || undefined : born;
+          if (memory[wt.path] && memory[wt.path]!.mergedAt !== mergedAt) {
             memory[wt.path]!.mergedAt = mergedAt;
             changed = true;
           }
@@ -315,8 +342,9 @@ export async function readWorktrees(
       }
 
       // The pane's own folder shows its work as turns, so it is the one folder
-      // whose files are not worth a diff here.
-      if (!isHere) files = await changedIn(root, wt, parent);
+      // whose files are not worth a diff here. A merged folder with no known
+      // start has nothing to measure from.
+      if (!isHere && (!merged || from)) files = await changedIn(root, wt, parent, from);
     }
 
     const fresh: Memo = {at: now, refs, status: status.key, dirty: status.dirty, ahead, merged, mergedAt, files};
@@ -416,6 +444,17 @@ export function journeyOf(wt: WorktreeRun, now: number): Journey {
 }
 
 const plural = (n: number, one: string): string => `${n} ${n === 1 ? one : `${one}s`}`;
+
+const sameDay = (a: number, b: number): boolean => new Date(a).toDateString() === new Date(b).toDateString();
+
+// The folders a list of them shows: every one on disk, and a gone one only on
+// the day its work landed here, which is the day that is news. Everything
+// else that is gone — removed, never recorded, merged last week — is history
+// the stream already carries, and listed it pushed the folders somebody is
+// working in off the bottom of the panel.
+export function visibleWorktrees(worktrees: WorktreeRun[], now: number): WorktreeRun[] {
+  return worktrees.filter(wt => !wt.gone || (wt.merged && wt.mergedAt !== null && sameDay(wt.mergedAt, now)));
+}
 
 // A branch that arrived in the pane's folder: one row of its own in the stream.
 export type Landing = {wt: WorktreeRun; at: number; files: FileStat[]; added: number; removed: number};
