@@ -7,7 +7,7 @@ import {
   type ChangedFile, type DayGroup, type FileHistory, type TurnChange,
 } from '../../core/turns';
 import {modelName} from '../../core/usage';
-import {journeyOf, stateWord, type Landing, type StateWord, type WorktreeRun} from '../../core/worktrees';
+import {journeyOf, stateWord, visibleWorktrees, type Landing, type StateWord, type WorktreeRun} from '../../core/worktrees';
 import {
   blankRow, brief, chevron, chip, counts, cut, INDENT, INDENT2, num, padTo, pageRow, plural, sep, seg, sizeCells, sizeLit, SIZE_CELLS,
   skylineCol, sp, span, spinner, splitBar, streamRoom, streamRow, tokens, turnMark, width, widthOf,
@@ -36,9 +36,8 @@ export type Open = {
   // Rows that fold a crowd of agents away, keyed by turn.
   folded: ReadonlySet<string>;
   hists: ReadonlySet<string>;
-  // Branches that landed here whose files are open, keyed by folder path. A
-  // pane that has never drawn a landing has nothing here, so it may be left out.
-  landings?: ReadonlySet<string>;
+  // Branches that landed here whose files are open, keyed by folder path.
+  landings: ReadonlySet<string>;
 };
 
 export type ChangesInput = {
@@ -74,15 +73,15 @@ export type ChangesInput = {
   // chat's running turn is on is waiting on you, not on the machine. Only that
   // one: with two chats, or in `all`, the others are working as usual.
   waiting?: string;
-  // The one folder the stream is about, when a workspace was picked: `null`,
-  // or left out, is the pane's own. The turns come in already filtered to it.
-  focus?: string | null;
+  // The one folder the stream is about, when a workspace was picked: `null`
+  // is the pane's own. The turns come in already filtered to it.
+  focus: string | null;
   // Whether the side panel is on screen. When it is, it carries the list of
   // workspaces and the name of the picked one, so the stream does not repeat
-  // them. Left out, there is no panel.
-  panel?: 'open' | 'folded' | 'off';
+  // them.
+  panel: 'open' | 'folded' | 'off';
   // Branches that merged into the pane's folder, newest first.
-  landings?: Landing[];
+  landings: Landing[];
 };
 
 const FILES_SHOWN = 8;
@@ -960,9 +959,11 @@ type Folder = {wt: WorktreeRun; colour: string; label: string};
 // over the whole list, not over whatever part of it a row is drawing, so a
 // folder is the same colour in the list, on a chip, on a landing and on its
 // journey.
-function allFolders(ctx: Ctx): Folder[] {
+const allFolders = (ctx: Ctx): Folder[] => foldersOf(ctx.worktrees ?? []);
+
+function foldersOf(worktrees: WorktreeRun[]): Folder[] {
   let hue = 0;
-  return (ctx.worktrees ?? []).map(wt => ({
+  return worktrees.map(wt => ({
     wt,
     // The pane's folder is the accent, the main checkout is quiet, and every
     // other folder gets a hue of its own.
@@ -991,9 +992,32 @@ function workspaceName(wt: WorktreeRun): string {
   return wt.agents[wt.agents.length - 1]?.task || wt.branch || wt.name;
 }
 
-// No agent file says Claude is working in the pane's own folder: that is the
-// chat's own turn, which only the caller knows about.
-const wordOf = (ctx: Ctx, wt: WorktreeRun): StateWord => stateWord(wt, ctx.now, wt.here && Boolean(ctx.working));
+// One folder as every list of them draws it: the side panel, the Workspaces
+// list at the head of the stream, and the order `w` steps through.
+export type Workspace = {wt: WorktreeRun; path: string | null; label: string; hue: string; state: StateWord};
+
+// The folders a list shows, in the one order they are listed in: the pane's
+// folder heads it and the main checkout ends it; between them the order is
+// git's own, so a row never moves because somebody started working in it.
+// The hues are handed out over every folder, listed or not, so a folder keeps
+// its colour when another one drops off the list. `working` is the pane's own
+// turn: no agent file says Claude is working in the pane's folder.
+export function workspaceList(worktrees: WorktreeRun[], now: number, working: boolean): Workspace[] {
+  const shown = new Set(visibleWorktrees(worktrees, now));
+  const kept = foldersOf(worktrees).filter(folder => shown.has(folder.wt));
+  const rows = [
+    ...kept.filter(f => f.wt.here),
+    ...kept.filter(f => !f.wt.here && !f.wt.main),
+    ...kept.filter(f => f.wt.main && !f.wt.here),
+  ];
+  return rows.map(({wt, colour}) => ({
+    wt,
+    path: wt.here ? null : wt.path,
+    label: workspaceName(wt),
+    hue: colour,
+    state: stateWord(wt, now, wt.here && working),
+  }));
+}
 
 // How long whoever is in a folder has been at it: the pane's own running turn,
 // or the newest agent still running there.
@@ -1038,15 +1062,11 @@ function workspaceState(ctx: Ctx, wt: WorktreeRun, word: StateWord): Seg[] {
 }
 
 // Every folder of the repository, one row each, and a press on one scopes the
-// stream to it. The pane's folder heads the list and the main checkout ends
-// it; between them the order is git's own, so a row never moves because
-// somebody started working in it. The picked one carries the accent bar in
-// column 1, which is a different thing from the cursor's own row.
-function workspaceRows(ctx: Ctx): void {
-  const {cols, sel, now, frame} = ctx;
-  const all = allFolders(ctx);
-  const rows = [...all.filter(f => f.wt.here), ...all.filter(f => !f.wt.here && !f.wt.main), ...all.filter(f => f.wt.main && !f.wt.here)];
-  const words = rows.map(folder => wordOf(ctx, folder.wt));
+// stream to it. The picked one carries the accent bar in column 1, which is a
+// different thing from the cursor's own row.
+function workspaceRows(ctx: Ctx, rows: Workspace[]): void {
+  const {cols, sel, frame} = ctx;
+  const words = rows.map(folder => folder.state);
   const active = words.filter(word => word === 'working').length;
   ctx.out.push(
     pageRow(cols, [seg('WORKSPACES', theme.faint, {bold: true})], [seg(`${active} active`, active ? theme.accent : theme.dim), seg(` of ${rows.length}`, theme.dim)]),
@@ -1059,7 +1079,7 @@ function workspaceRows(ctx: Ctx): void {
     const here = id === sel;
     const picked = ctx.focus ? pathKey(ctx.focus) === pathKey(wt.path) : wt.here;
     const quiet = word === 'merged' || word === 'clean' || word === 'removed' || word === 'not recorded';
-    const mark = word === 'working' ? seg(spinner(frame), theme.accent) : quiet ? seg(glyph.ring, theme.faint) : seg(glyph.dot, folder.colour);
+    const mark = word === 'working' ? seg(spinner(frame), theme.accent) : quiet ? seg(glyph.ring, theme.faint) : seg(glyph.dot, folder.hue);
     ctx.out.push(
       pageRow(
         cols,
@@ -1068,7 +1088,7 @@ function workspaceRows(ctx: Ctx): void {
           sp(1),
           mark,
           sp(1),
-          seg(cut(workspaceName(wt), Math.max(8, cols - 40)), picked ? theme.ink : folder.colour, {bold: picked}),
+          seg(cut(folder.label, Math.max(8, cols - 40)), picked ? theme.ink : folder.hue, {bold: picked}),
         ],
         workspaceState(ctx, wt, word),
         {id, pick: true, bg: here ? theme.surface2 : undefined, hint: 'open', act: {type: 'focus', path: wt.here ? null : wt.path}},
@@ -1130,7 +1150,7 @@ function whereItIs(ctx: Ctx, wt: WorktreeRun): string {
 function focusHead(ctx: Ctx, at: string): void {
   const {cols} = ctx;
   const folder = allFolders(ctx).find(f => pathKey(f.wt.path) === pathKey(at));
-  if ((ctx.panel ?? 'off') === 'off') {
+  if (ctx.panel === 'off') {
     ctx.out.push(pageRow(cols, [sp(1), seg('in ', theme.faint), seg(folder?.wt.name ?? path.basename(at), theme.ink, {bold: true})]));
   }
 
@@ -1154,7 +1174,7 @@ function landingRow(ctx: Ctx, landing: Landing): void {
   const {wt} = landing;
   const id = `l:${wt.path}`;
   const here = id === sel;
-  const isOpen = ctx.open.landings?.has(wt.path) ?? false;
+  const isOpen = ctx.open.landings.has(wt.path);
   const tight = cols < NARROW;
   const n = landing.files.length;
   const mark = here ? chevron(isOpen, true) : {...chevron(isOpen, false), color: theme.add};
@@ -1254,7 +1274,8 @@ function byTurn(ctx: Ctx): void {
   // list of them heads it whenever there is no panel to carry it, and the
   // stream under it is the same stream in either scope.
   const folders = ctx.scope === 'all' ? foldersInScope(ctx) : [];
-  if ((ctx.panel ?? 'off') === 'off' && (ctx.worktrees?.length ?? 0) > 1) workspaceRows(ctx);
+  const listed = ctx.panel === 'off' ? workspaceList(ctx.worktrees ?? [], ctx.now, Boolean(ctx.working)) : [];
+  if (listed.length > 1) workspaceRows(ctx, listed);
   // Picked, one folder is the whole stream: every turn is from it, so none of
   // them needs its chip.
   if (ctx.focus) focusHead(ctx, ctx.focus);
@@ -1281,7 +1302,7 @@ function stream(ctx: Ctx, folders: Folder[]): void {
     folders.find(folder => !folder.wt.here && pathKey(folder.wt.path) === pathKey(change.folder));
   // Landings are the pane's own folder's news, so a stream scoped to another
   // folder has none.
-  const landed = placeLandings(days, ctx.focus ? [] : ctx.landings ?? []);
+  const landed = placeLandings(days, ctx.focus ? [] : ctx.landings);
 
   days.forEach((day, i) => {
     if (i === 0) {

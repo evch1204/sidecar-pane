@@ -63,14 +63,24 @@ export type MenuState = {
   mouse: boolean;
 };
 
-// Two menus only. `View` is the four views and then, under a rule, the options
-// of the view you are in: an option you cannot use here is not shown at all.
+// Two menus only. `View` is Home and the four views and then, under a rule,
+// the panel and the workspaces, which are about every view, and the options of
+// the view you are in: an option you cannot use here is not shown at all.
 export function menus(state: MenuState): Menu[] {
   const items: Item[] = [
+    {label: 'Home', key: 'h', checked: state.view === 'home', command: {do: 'view', view: 'home'}},
     {label: 'Changes', key: '1', checked: state.view === 'changes', command: {do: 'view', view: 'changes'}},
     {label: 'Files', key: '2', checked: state.view === 'files', command: {do: 'view', view: 'files'}},
     {label: 'Agents', key: '3', checked: state.view === 'agents', command: {do: 'view', view: 'agents'}},
     {label: 'Usage', key: '4', checked: state.view === 'usage', command: {do: 'view', view: 'usage'}},
+  ];
+
+  // What `w` has picked, by name: one folder, or all of them.
+  const picked = state.focus ? (state.workspaces.find(ws => ws.path === state.focus)?.label ?? 'one folder') : state.scope === 'all' ? 'all folders' : 'this folder';
+  const everywhere: Item[] = [
+    ...(state.panel !== 'off' ? [{label: 'Panel', key: 'b', checked: state.panel === 'open', command: {do: 'panel'}} as Item] : []),
+    // Only a repository with more than one folder has anywhere to step to.
+    ...(state.folders > 1 ? [{label: `Workspace: ${picked}`, key: 'w', checked: state.focus !== null || state.scope === 'all', command: {do: 'focus'}} as Item] : []),
   ];
 
   const options: Item[] =
@@ -82,11 +92,6 @@ export function menus(state: MenuState): Menu[] {
           {label: 'By file', key: '', checked: state.group === 'file', command: {do: 'group', group: 'file'}},
           {label: 'Since the last commit', key: '', checked: state.group === 'flat', command: {do: 'group', group: 'flat'}},
           {label: state.chat ? `Chat: ${state.chat}` : 'Chat: all', key: 's', checked: Boolean(state.chat), command: {do: 'chat'}},
-          // Only a repository with more than one folder has anything to widen
-          // to, and then `w` is worth more here than it is on whitespace.
-          ...(state.folders > 1
-            ? [{label: state.scope === 'all' ? 'Worktrees: all' : 'Worktrees: mine', key: 'w', checked: state.scope === 'all', command: {do: 'scope'}} as Item]
-            : []),
           {label: 'Hide whitespace', key: 'W', checked: state.hideSpace, command: {do: 'whitespace'}},
           ...(state.inDiff ? [{label: 'Fold every hunk', key: 'z', command: {do: 'foldAll'}} as Item] : []),
         ]
@@ -108,7 +113,7 @@ export function menus(state: MenuState): Menu[] {
         {label: 'Quit', key: 'q', command: {do: 'quit'}},
       ],
     },
-    {title: 'View', items: options.length ? [...items, 'rule', ...options] : items},
+    {title: 'View', items: [...items, ...(everywhere.length ? ['rule' as Item, ...everywhere] : []), ...(options.length ? ['rule' as Item, ...options] : [])]},
   ];
 }
 
@@ -121,7 +126,9 @@ export type Bar = {line: Line; starts: number[]};
 export function menuBar(cols: number, list: Menu[], open: number | null, right: {meters: Seg[]; status: Seg[]}): Bar {
   const bg = theme.surface;
   const left: Seg[] = [sp(1), seg(glyph.diamond, theme.accent)];
-  const zones: Zone[] = [];
+  // The diamond is the pane's own mark, and it goes Home, the way a site's
+  // logo does. The name beside it keeps its menu.
+  const zones: Zone[] = [{from: 0, to: widthOf(left), act: {type: 'view', view: 'home'}}];
   const starts: number[] = [];
   list.forEach((menu, i) => {
     const from = widthOf(left);

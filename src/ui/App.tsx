@@ -8,28 +8,33 @@ import {readFileView, type FileView} from '../core/file';
 import {loadFolders} from '../core/folders';
 import {changedLines, loadGit, pathKey, type GitState} from '../core/git';
 import {highlightLines} from '../core/highlight';
+import {homeFacts} from '../core/home';
 import {formatMarkdown, isMarkdown} from '../core/markdown';
+import {panelEnv, readPrefs, writePrefs, type Prefs} from '../core/prefs';
 import {countChats, newReadState, readSessions} from '../core/sessions';
 import {openStore, take, type Store} from '../core/snapshot';
 import {visibleNodes} from '../core/tree';
 import {byFile, fileInTurn, loadTurns, type TurnChange} from '../core/turns';
 import {newUsageState, readLimits, readSpends, type Limits, type Spend} from '../core/usage';
-import {readWorktrees, type WorktreeRun} from '../core/worktrees';
-import {brief, cut, dimmed, overlay, seg, sp, spinner, widthOf, type Act, type Group, type Line, type Seg, type View} from './cells';
+import {landingsOf, readWorktrees, visibleWorktrees, type WorktreeRun} from '../core/worktrees';
+import {brief, cut, dimmed, overlay, pageRow, seg, sp, spinner, widthOf, type Act, type Group, type Line, type Seg, type View} from './cells';
 import type {DiffGroup} from './diffrows';
 import {follow as keepInView, scrollFromThumb, thumb} from './layout';
 import {footer, isAction, MENU_WIDTH, menuBar, menuBox, menus, pillRow, tabRow, type Command, type Hint, type Pill} from './menu';
-import {DOUBLE_CLICK_MS, MOUSE_OFF, MOUSE_ON, parseMouse, type MouseEvent} from './mouse';
+import {DOUBLE_CLICK_MS, MOUSE_MOVE_OFF, MOUSE_MOVE_ON, MOUSE_OFF, MOUSE_ON, parseMouse, type MouseEvent} from './mouse';
+import {openingCard, openingPush, tPushStart, type OpeningInput} from './opening';
+import {nextWorkspace, PANEL_FOLDED, PANEL_OPEN, panelMode, panelRows, panelWidth, type PanelInput} from './panel';
 import {splashLines, type Counts} from './splash';
 import {Screen} from './Screen';
 import {glyph, theme} from './theme';
 import {agentsBadge, agentsLines, agentsTabVisible, runningAgents} from './views/agents';
-import {changesLines, fileKey, turnKey, type Open} from './views/changes';
+import {changesLines, fileKey, turnKey, workspaceList, type Open} from './views/changes';
 import {
   changedPlaces, filesLines, firstReadId, MORE_ROWS, nodeId, paperMeasure, peekEnd, readerHead, readerIdAt,
   readerLineOf, readerLines, type Marks,
 } from './views/files';
-import {METERS_MIN, usageExtras, usageLines} from './views/usage';
+import {homeLines} from './views/home';
+import {feedOf, METERS_MIN, usageExtras, usageLines} from './views/usage';
 
 type Props = {
   root: string;
@@ -60,7 +65,15 @@ const GROUP_PILL: Record<Group, string> = {turn: 'By turn', file: 'By file', fla
 const TOOL_COLS = 8;
 
 const NONE: ReadonlySet<string> = new Set();
-const CLOSED: Open = {turns: NONE, files: NONE, more: NONE, steps: NONE, says: NONE, agents: NONE, folded: NONE, hists: NONE};
+const CLOSED: Open = {turns: NONE, files: NONE, more: NONE, steps: NONE, says: NONE, agents: NONE, folded: NONE, hists: NONE, landings: NONE};
+
+// The opening's clock ticks at about thirty frames a second: the name is typed
+// in a cell at a time, and a slower tick would type it in lumps.
+const OPENING_TICK = 33;
+// The folded panel peeks open once the pointer has rested on it this long, and
+// folds again once it has been away this long, so a pointer passing over it on
+// the way somewhere else does not flash it open.
+const PEEK_MS = 150;
 
 type Notice = {text: string; warn?: boolean};
 
@@ -122,25 +135,29 @@ function usePolling(work: () => Promise<void>, deps: unknown[], active: boolean,
 }
 
 // Git state. `version` ticks on every read so the tree also notices files
-// that appeared or vanished.
-function useGit(root: string, live: boolean) {
-  const [state, setState] = useState<{git: GitState | null; loaded: boolean; version: number}>({git: null, loaded: false, version: 0});
+// that appeared or vanished. `active` is off for a folder nobody is looking
+// at: the picked workspace's git is only read while one is picked. A read of
+// another folder is never handed back as this one's.
+function useGit(root: string, live: boolean, active = true) {
+  const [state, setState] = useState<{git: GitState | null; loaded: boolean; version: number; root: string}>({
+    git: null, loaded: false, version: 0, root,
+  });
   usePolling(async () => {
     const git = await loadGit(root);
-    setState(s => ({git, loaded: true, version: s.version + 1}));
-  }, [root], true, live);
-  return state;
+    setState(s => ({git, loaded: true, version: s.version + 1, root}));
+  }, [root], active, live);
+  return state.root === root ? state : {...state, git: null, loaded: false};
 }
 
 // The whole working tree against the last commit. Only read while Changes is
 // open: it costs a `git diff` of everything.
 function useDiff(root: string, active: boolean, live: boolean) {
-  const [state, setState] = useState<{diff: DiffState | null; version: number}>({diff: null, version: 0});
+  const [state, setState] = useState<{diff: DiffState | null; version: number; root: string}>({diff: null, version: 0, root});
   usePolling(async () => {
     const diff = await loadDiff(root);
-    setState(s => ({diff, version: s.version + 1}));
+    setState(s => ({diff, version: s.version + 1, root}));
   }, [root], active, live);
-  return state;
+  return state.root === root ? state : {...state, diff: null};
 }
 
 // Chats, their turns, their subagents, and a snapshot of the project every
@@ -199,9 +216,9 @@ function useHistory(root: string, live: boolean, git: GitState | null) {
 function useWorktrees(root: string, agents: AgentRun[], git: GitState | null, live: boolean, busy: boolean) {
   const latest = useRef({agents, git});
   latest.current = {agents, git};
-  const [trees, setTrees] = useState<WorktreeRun[]>([]);
+  const [trees, setTrees] = useState<{list: WorktreeRun[]; read: boolean}>({list: [], read: false});
   usePolling(async () => {
-    setTrees(await readWorktrees(root, latest.current.agents, latest.current.git, Date.now()));
+    setTrees({list: await readWorktrees(root, latest.current.agents, latest.current.git, Date.now()), read: true});
   }, [root], true, live, busy ? REFRESH_MS : SLOW_MS);
   return trees;
 }
@@ -272,7 +289,9 @@ export function App({root, interactive, mouseDebug = false, opening = true}: Pro
   const {stdout} = useStdout();
   const {cols, rows} = useTerminalSize();
 
-  const [view, setView] = useState<View>('changes');
+  // The pane opens on Home: where you are, what is happening, what today has
+  // been and where each key goes.
+  const [view, setView] = useState<View>('home');
   const [notice, setNotice] = useState<Notice | null>(null);
   const [mouse, setMouse] = useState(true);
   const [follow, setFollow] = useState<Follow>('on');
@@ -287,6 +306,10 @@ export function App({root, interactive, mouseDebug = false, opening = true}: Pro
   // How much of the repository the stream covers: this folder and wherever its
   // agents are working, or every worktree of it.
   const [scope, setScope] = useState<'mine' | 'all'>('mine');
+  // The one folder of the repository the views are looking at, when a
+  // workspace was picked; null is the pane's own. Never true at the same time
+  // as scope `all`: one folder and every folder are two different answers.
+  const [focus, setFocus] = useState<string | null>(null);
   const [open, setOpen] = useState<Open>(CLOSED);
   const [diffs, setDiffs] = useState<ReadonlyMap<string, DiffGroup[]>>(new Map());
   const [folded, setFolded] = useState<ReadonlySet<string>>(NONE);
@@ -307,10 +330,36 @@ export function App({root, interactive, mouseDebug = false, opening = true}: Pro
   const [target, setTarget] = useState(0);
   const [raw, setRaw] = useState(false);
 
+  // What you chose about the panel, read once. Written only when `b` is
+  // pressed: a width the pane picked for itself is worked out again next time.
+  const [prefs, setPrefs] = useState<Prefs>(() => readPrefs(root));
+  // The folded panel drawn open over the content while the pointer rests on it.
+  const [peek, setPeek] = useState(false);
+  // The panel's width is decided by the pane's: open, folded to a strip, or
+  // gone and the tab row back. Everything under the bar is laid out in the
+  // columns the panel leaves, `room`; the bar keeps the whole width.
+  const mode = panelMode(cols, prefs.panel, panelEnv());
+  const side = panelWidth(mode);
+  const room = cols - side;
+
+  // The opening: when it started, and the time since. It never plays where
+  // nobody is watching, and it is off for good for anyone who has seen it.
+  const [openingAt, setOpeningAt] = useState<number | null>(() =>
+    interactive && opening && !process.env.SIDECAR_NO_OPENING ? Date.now() : null,
+  );
+  const [t, setT] = useState(0);
+  // When the read's two halves came back, on the opening's clock, so its bar
+  // walks to them at a steady pace instead of jumping.
+  const arrived = useRef<{counts?: number; loaded?: number}>({});
+  useEffect(() => {
+    if (openingAt === null) return;
+    const timer = setInterval(() => setT(Date.now() - openingAt), OPENING_TICK);
+    return () => clearInterval(timer);
+  }, [openingAt]);
+
   const slot: Slot = view === 'files' && readerPath ? 'reader' : view;
 
   const {git, loaded, version} = useGit(root, interactive);
-  const {diff, version: diffVersion} = useDiff(root, view === 'changes', interactive);
   const history = useHistory(root, interactive, git);
   const {spends, limits} = useUsage(view === 'usage', interactive);
   const say = (text: string) => setNotice({text});
@@ -318,7 +367,6 @@ export function App({root, interactive, mouseDebug = false, opening = true}: Pro
   const now = history.now;
 
   const mine = useMemo(() => (chat ? history.changes.filter(c => c.chatId === chat) : history.changes), [history.changes, chat]);
-  const histories = useMemo(() => byFile(mine), [mine]);
   // The turn the bar's words, `working` and follow mode are all about: the
   // newest by the clock. The changes arrive a chat at a time, so the last of
   // them is the last turn of whichever chat was started last — start a quick
@@ -330,25 +378,50 @@ export function App({root, interactive, mouseDebug = false, opening = true}: Pro
   );
   const working = Boolean(newest?.running);
   const agentsRunning = runningAgents(history.agents, now);
-  const worktrees = useWorktrees(root, history.agents, git, interactive, working || agentsRunning > 0);
+  const {list: worktrees, read: foldersRead} = useWorktrees(root, history.agents, git, interactive, working || agentsRunning > 0);
+  // The folders the panel, the Workspaces list, `w` and Home all count: every
+  // one on disk and the ones that landed here today, in the one order they
+  // are listed in.
+  const listed = useMemo(() => workspaceList(worktrees, now, working), [worktrees, now, working]);
+  // A picked folder that has left the list is not one to be looking at, so
+  // the views fall back to the pane's own rather than to an empty stream.
+  const focused = focus && listed.some(ws => ws.path !== null && pathKey(ws.path) === pathKey(focus)) ? focus : null;
+  const focusedWs = focused ? listed.find(ws => ws.path !== null && pathKey(ws.path) === pathKey(focused)) : undefined;
+  // The folder Files, the diffs and the reader are about.
+  const here = focused ?? root;
+  const landings = useMemo(() => landingsOf(worktrees), [worktrees]);
   // Every other folder of this repository that is still on disk. Its own chats
-  // are only read while the stream is covering all of them.
+  // are only read while the stream is covering all of them, or one of them.
   const elsewhere = useMemo(
     () => worktrees.filter(wt => !wt.here && !wt.gone).map(wt => wt.path).sort(),
     [worktrees],
   );
-  const others = useFolders(elsewhere, scope === 'all', interactive);
+  const others = useFolders(elsewhere, scope === 'all' || focused !== null, interactive);
+  // The picked folder's own git, only read while one is picked, and the diff
+  // of whichever folder the views are about.
+  const there = useGit(here, interactive, focused !== null);
+  const fgit = focused ? there.git : git;
+  const fversion = focused ? there.version : version;
+  const {diff, version: diffVersion} = useDiff(here, view === 'changes', interactive);
   // One stream, in the order it all happened. The pane's own turns keep every
   // other job they had: the diffs, the file histories and the Agents view are
-  // about the folder you are in.
-  const timeline = useMemo(
-    () => (others.changes.length ? [...mine, ...others.changes].sort((a, b) => a.turn.at - b.turn.at) : mine),
-    [mine, others.changes],
-  );
-  const streamAgents = useMemo(
-    () => (others.agents.length ? [...history.agents, ...others.agents] : history.agents),
-    [history.agents, others.agents],
-  );
+  // about the folder you are in. A picked folder is its own turns and nothing
+  // else.
+  const timeline = useMemo(() => {
+    if (focused) return others.changes.filter(c => pathKey(c.folder) === pathKey(focused)).sort((a, b) => a.turn.at - b.turn.at);
+    return others.changes.length ? [...mine, ...others.changes].sort((a, b) => a.turn.at - b.turn.at) : mine;
+  }, [mine, others.changes, focused]);
+  const histories = useMemo(() => byFile(focused ? timeline : mine), [mine, timeline, focused]);
+  // With a folder picked, the agents are the ones that worked in it, from
+  // whichever chat started them.
+  const streamAgents = useMemo(() => {
+    const every = others.agents.length ? [...history.agents, ...others.agents] : history.agents;
+    if (!focused) return every;
+    return every.filter(agent => {
+      const folder = agent.worktree?.path || agent.cwd;
+      return Boolean(folder) && pathKey(folder!) === pathKey(focused);
+    });
+  }, [history.agents, others.agents, focused]);
   // The chat's own model. An agent is only worth a model chip when its model
   // is not this one, and a turn still waiting for its first reply has none.
   const chatModel = useMemo(
@@ -358,11 +431,13 @@ export function App({root, interactive, mouseDebug = false, opening = true}: Pro
 
   // The spinner only ticks while there is something spinning. The first read is
   // one of those things: it is the one the pane is waiting on itself.
+  // So is the opening, whose readout spins until the read comes back.
+  const playing = openingAt !== null;
   useEffect(() => {
-    if (!interactive || (history.loaded && !working && agentsRunning === 0)) return;
+    if (!interactive || (history.loaded && !working && agentsRunning === 0 && !playing)) return;
     const timer = setInterval(() => setFrame(f => f + 1), SPIN_MS);
     return () => clearInterval(timer);
-  }, [interactive, history.loaded, working, agentsRunning]);
+  }, [interactive, history.loaded, working, agentsRunning, playing]);
 
   // ---- diffs for the file rows that are open ---------------------------------
 
@@ -375,7 +450,7 @@ export function App({root, interactive, mouseDebug = false, opening = true}: Pro
       const rel = key.slice(at + 1);
       // `dead` is what to say when there is nothing left to show at all.
       const fromGit = (note?: string, dead?: string): DiffGroup[] => {
-        const found = diff?.files[diff.index.get(pathKey(path.resolve(root, rel))) ?? -1] ?? null;
+        const found = diff?.files[diff.index.get(pathKey(path.resolve(here, rel))) ?? -1] ?? null;
         return found
           ? [{key: 'git', band: null, file: found, note}]
           : [{key: 'none', band: null, file: null, note: dead ?? 'Nothing to show: this file matches the last commit.'}];
@@ -384,16 +459,20 @@ export function App({root, interactive, mouseDebug = false, opening = true}: Pro
       if (owner === 'git') return fromGit();
       const change = timeline.find(c => turnKey(c) === owner);
       // A turn typed in another worktree: its lines are in that folder's own
-      // history, and this folder's git knows nothing about them.
-      if (change && change.folder !== root) {
+      // history, and this folder's git knows nothing about them. With that
+      // folder picked, its git is the one being read, so the diff is there.
+      if (change && change.folder !== root && !focused) {
         settled.current.add(key);
         return [{key: 'none', band: null, file: null, note: `That turn happened in ${path.basename(change.folder)}. Its diff lives in that folder.`}];
       }
 
       // Snapshots or commits, whichever recorded this turn; a file only the
-      // transcript named has neither, so it falls through.
+      // transcript named has neither, so it falls through. The snapshots are
+      // only ever of the pane's own folder.
       if (change?.measured && change.files.find(f => f.rel === rel)?.known) {
-        const one = await fileInTurn(root, history.store, change, rel);
+        const one = focused
+          ? await fileInTurn(change.folder, null, change, rel)
+          : await fileInTurn(root, history.store, change, rel);
         // A finished turn's diff never changes, so it is only read once.
         if (!change.running) settled.current.add(key);
         return one ? [{key: 'turn', band: null, file: one}] : [{key: 'none', band: null, file: null, note: 'That turn left no diff for this file.'}];
@@ -417,32 +496,34 @@ export function App({root, interactive, mouseDebug = false, opening = true}: Pro
     return () => {
       alive = false;
     };
-  }, [open.files, history.version, diffVersion]);
+  }, [open.files, history.version, diffVersion, focused]);
 
   // ---- files ------------------------------------------------------------------
 
+  // The tree is of the folder the views are about: a picked workspace's own,
+  // read from its own git.
   const only = useMemo(() => {
-    if (!changedOnly || !git) return undefined;
-    const rootKey = pathKey(root);
+    if (!changedOnly || !fgit) return undefined;
+    const rootKey = pathKey(here);
     const keep = new Set<string>();
-    for (const [file, change] of git.changes) {
+    for (const [file, change] of fgit.changes) {
       if (change.status === 'D' || !file.startsWith(rootKey + path.sep)) continue;
       for (let p = file; p.length > rootKey.length; p = path.dirname(p)) keep.add(p);
     }
 
     return keep;
-  }, [changedOnly, git, root]);
+  }, [changedOnly, fgit, here]);
 
-  const nodes = useMemo(() => visibleNodes(root, expanded, only), [root, expanded, only, version]);
-  const peekFile = useFile(root, peekPath, git, version);
-  const readFile = useFile(root, readerPath, git, version);
+  const nodes = useMemo(() => visibleNodes(here, expanded, only), [here, expanded, only, fversion]);
+  const peekFile = useFile(here, peekPath, fgit, fversion);
+  const readFile = useFile(here, readerPath, fgit, fversion);
   // Markdown is laid out whether or not it is being shown, because `r` has to
   // map the row under the cursor onto its source line and back. The page costs
   // a pass over the file, so it is only laid out again when the file's lines or
   // the paper's measure change, never on a spinner tick.
   const mdLines = useMemo(
-    () => (readerPath && isMarkdown(readerPath) && readFile.view?.kind === 'text' ? formatMarkdown(readFile.view.lines, paperMeasure(cols), glyph) : null),
-    [readerPath, readFile.view, cols],
+    () => (readerPath && isMarkdown(readerPath) && readFile.view?.kind === 'text' ? formatMarkdown(readFile.view.lines, paperMeasure(room), glyph) : null),
+    [readerPath, readFile.view, room],
   );
   const formatted = raw ? null : mdLines;
   const historyOf = (file: string | null) => (file ? (histories.find(h => h.path === file) ?? null) : null);
@@ -471,19 +552,53 @@ export function App({root, interactive, mouseDebug = false, opening = true}: Pro
   // jump to another changed place starts over.
   useEffect(() => setPeekRows(0), [peekPath, peekFrom]);
 
+  // ---- Home's facts, and where `w` goes --------------------------------------
+
+  // Then the one word that is about you rather than about Claude. It is keyed
+  // on a turn that has not ended and a question nobody has answered, never on
+  // the turn running: a turn parked on a permission prompt appends nothing at
+  // all, and waiting is exactly what it is doing.
+  const asking = Boolean(newest && !newest.turn.ended && (newest.turn.asking || history.note));
+  const uncommitted = git ? [...git.changes.values()].filter(c => c.status !== 'D').length : 0;
+  const showAgents = agentsTabVisible(history.changes, history.agents, now) || view === 'agents';
+  // Home is always about the pane's own folder, whichever one is picked: it
+  // is where you come back to, not another view of the stream.
+  const facts = useMemo(
+    () => homeFacts({
+      root, now, loaded: history.loaded, changes: history.changes, agents: history.agents,
+      worktrees: visibleWorktrees(worktrees, now), asking, working, newest,
+    }),
+    [root, now, history.loaded, history.changes, history.agents, worktrees, asking, working, newest],
+  );
+  // The five hour window, only while a feed is saying something about it.
+  const window5 = feedOf(limits, now) ? (limits?.fiveHour ?? null) : null;
+  const usageNow = {pct: window5 ? window5.usedPercentage : null, leftMs: window5 ? Math.max(0, window5.resetsAt - now) : null};
+  // The repository's name is its main checkout's folder: the pane's own folder
+  // may be a worktree named after anything.
+  const repo = worktrees.find(wt => wt.main)?.name ?? path.basename(root);
+  // Where `w` goes from here, worked out once for the key, the panel and Home.
+  const nextAct = nextWorkspace(listed.map(ws => ws.path), focused, scope);
+
   // ---- the lines of the current view -----------------------------------------
 
   const build = (at: string | null): {head: Line[]; lines: Line[]} => {
-    // Phase 2: Home's own page. Nothing opens on it yet.
-    if (slot === 'home') return {head: [], lines: []};
+    if (slot === 'home') {
+      return {
+        head: [],
+        lines: homeLines({
+          cols: room, now, frame, project: repo, branch: git?.branch ?? '', folder: path.basename(root), facts, usage: usageNow,
+          changed: uncommitted, agentsTab: showAgents, workspaces: listed.length > 1, sel: at, working, next: nextAct,
+        }),
+      };
+    }
 
     if (slot === 'changes') {
       return {
         head: [],
         lines: changesLines({
-          cols, now, frame, root, group, changes: timeline, histories, flat: diff ? diff.files : null, agents: streamAgents,
+          cols: room, now, frame, root, group, changes: timeline, histories, flat: diff ? diff.files : null, agents: streamAgents,
           open, diffs, folded, opened, hideSpace, sel: at, worktrees, scope, chatModel,
-          branch: git?.branch ?? '', working, waiting: history.note?.sessionId,
+          branch: git?.branch ?? '', working, waiting: history.note?.sessionId, focus: focused, panel: mode, landings,
         }),
       };
     }
@@ -492,7 +607,7 @@ export function App({root, interactive, mouseDebug = false, opening = true}: Pro
       return {
         head: [],
         lines: agentsLines({
-          cols, now, frame, root, changes: history.changes, agents: history.agents, open, sel: at, worktrees, scope, chatModel,
+          cols: room, now, frame, root, changes: history.changes, agents: focused ? streamAgents : history.agents, open, sel: at, worktrees, scope, chatModel,
         }),
       };
     }
@@ -500,18 +615,18 @@ export function App({root, interactive, mouseDebug = false, opening = true}: Pro
       const last = [...history.changes].sort((a, b) => a.turn.endedAt - b.turn.endedAt).pop();
       // The cache hit belongs to this chat, so the chat's own id goes with it.
       const context = last?.turn.context ? {tokens: last.turn.context, model: last.turn.model, chat: last.turn.sessionId} : null;
-      return {head: [], lines: usageLines({cols, now, spends, limits, context})};
+      return {head: [], lines: usageLines({cols: room, now, spends, limits, context})};
     }
 
     if (slot === 'reader' && readerPath && readFile.view) {
-      const input = {cols, root, path: readerPath, view: readFile.view, segments: readFile.segments, marks: readFile.marks, history: historyOf(readerPath), sel: at, formatted};
+      const input = {cols: room, root: here, path: readerPath, view: readFile.view, segments: readFile.segments, marks: readFile.marks, history: historyOf(readerPath), sel: at, formatted};
       return {head: readerHead(input), lines: readerLines(input)};
     }
 
     return {
       head: [],
       lines: filesLines({
-        cols, root, nodes, changes: git?.changes ?? null, changedOnly, sel: at,
+        cols: room, root: here, nodes, changes: fgit?.changes ?? null, changedOnly, sel: at,
         peek: peekPath && peekFile.view
           ? {path: peekPath, view: peekFile.view, segments: peekFile.segments, marks: peekFile.marks, from: peekFrom, extra: peekRows, history: historyOf(peekPath)}
           : null,
@@ -529,7 +644,12 @@ export function App({root, interactive, mouseDebug = false, opening = true}: Pro
     let made = build(sel[slot]);
     let index = made.lines.findIndex(line => line.pick && line.id === sel[slot]);
     if (index < 0) {
-      const picks = made.lines.map((line, i) => (line.pick ? i : -1)).filter(i => i >= 0);
+      // A stream nobody has moved in yet starts on its newest turn, not on the
+      // Workspaces list above it: the list is a way to go somewhere else, and
+      // the turn is what you came to look at.
+      const fresh = slot === 'changes' && sel[slot] === null && lastIndex.current[slot] === 0;
+      const skip = (line: Line) => fresh && Boolean(line.id?.startsWith('ws:'));
+      const picks = made.lines.map((line, i) => (line.pick && !skip(line) ? i : -1)).filter(i => i >= 0);
       if (picks.length) {
         index = picks.reduce((best, i) => (Math.abs(i - lastIndex.current[slot]) < Math.abs(best - lastIndex.current[slot]) ? i : best), picks[0]!);
         made = build(made.lines[index]!.id ?? null);
@@ -538,10 +658,11 @@ export function App({root, interactive, mouseDebug = false, opening = true}: Pro
 
     return {...made, index};
   }, [
-    slot, sel, cols, now, frame, group, scope, timeline, streamAgents, histories, diff, history.agents, worktrees, chatModel, working,
-    open, diffs, folded, opened, hideSpace,
-    nodes, git, changedOnly, peekPath, peekFile.view, peekFile.segments, peekFile.marks, peekFrom, peekRows,
-    readerPath, readFile.view, readFile.segments, readFile.marks, formatted, spends, limits, root,
+    slot, sel, room, now, frame, group, scope, timeline, streamAgents, histories, diff, history.agents, worktrees, chatModel, working,
+    open, diffs, folded, opened, hideSpace, focused, mode, landings, facts, listed, uncommitted, showAgents, nextAct.type,
+    nextAct.type === 'focus' ? nextAct.path : '', repo,
+    nodes, git, fgit, changedOnly, peekPath, peekFile.view, peekFile.segments, peekFile.marks, peekFrom, peekRows,
+    readerPath, readFile.view, readFile.segments, readFile.marks, formatted, spends, limits, root, here,
   ]);
 
   const {lines, head} = built;
@@ -561,10 +682,9 @@ export function App({root, interactive, mouseDebug = false, opening = true}: Pro
   const inDiff = Boolean(current?.pins?.some(id => id.startsWith('f:')));
   const markdown = slot === 'reader' && Boolean(readerPath && isMarkdown(readerPath));
   const list = menus({
-    view, group, hideSpace, changedOnly, chat: chatName, folders: worktrees.length, scope, inDiff, markdown, raw, follow: follow === 'on', mouse,
-    // Phase 2: the side panel and the workspaces. Until then there is no panel
-    // and nothing is picked, which is what the pane draws today.
-    panel: 'off', focus: null, workspaces: [],
+    view, group, hideSpace, changedOnly, chat: chatName, folders: listed.length, scope, inDiff, markdown, raw, follow: follow === 'on', mouse,
+    panel: mode, focus: focused,
+    workspaces: listed.flatMap(ws => (ws.path === null ? [] : [{path: ws.path, label: ws.label}])),
   });
   // The card, and not the stream, on the two occasions there is no stream: the
   // first frames, and a folder Claude Code has never been run in. Files is left
@@ -576,14 +696,9 @@ export function App({root, interactive, mouseDebug = false, opening = true}: Pro
   const card = reading || nothingYet;
   // Reading comes first while it lasts: nothing else is known yet. Then agents
   // — while a fan-out is running, how many of them there are is the news, and
-  // the turn they belong to is working by definition.
-  //
-  // Then the one word that is about you rather than about Claude. It is keyed
-  // on a turn that has not ended and a question nobody has answered, never on
-  // the turn running: a turn parked on a permission prompt appends nothing at
-  // all, and waiting is exactly what it is doing.
+  // the turn they belong to is working by definition. Then a question waiting
+  // on you, then the turn, then yours, then idle.
   const lastAction = newest?.turn.actions[newest.turn.actions.length - 1];
-  const asking = Boolean(newest && !newest.turn.ended && (newest.turn.asking || history.note));
   const sameDay = (ms: number) => new Date(ms).toDateString() === new Date(now).toDateString();
   const status: Seg[] = !history.loaded
     ? [seg(spinner(frame), theme.accent), seg(' reading', theme.dim)]
@@ -603,16 +718,21 @@ export function App({root, interactive, mouseDebug = false, opening = true}: Pro
   const extras = metersRoom >= METERS_MIN ? usageExtras(limits, now, {spends, room: metersRoom}) : [];
   const bar = menuBar(cols, list, menu?.open ?? null, {meters: extras, status});
 
-  const uncommitted = git ? [...git.changes.values()].filter(c => c.status !== 'D').length : 0;
-  const showAgents = agentsTabVisible(history.changes, history.agents, now) || view === 'agents';
   // A question waiting on you is the one thing worth pulling you out of
   // another view, so the tab it happened on carries a dot until you look.
-  const tabs = tabRow(
-    cols,
-    view,
-    {agents: agentsBadge(history.agents, now, frame), changes: asking && view !== 'changes' ? [seg(glyph.dot, theme.warn)] : []},
-    {agents: !showAgents},
-  );
+  //
+  // The tab row is only drawn where nothing else says which view this is:
+  // the panel lists the views, Home is where every key is listed, and the
+  // opening has no view yet.
+  const tabs =
+    mode === 'off' && view !== 'home' && !playing
+      ? tabRow(
+          room,
+          view,
+          {agents: agentsBadge(history.agents, now, frame), changes: asking && view !== 'changes' ? [seg(glyph.dot, theme.warn)] : []},
+          {agents: !showAgents},
+        )
+      : null;
 
   // The pills carry the state the tab row used to describe in dim words: they
   // say what is showing and change it in one click.
@@ -630,10 +750,12 @@ export function App({root, interactive, mouseDebug = false, opening = true}: Pro
         : [];
   // The right end of the pills row. A repository with more than one folder has
   // something to say there that a count of dirty files cannot: which folders
-  // this stream is covering, and one click to widen it.
-  const folders = worktrees.length;
-  const scopePill: Seg[] =
-    view === 'changes' && folders > 1
+  // this stream is covering, and one click to widen it. With one folder
+  // picked it names that folder, lit, and a click goes back to your own.
+  const folders = listed.length;
+  const scopePill: Seg[] = focusedWs && (view === 'changes' || view === 'files')
+    ? [seg('in ', theme.faint), seg(cut(focusedWs.label, 24), theme.ink, {bold: true})]
+    : view === 'changes' && folders > 1
       ? [
           seg('in ', theme.faint),
           seg(scope === 'all' ? `all ${folders} worktrees` : project, scope === 'all' ? theme.accent : theme.text, {bold: true}),
@@ -645,14 +767,19 @@ export function App({root, interactive, mouseDebug = false, opening = true}: Pro
     : view === 'changes' && uncommitted
       ? [seg(`${uncommitted} uncommitted`, theme.dim)]
       : [];
-  const scopeAct: Act | undefined = scopePill.length ? {type: 'scope', scope: scope === 'all' ? 'mine' : 'all'} : undefined;
+  const scopeAct: Act | undefined = !scopePill.length
+    ? undefined
+    : focusedWs
+      ? {type: 'focus', path: null}
+      : {type: 'scope', scope: scope === 'all' ? 'mine' : 'all'};
   // Nothing has been read, so there is nothing for a pill to be showing or
   // hiding yet: the first frame is the bar, the tabs and the card.
-  const pillsLine = pills.length && !reading ? pillRow(cols, pills, note, scopeAct) : null;
-  const blank: Line = {segs: [sp(cols)]};
+  const pillsLine = pills.length && !reading && !playing ? pillRow(room, pills, note, scopeAct) : null;
+  const blank: Line = {segs: [sp(room)]};
+  const chrome: Line[] = [...(tabs ? [tabs] : []), ...(pillsLine ? [pillsLine] : [])];
   const top: Line[] = roomy
-    ? [bar.line, blank, tabs, ...(pillsLine ? [pillsLine] : []), blank, ...head, ...(head.length ? [blank] : [])]
-    : [bar.line, tabs, ...(pillsLine ? [pillsLine] : []), ...head];
+    ? [bar.line, blank, ...chrome, ...(chrome.length ? [blank] : []), ...head, ...(head.length ? [blank] : [])]
+    : [bar.line, ...chrome, ...head];
   const bottomRows = roomy ? 2 : 1;
   const height = Math.max(3, rows - top.length - bottomRows);
   const most = Math.max(0, lines.length - height);
@@ -820,11 +947,54 @@ export function App({root, interactive, mouseDebug = false, opening = true}: Pro
 
       case 'scope': {
         // No notice: the pill at the right of the pills row says which.
-        if (worktrees.length < 2) return refuse('This repository has one folder, so there is nothing else to show.');
+        if (listed.length < 2) return refuse('This repository has one folder, so there is nothing else to show.');
         setView('changes');
         setGroup('turn');
+        // Every folder at once is not one folder, so it lets go of the one
+        // that was picked.
+        setFocus(null);
         return setScope(command.to ?? (scope === 'all' ? 'mine' : 'all'));
       }
+
+      case 'home':
+        return setView('home');
+
+      case 'focus': {
+        if (listed.length < 2) return refuse('This repository has one folder, so there is nothing else to show.');
+        // With no folder named it is `w`: the next one along, and after the
+        // last of them every folder at once.
+        const act: Act = command.to === undefined ? nextAct : {type: 'focus', path: command.to};
+        if (act.type === 'scope') return run({do: 'scope', to: act.scope});
+        if (act.type !== 'focus') return;
+        setFocus(act.path);
+        setScope('mine');
+        // A folder's journey and its own turns are the By turn stream's; the
+        // other two groupings are about this folder's files.
+        setGroup('turn');
+        // A peek or a file open in the reader belongs to the folder it was
+        // opened in, and the tree it hangs in is about to be another one.
+        setPeekPath(null);
+        setReaderPath(null);
+        // Home is never about a picked folder, so picking one leaves it.
+        if (view === 'home') setView('changes');
+        return;
+      }
+
+      case 'panel': {
+        if (mode === 'off') return refuse('The pane is too narrow for the panel.');
+        if (panelEnv()) return refuse('SIDECAR_PANEL is set, so the panel stays as it is.');
+        const next = command.to ?? (mode === 'open' ? 'folded' : 'open');
+        const kept: Prefs = {...prefs, panel: next};
+        setPrefs(kept);
+        setPeek(false);
+        // A choice you made is kept for next time; the width it was made at
+        // is not, because it is worked out again every time.
+        writePrefs(root, kept);
+        return;
+      }
+
+      case 'skip':
+        return setOpeningAt(null);
 
       case 'whitespace':
         setHideSpace(!hideSpace);
@@ -870,12 +1040,6 @@ export function App({root, interactive, mouseDebug = false, opening = true}: Pro
         return say(mouse ? 'Mouse off. Select and copy freely.' : 'Mouse on.');
       case 'quit':
         return exit();
-      // Phase 2: Home, the side panel, the workspaces and the opening.
-      case 'home':
-      case 'panel':
-      case 'focus':
-      case 'skip':
-        return;
     }
   };
 
@@ -897,20 +1061,19 @@ export function App({root, interactive, mouseDebug = false, opening = true}: Pro
         return act.what === 'chat' ? run({do: 'chat', to: act.on ? chat : null}) : run({do: 'changedOnly', on: act.on});
       case 'scope':
         return run({do: 'scope', to: act.scope});
-      // Phase 2: picking a workspace, the side panel and the opening.
       case 'focus':
+        return run({do: 'focus', to: act.path});
       case 'panel':
+        return run({do: 'panel', to: act.to});
       case 'skip':
-        return;
+        return run({do: 'skip'});
 
       case 'turn':
         return setOpen(o => ({...o, turns: flipped(o.turns, act.key)}));
       case 'file':
         return setOpen(o => ({...o, files: flipped(o.files, act.key)}));
       case 'toggle': {
-        // Phase 2: landing rows open once the stream draws them.
         const set = act.set;
-        if (set === 'landings') return;
         return setOpen(o => ({...o, [set]: flipped(o[set], act.key)}));
       }
 
@@ -1031,7 +1194,61 @@ export function App({root, interactive, mouseDebug = false, opening = true}: Pro
   const menuLines = menu ? menuBox(list[menu.open]!, menu.open, menu.item) : [];
   const menuLeft = menu ? Math.min(bar.starts[menu.open] ?? 0, Math.max(0, cols - MENU_WIDTH)) : 0;
 
+  // The folded panel peeks open under a pointer that rests on it, the way
+  // Claude Desktop's collapsed sidebar does, and folds again once the pointer
+  // has been away from the open panel for as long. Every cell the pointer
+  // crosses is a report, so a report only ever arms or disarms a timer: the
+  // state changes once, when the timer fires, and never on the report itself.
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hoverWant = useRef<boolean | null>(null);
+  const settle = () => {
+    if (hoverTimer.current) clearTimeout(hoverTimer.current);
+    hoverTimer.current = null;
+    hoverWant.current = null;
+  };
+  useEffect(() => settle, []);
+  const hover = (event: MouseEvent) => {
+    if (mode !== 'folded') return;
+    const want = peek ? event.x < PANEL_OPEN : event.y >= 1 && event.x < PANEL_FOLDED;
+    if (want === peek) return settle();
+    if (hoverWant.current === want) return;
+    settle();
+    hoverWant.current = want;
+    hoverTimer.current = setTimeout(() => {
+      hoverTimer.current = null;
+      hoverWant.current = null;
+      setPeek(want);
+    }, PEEK_MS);
+  };
+
+  // Folded again, or gone, the panel has nothing to peek.
+  useEffect(() => {
+    if (mode === 'folded') return;
+    settle();
+    setPeek(false);
+  }, [mode]);
+
+  // Motion reports only while there is a folded panel to peek, and never once
+  // the mouse is off: the terminal would otherwise send one per cell crossed
+  // for nothing.
+  useEffect(() => {
+    if (!interactive || !mouse || mode !== 'folded') return;
+    stdout.write(MOUSE_MOVE_ON);
+    return () => {
+      stdout.write(MOUSE_MOVE_OFF);
+    };
+  }, [interactive, mouse, mode]);
+
   const onMouse = (event: MouseEvent) => {
+    // A pointer passing over the pane is not you reaching for it: it neither
+    // pauses follow mode nor skips the opening.
+    if (event.kind === 'move') return hover(event);
+    // The opening is skipped by a click, and the click does nothing else.
+    if (openingAt !== null) {
+      if (event.kind === 'down') setOpeningAt(null);
+      return;
+    }
+
     if (mouseDebug) say(`${event.kind} ${event.button} col ${event.x} row ${event.y}`);
     pause();
     const inStream = event.y >= top.length && event.y < top.length + height;
@@ -1056,20 +1273,30 @@ export function App({root, interactive, mouseDebug = false, opening = true}: Pro
     lastClick.current = {x: event.x, y: event.y, at: clickedAt};
     if (notice && !mouseDebug) setNotice(null);
 
-    const zoneOf = (line: Line | undefined): Act | undefined => line?.zones?.find(z => event.x >= z.from && event.x < z.to)?.act;
+    const zoneAt = (line: Line | {zones?: Line['zones']} | undefined, x: number): Act | undefined =>
+      line?.zones?.find(z => x >= z.from && x < z.to)?.act;
 
+    // The menu and the bar are laid over the whole width; everything under
+    // the bar is in the columns the panel leaves.
     if (menu) {
       const row = menuLines[event.y - 1];
       const inside = row && event.x >= menuLeft && event.x < menuLeft + MENU_WIDTH;
       if (inside) return perform(row.act);
-      if (event.y === 0 && zoneOf(bar.line)?.type === 'menu') return perform(zoneOf(bar.line));
+      if (event.y === 0 && zoneAt(bar.line, event.x)?.type === 'menu') return perform(zoneAt(bar.line, event.x));
       return setMenu(null);
     }
+
+    if (event.y === 0) return perform(zoneAt(bar.line, event.x));
+    // The panel, or the open panel peeking over the content.
+    const panelHit = peek ? peekPanel : sideRows;
+    if (event.x < (peek ? PANEL_OPEN : side) && panelHit.length) return perform(zoneAt(panelHit[event.y - 1], event.x));
+    const x = event.x - side;
+    const zoneOf = (line: Line | undefined): Act | undefined => zoneAt(line, x);
 
     if (event.y < top.length) return perform(zoneOf(top[event.y]));
     if (!inStream) return;
 
-    if (event.x >= cols - 1 && lines.length > height) {
+    if (x >= room - 1 && lines.length > height) {
       dragging.current = true;
       return setScroll(s => ({...s, [slot]: scrollFromThumb(lines.length, height, event.y - top.length)}));
     }
@@ -1100,6 +1327,13 @@ export function App({root, interactive, mouseDebug = false, opening = true}: Pro
     (input, key) => {
       const event = parseMouse(input);
       if (event) return mouse ? onMouse(event) : undefined;
+      // Any key skips the opening and does nothing else, bar `q`: a key that
+      // did something as well would do it to a page you have not seen yet.
+      if (openingAt !== null) {
+        if (input === 'q') return exit();
+        return setOpeningAt(null);
+      }
+
       if (notice) setNotice(null);
       if (input !== 'f') pause();
 
@@ -1131,6 +1365,12 @@ export function App({root, interactive, mouseDebug = false, opening = true}: Pro
       if (input === 'm' || input === '?') return setMenu({open: 1, item: firstItem(1)});
       if (input === 'f') return follow === 'paused' ? setFollow('on') : run({do: 'follow'});
       if (input === 'M') return run({do: 'mouse'});
+      if (input === 'h') return run({do: 'home'});
+      if (input === 'b') return run({do: 'panel'});
+      // `w` is worth more on the folders than on whitespace: one of them is
+      // work you cannot see at all, the other is noise in a diff. It steps
+      // from anywhere, Home included, because the folders are about every view.
+      if (input === 'w') return run({do: 'focus'});
       if (input === '1') return run({do: 'view', view: 'changes'});
       if (input === '2') return run({do: 'view', view: 'files'});
       if (input === '3') return run({do: 'view', view: 'agents'});
@@ -1139,7 +1379,7 @@ export function App({root, interactive, mouseDebug = false, opening = true}: Pro
       const page = Math.max(1, height - 2);
       if (key.upArrow || input === 'k') return step(-1);
       if (key.downArrow || input === 'j') return step(1);
-      if (key.pageUp || input === 'b') return step(-1, page);
+      if (key.pageUp) return step(-1, page);
       if (key.pageDown || input === ' ') return step(1, page);
       if (input === 'g') return step(-1, lines.length);
       if (input === 'G') return step(1, lines.length);
@@ -1170,10 +1410,12 @@ export function App({root, interactive, mouseDebug = false, opening = true}: Pro
         const id = current?.id ?? '';
         const act = current?.act;
         if (id.startsWith('t:') && lines[cursor + 1]?.pins?.includes(id)) return perform({type: 'turn', key: id.slice(2)});
-        const isOpen =
-          (act?.type === 'file' && open.files.has(act.key)) ||
-          (act?.type === 'toggle' && act.set !== 'landings' && open[act.set].has(act.key));
-        return isOpen ? perform(act) : undefined;
+        const isOpen = (act?.type === 'file' && open.files.has(act.key)) || (act?.type === 'toggle' && open[act.set].has(act.key));
+        if (isOpen) return perform(act);
+        // At the top of a picked folder's stream there is nothing left to
+        // close, and the way back out is to your own folder.
+        if (slot === 'changes' && focused && cursor === lines.findIndex(line => line.pick)) return run({do: 'focus', to: null});
+        return;
       }
 
       if (input === 'y') {
@@ -1190,9 +1432,6 @@ export function App({root, interactive, mouseDebug = false, opening = true}: Pro
       if (slot === 'changes') {
         if (input === 'v') return run({do: 'group', group: GROUPS[(GROUPS.indexOf(group) + 1) % GROUPS.length]!});
         if (input === 's') return run({do: 'chat'});
-        // `w` is worth more on the folders than on whitespace: one of them is
-        // work you cannot see at all, the other is noise in a diff.
-        if (input === 'w') return run({do: 'scope'});
         if (input === 'W') return run({do: 'whitespace'});
         if (input === 'z') return run({do: 'foldAll'});
         if (input === 'o') {
@@ -1219,11 +1458,13 @@ export function App({root, interactive, mouseDebug = false, opening = true}: Pro
   );
 
   // --snapshot and non-terminal runs wait for the first read, draw and leave.
+  // Home names the repository and counts its folders, so the folders are part
+  // of that read.
   useEffect(() => {
-    if (interactive || !loaded || !history.loaded) return;
+    if (interactive || !loaded || !history.loaded || !foldersRead) return;
     const timer = setTimeout(exit, 300);
     return () => clearTimeout(timer);
-  }, [interactive, loaded, history.loaded, exit]);
+  }, [interactive, loaded, history.loaded, foldersRead, exit]);
 
   // ---- draw ---------------------------------------------------------------------
 
@@ -1242,7 +1483,9 @@ export function App({root, interactive, mouseDebug = false, opening = true}: Pro
   // and the footer drops from the back.
   const trail: Hint = follow === 'on' ? ['f', 'following', theme.accent] : ['f', 'follow'];
   const hints: Hint[] =
-    slot === 'changes'
+    slot === 'home'
+      ? [['enter', 'go'], ['h', 'home'], ['↑↓', 'move'], ['m', 'menu'], ['q', 'quit']]
+      : slot === 'changes'
       ? inDiff
         ? [verb, ...back, ['m', 'menu'], ['↑↓', 'line'], [']', 'hunk'], ['o', 'open'], ['z', 'fold all']]
         : agentsRunning
@@ -1273,16 +1516,48 @@ export function App({root, interactive, mouseDebug = false, opening = true}: Pro
     const onThumb = Boolean(track && i >= track.from && i < track.to);
     const rail = marks.get(i);
     const mark = rail ? seg(glyph.rail, rail, onThumb ? {bg: theme.thumb} : {}) : sp(1, onThumb ? theme.thumb : undefined);
-    return {segs: [...(visible[i]?.segs ?? [sp(cols - 1)]), mark]};
+    return {segs: [...(visible[i]?.segs ?? [sp(room - 1)]), mark]};
   });
+
+  // The opening, while it plays: the card for as long as it is being typed
+  // and read and held, then Home pushing it down and off. Home's own rows are
+  // the ones the stream would draw, padded to the body's height, so the card
+  // is pushed all the way off rather than left in the rows Home does not use.
+  // Its numbers are the read's own: when the transcripts and the commits came
+  // back is noted on the opening's clock the first time they are seen.
+  if (playing) {
+    if (history.counts && arrived.current.counts === undefined) arrived.current.counts = t;
+    if (history.loaded && arrived.current.loaded === undefined) arrived.current.loaded = t;
+  }
+
+  const playingInput: OpeningInput | null = playing
+    ? {
+        cols: room, height, folder: project, branch: git?.branch ?? '', chats: history.chats, counts: history.counts,
+        loaded: history.loaded, today: facts.today ? {added: facts.today.added, removed: facts.today.removed} : null,
+        t, frame, countsAt: arrived.current.counts, loadedAt: arrived.current.loaded,
+      }
+    : null;
+  const played = ((): {lines: Line[]; done: boolean} | null => {
+    if (!playingInput) return null;
+    const start = tPushStart(playingInput);
+    if (start === null || t < start) return {lines: openingCard(playingInput), done: false};
+    const home = Array.from({length: height}, (_, i) => lines[i] ?? pageRow(room));
+    return openingPush(playingInput, home);
+  })();
+  const pushed = Boolean(played?.done);
+  useEffect(() => {
+    if (pushed) setOpeningAt(null);
+  }, [pushed]);
 
   // The card takes the stream's place whole, a third of the way down it, so
   // the chrome above it and the footer under it never move when the real rows
   // arrive.
-  const body: Line[] = !card
+  const body: Line[] = played
+    ? played.lines.map(line => ({segs: [...line.segs, sp(1)]}))
+    : !card
     ? stream
     : ((): Line[] => {
-        const rows = splashLines(cols, {
+        const rows = splashLines(room, {
           folder: project,
           branch: git?.branch ?? '',
           counts: history.counts,
@@ -1294,11 +1569,45 @@ export function App({root, interactive, mouseDebug = false, opening = true}: Pro
         return Array.from({length: height}, (_, i) => rows[i - lead] ?? blank);
       })();
 
+  // The footer names the folder the views are about.
+  const where = focusedWs
+    ? {project: path.basename(focusedWs.wt.path), branch: focusedWs.wt.branch || null}
+    : {project, branch: git?.branch ?? null};
+  const below: Line[] = [...top.slice(1), ...body, ...(roomy ? [blank] : []), footer(room, hints, notice, where, !mouse)];
+
+  // The panel runs down the left of every row under the bar, and the rows
+  // beside it are laid out in what is left. Folded, it can peek open over the
+  // content under a resting pointer; the rows under it do not move.
+  const panelInput: PanelInput | null =
+    mode === 'off'
+      ? null
+      : {
+          mode, rows: below.length, view: playing ? 'home' : view, frame, now,
+          counts: {
+            changes: facts.today?.turns ?? 0,
+            files: uncommitted,
+            agents: agentsRunning,
+            agentsLive: agentsRunning > 0,
+            usage: usageNow.pct === null ? null : `${Math.round(usageNow.pct)}%`,
+            workspaces: listed.filter(ws => ws.state === 'working').length,
+          },
+          agentsTab: showAgents,
+          workspaces: listed.map(ws => ({path: ws.path, label: ws.label, hue: ws.hue, state: ws.state, live: ws.state === 'working'})),
+          focus: focused, scope,
+          // The panel is worked with the mouse and its keys; the cursor stays
+          // in the content.
+          cursor: null,
+        };
+  const sideRows = panelInput ? panelRows(panelInput) : [];
+  const peekPanel = panelInput && peek && mode === 'folded' ? panelRows({...panelInput, mode: 'open'}) : [];
+
   let screen: Line[] = [
-    ...top,
-    ...body,
-    ...(roomy ? [blank] : []),
-    footer(cols, hints, notice, {project, branch: git?.branch ?? null}, !mouse),
+    bar.line,
+    ...below.map((line, i) => {
+      const beside = sideRows[i] ? {segs: [...sideRows[i]!.segs, ...line.segs]} : line;
+      const over = peekPanel[i];
+      return over ? {segs: overlay(beside.segs, 0, over.segs, cols)} : beside;
+    }),
   ];
   if (menu) {
     screen = screen.map((line, y) => {

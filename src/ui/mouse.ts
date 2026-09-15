@@ -9,9 +9,17 @@
 // leading escape already stripped, so parsing is a single regular expression.
 
 export const MOUSE_ON = '\u001B[?1000h\u001B[?1002h\u001B[?1006h';
-export const MOUSE_OFF = '\u001B[?1006l\u001B[?1002l\u001B[?1000l';
+// Turning 1003 off is part of turning the mouse off, so whichever way the pane
+// leaves, a motion report never outlives it.
+export const MOUSE_OFF = '\u001B[?1003l\u001B[?1006l\u001B[?1002l\u001B[?1000l';
 
-export type MouseKind = 'down' | 'up' | 'drag' | 'wheel';
+// 1003 reports the pointer moving with no button held. Only the folded side
+// panel asks for it, to peek open under the pointer, and only while it is
+// folded: every cell crossed is a report, and nothing else wants them.
+export const MOUSE_MOVE_ON = '\u001B[?1003h';
+export const MOUSE_MOVE_OFF = '\u001B[?1003l';
+
+export type MouseKind = 'down' | 'up' | 'drag' | 'move' | 'wheel';
 
 export type MouseEvent = {
   kind: MouseKind;
@@ -41,8 +49,10 @@ export function parseMouse(input: string): MouseEvent | null {
   const moving = (code & 32) !== 0;
   const button = code & 3;
 
+  // Motion with no button held reports the button as 3, the code a release
+  // used before SGR had its own.
   return {
-    kind: wheel ? 'wheel' : released ? 'up' : moving ? 'drag' : 'down',
+    kind: wheel ? 'wheel' : released ? 'up' : moving ? (button === 3 ? 'move' : 'drag') : 'down',
     button: button === 1 ? 'middle' : button === 2 ? 'right' : 'left',
     wheel: wheel ? (button === 1 ? 1 : -1) : 0,
     x,

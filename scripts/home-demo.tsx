@@ -50,6 +50,7 @@ const input = (cols: number): HomeInput => ({
   workspaces: true,
   sel: 'home:go:1',
   working: true,
+  next: {type: 'focus', path: '/work/agent-a384'},
 });
 
 let failed = 0;

@@ -7,6 +7,11 @@
 // layout, not the palette. Ink and the app are imported after that switch,
 // because chalk decides once, when it is loaded.
 process.env.FORCE_COLOR = '3';
+// The checks below were written against a pane with no opening and no side
+// panel, and they still run against one. The opening and the panel have
+// checks of their own at the end, which put these back the way they need.
+process.env.SIDECAR_NO_OPENING = '1';
+process.env.SIDECAR_PANEL = 'off';
 
 import {execFileSync} from 'node:child_process';
 import fs from 'node:fs';
@@ -18,6 +23,7 @@ import {fileURLToPath} from 'node:url';
 const {render} = await import('ink');
 const {App} = await import('../src/ui/App');
 const {theme} = await import('../src/ui/theme');
+const {OPENING, openingCard, tPushStart} = await import('../src/ui/opening');
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const argv = process.argv.slice(2);
@@ -90,10 +96,11 @@ const check = (ok: boolean, what: string) => {
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 // Every frame any pane printed, for the checks that are about all of them.
-const seen: string[] = [];
+const seen: {shot: string; cols: number}[] = [];
 
-// One rendered pane, driven by keys and read back from its last frame.
-function pane(root: string) {
+// One rendered pane, driven by keys and read back from its last frame. The
+// size is the one the flags asked for unless a check needs one of its own.
+function pane(root: string, size: {cols: number; rows: number} = {cols: COLS, rows: ROWS}) {
   const stdin = Object.assign(new PassThrough(), {
     isTTY: true,
     setRawMode: () => stdin,
@@ -102,7 +109,7 @@ function pane(root: string) {
   });
 
   const frames: string[] = [];
-  const stdout = Object.assign(new PassThrough(), {columns: COLS, rows: ROWS, isTTY: true});
+  const stdout = Object.assign(new PassThrough(), {columns: size.cols, rows: size.rows, isTTY: true});
   stdout.on('data', chunk => frames.push(String(chunk)));
 
   const app = render(<App root={root} interactive />, {
@@ -112,7 +119,9 @@ function pane(root: string) {
     exitOnCtrlC: false,
   });
 
-  const frame = () => frames.at(-1) ?? '';
+  // A write with no row break in it is an escape the pane sent the terminal
+  // (motion reporting on or off, the clipboard), not a frame.
+  const frame = () => frames.filter(chunk => chunk.includes('\n')).at(-1) ?? '';
   const press = async (...keys: string[]) => {
     for (const key of keys) {
       stdin.write(key);
@@ -123,7 +132,7 @@ function pane(root: string) {
   const show = async (label: string) => {
     await wait(400);
     const shot = plain(frame());
-    seen.push(shot);
+    seen.push({shot, cols: size.cols});
     console.log(`\n=== ${label}\n${shot}`);
   };
 
@@ -172,8 +181,43 @@ function pane(root: string) {
 
 const {press, show, frame, text, cursorRow, cursorRows, cursorAt, numbers, onto, quit} = pane(target);
 
+// Every row of the frame that carries the cursor's background, the chrome
+// included: Home has no tabs or pills to share it with.
+const litRows = (shot: string) => shot.split('\n').filter(row => row.includes(CURSOR_BG)).map(plain);
+
 await wait(1800); // first git, transcript and snapshot read
+await show('home: where you are, what is happening, what today has been, where each key goes');
+
+// ---- a: the pane opens on Home -----------------------------------------------
+{
+  const shot = plain(frame());
+  check(shot.includes('GO TO'), 'the first frame should be Home, with its GO TO rows');
+  const lit = litRows(frame());
+  check(lit.length === 1 && /1 {2}Changes/.test(lit[0] ?? ''), `the cursor should start on "1  Changes", and it is on "${lit[0]?.trim()}"`);
+  check(!shot.split('\n').slice(0, 4).some(row => /Changes {3}Files/.test(row)), 'Home should have no tab row');
+}
+
+await press('1');
+await wait(400);
 await show('changes: the bar, the tabs, the pills and the stream');
+
+// The Workspaces list heads the stream whenever there is no panel and the
+// repository has more than one folder. The cursor starts under it, on the
+// newest thing in the stream.
+const listRows = (): number => {
+  const rows = text();
+  const at = rows.findIndex(row => row.trim().startsWith('WORKSPACES'));
+  if (at < 0) return 0;
+  const end = rows.findIndex((row, i) => i > at && !row.trim());
+  return (end < 0 ? rows.length : end) - at - 1;
+};
+const listed = listRows();
+check(text().findIndex(row => row === cursorRow()) > listed, `the cursor should start under the Workspaces list, and it is on "${cursorRow().trim()}"`);
+
+// A branch that landed after the newest turn began sits above it.
+const turnHead = () => /^ [▾⠀-⣿] /.test(cursorRow());
+for (let n = 0; n < 12 && !turnHead(); n++) await press(DOWN);
+check(turnHead(), `the cursor should be on the newest turn, and it is on "${cursorRow().trim()}"`);
 
 await press(DOWN, DOWN, ENTER);
 await show('changes: a row of the open turn, entered');
@@ -367,6 +411,50 @@ await press('4');
 await wait(1200);
 await show('usage: the Agents tab is hidden again unless something runs');
 
+// ---- b: h goes Home from anywhere -------------------------------------------
+await press('1', 'h');
+await wait(300);
+check(plain(frame()).includes('GO TO'), '`h` from Changes should go Home');
+await press('1');
+await wait(300);
+
+// ---- d: w picks the next workspace -------------------------------------------
+// The pills row's right end says which folder the stream is about. Before `w`
+// that is this folder's scope pill; after it, the folder `w` picked, which is
+// also the one the Workspaces list marks.
+if (listed) {
+  const pillsRow = () => plain(frame()).split('\n').find(row => row.includes('By turn')) ?? '';
+  const nameOf = (row: string) => /\bin (.+?)\s*▾?\s*$/.exec(row)?.[1]?.trim() ?? '';
+  // A narrow pane gives the pills row's right end up to the grouping pills,
+  // and then the list's own mark is the one that says which folder it is.
+  // By turn, where the list is, and from the top of the stream.
+  const byTurn = () => plain(frame().split('\n').find(row => plain(row).includes('By turn'))?.split(CURSOR_BG)[1] ?? '').trim().startsWith('By turn');
+  for (let n = 0; n < 3 && !byTurn(); n++) await press('v');
+  await press(...Array.from({length: 12}, () => UP));
+  await wait(300);
+  const before = nameOf(pillsRow());
+  // The spinner turns between two frames, so the mark is compared without it.
+  const markedRow = () => (text().find(row => row.startsWith(' ▎')) ?? '').replace(/[⠀-⣿]/g, ' ').trim();
+  const markedBefore = markedRow();
+  await press('w');
+  await wait(1200);
+  await show('changes: w picked the next workspace');
+  const after = nameOf(pillsRow());
+  const marked = markedRow();
+  check(marked !== '' && marked !== markedBefore, `w should mark the next folder in the Workspaces list, and it marks "${marked.trim()}"`);
+  if (before) {
+    check(after !== '' && after !== before, `w should pick another folder, and the pills row still reads "in ${after}"`);
+    check(!pillsRow().includes('▾'), 'a picked folder is named, not offered as a scope to widen');
+    check(marked.includes(after.replace(/…$/, '').slice(0, 12)), `the Workspaces list should mark "${after}", and it marks "${marked.trim()}"`);
+  }
+  await press('h');
+  await wait(300);
+  check(plain(frame()).includes('Good ') && !plain(frame()).includes(`in ${after}`), 'Home should never be about a picked folder');
+  await press('1', UP, UP, UP, UP, UP, UP, UP, UP, UP, UP, ESC);
+  await wait(400);
+  check(nameOf(pillsRow()) === before && markedRow() === markedBefore, `esc at the top of a picked folder should go back to "${before || markedBefore}", and it reads "${nameOf(pillsRow()) || markedRow()}"`);
+}
+
 await press('M', DOWN);
 await show('the mouse turned off: the footer keeps saying so');
 await press('M');
@@ -502,6 +590,9 @@ fs.rmSync(stage, {recursive: true, force: true});
   check(!first.includes('By turn'), 'the first frame should have no pills yet');
 
   await wait(1800);
+  // The pane opens on Home; the card is the empty state of the stream.
+  await c.press('1');
+  await wait(300);
   await c.show('a folder Claude Code has never been run in');
   const rest = plain(c.frame());
   check(wordmark(rest), 'a folder with no chats should show the wordmark');
@@ -511,15 +602,100 @@ fs.rmSync(stage, {recursive: true, force: true});
   fs.rmSync(quiet, {recursive: true, force: true});
 }
 
+// ---- c and e: the side panel, by the width of the pane -----------------------
+// A home of its own, so `b` writes its choice somewhere that is thrown away
+// rather than into the owner's own preferences.
+{
+  const away = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sidecar-panel-')));
+  process.env.SIDECAR_HOME = path.join(away, 'sidecar');
+  delete process.env.SIDECAR_PANEL;
+
+  // Where a row's content starts: the column of `GO TO` on Home, less the
+  // two a page row keeps before its text.
+  const contentAt = (shot: string) => (plain(shot).split('\n').find(row => row.includes('GO TO')) ?? '').indexOf('GO TO') - 2;
+  const rowsOf = (shot: string) => plain(shot).split('\n');
+
+  const p = pane(target, {cols: 72, rows: 40});
+  await wait(1800);
+  await p.show('72 columns: the panel folded to a strip');
+  check(rowsOf(p.frame())[1]?.[1] === '»', `at 72 columns the panel should be folded, with » in row 1 column 1, and row 1 reads "${rowsOf(p.frame())[1]}"`);
+  check(contentAt(p.frame()) === 9, `beside the folded panel the content should start 9 columns in, and it starts ${contentAt(p.frame())}`);
+
+  // The folded strip peeks open under a pointer resting on it, and folds
+  // again once the pointer is away. A pointer crossing the strip is a report
+  // per cell, and none of them may redraw the pane on its own.
+  const move = (col: number, row: number) => `\u001B[<35;${col + 1};${row + 1}M`;
+  const drawn = p.shots().length;
+  await p.press(...Array.from({length: 12}, (_, i) => move(1 + (i % 6), 3 + (i % 5))));
+  await wait(400);
+  const peeked = rowsOf(p.frame());
+  check(peeked[1]?.includes('«') === true && peeked[2]?.includes('Home') === true, `resting on the folded panel should peek it open, and rows 1 and 2 read "${peeked[1]}" and "${peeked[2]}"`);
+  check(p.shots().length - drawn <= 3, `twelve motion reports should redraw the pane once, and it drew ${p.shots().length - drawn} frames`);
+  await p.press(move(40, 5));
+  await wait(400);
+  check(rowsOf(p.frame())[1]?.[1] === '»', 'moving off the panel should fold it again');
+
+  await p.press('b');
+  await wait(400);
+  await p.show('72 columns: b opened the panel');
+  const opened = rowsOf(p.frame());
+  check(opened[1]?.includes('«') === true && opened[2]?.includes('Home') === true, `b should open the panel, and rows 1 and 2 read "${opened[1]}" and "${opened[2]}"`);
+  check(contentAt(p.frame()) === 22, `beside the open panel the content should start 22 columns in, and it starts ${contentAt(p.frame())}`);
+
+  // A click on the panel's own row goes where it says, whatever column of it.
+  const changesRow = opened.findIndex(row => /^.1 {2}Changes/.test(row));
+  await p.press(click(14, changesRow));
+  await wait(400);
+  check(rowsOf(p.frame()).some(row => row.includes('By turn')), 'a click on the panel\'s Changes row should open Changes');
+  check(!rowsOf(p.frame()).some(row => /Changes {3}Files {3}/.test(row)), 'with the panel on, the tab row is not drawn');
+  await p.quit();
+
+  const n = pane(target, {cols: 40, rows: 40});
+  await wait(1800);
+  check(contentAt(n.frame()) === 0, `at 40 columns there should be no panel, and the content starts ${contentAt(n.frame())} columns in`);
+  await n.press('1');
+  await wait(400);
+  await n.show('40 columns: no panel, and the tab row is back');
+  check(rowsOf(n.frame()).slice(1, 4).some(row => row.includes('Changes') && row.includes('Files')), 'at 40 columns the tab row should be back');
+  await n.quit();
+
+  process.env.SIDECAR_PANEL = 'off';
+  fs.rmSync(away, {recursive: true, force: true});
+}
+
+// ---- f: the opening, drawn at three moments -----------------------------------
+// Pure, so it is called directly: the card before anything, once the name is
+// in, and once it is finished and has held. The stat bar is git's own: the
+// share of today's lines that were added, in pluses.
+{
+  const cols = 62;
+  const today = {added: 4180, removed: 1630};
+  const input = {
+    cols, height: 30, folder: 'jiaolong', branch: 'improve-pane-layout', chats: 3,
+    counts: {chats: 3, turns: 41, agents: 12}, loaded: true, today, frame: 0, countsAt: 900, loadedAt: 1400,
+  };
+  const end = tPushStart({...input, t: 0}) ?? 0;
+  check(end > OPENING.HOLD, `the card should hold before Home arrives, and it would push at ${end} ms`);
+  for (const t of [0, 1300, end]) {
+    const rows = openingCard({...input, t}).map(line => plain(line.segs.map(s => s.text).join('')));
+    const wrong = rows.find(row => [...row].length !== cols - 1);
+    check(!wrong, `every row of the opening at ${t} ms should be ${cols - 1} wide, and one is ${[...(wrong ?? '')].length}`);
+    if (t !== end) continue;
+    const bar = rows.map(row => /[+−]{10,}/.exec(row)?.[0] ?? '').find(Boolean) ?? '';
+    const want = Math.round((40 * today.added) / (today.added + today.removed));
+    check(bar.length === 40 && [...bar].filter(ch => ch === '+').length === want, `the stat bar should be 40 cells with ${want} pluses, and it reads "${bar}"`);
+  }
+}
+
 // ---- what must be true of every frame --------------------------------------
 // A row wider than the pane wraps in a real terminal and pushes the rest of
 // the frame down, so nothing below it is where it says it is.
-const overflowed = seen.filter(shot => shot.split('\n').some(row => [...row].length > COLS));
+const overflowed = seen.filter(({shot, cols}) => shot.split('\n').some(row => [...row].length > cols));
 check(overflowed.length === 0, `no row should be wider than the pane, and ${overflowed.length} frames have one`);
 // The scope has a key, a menu item and a pill of its own; the footer's columns
 // belong to the row under the cursor.
 const lastRow = (shot: string) => [...shot.split('\n')].reverse().find(row => row.trim()) ?? '';
-const scoped = seen.filter(shot => lastRow(shot).includes('w worktree')).length;
+const scoped = seen.filter(({shot}) => lastRow(shot).includes('w worktree')).length;
 check(scoped === 0, `no footer should spend a hint on the scope key, and ${scoped} frames do`);
 
 if (failed) {

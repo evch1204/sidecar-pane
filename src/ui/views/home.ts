@@ -38,6 +38,9 @@ export type HomeInput = {
   // run, because `now` is `agents` then whatever the main turn is doing; App
   // knows, so it can pass it. Left out, a turn inside a tool counts as live.
   working?: boolean;
+  // Where `w` goes from here: the next folder along, or all of them. App
+  // works it out once for the key, the panel and this row alike.
+  next: Act;
 };
 
 // Columns before a GO TO row's label, and the widths its two text columns are
@@ -243,9 +246,7 @@ function goes(input: HomeInput): Go[] {
     out.push({
       key: 'w', label: 'Workspaces', desc: 'every folder of the repo',
       right: [seg(`${facts.workspaces.active} active`, theme.accent)],
-      // Phase 2 decides what picking the list means; until then `w` shows
-      // every folder at once, which is what scope all already is.
-      act: {type: 'scope', scope: 'all'},
+      act: input.next,
     });
   }
 

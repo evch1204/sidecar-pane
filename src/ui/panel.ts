@@ -86,13 +86,16 @@ const wsId = (path: string | null): string => `panel:ws:${path ?? '~here'}`;
 
 // What `w` does from where you are: the pane's own folder, then each other
 // folder in the order they are listed, then all of them at once, then round.
-function nextWorkspace(input: PanelInput): Act {
-  if (input.scope === 'all') return {type: 'focus', path: null};
-  const order = [null, ...input.workspaces.map(ws => ws.path).filter((path): path is string => path !== null)];
-  const at = order.indexOf(input.focus);
-  const next = at + 1;
+// App asks the same question for the key, so the row and the key never
+// disagree about where it goes next.
+export function nextWorkspace(paths: (string | null)[], focus: string | null, scope: 'mine' | 'all'): Act {
+  if (scope === 'all') return {type: 'focus', path: null};
+  const order = [null, ...paths.filter((path): path is string => path !== null)];
+  const next = order.indexOf(focus) + 1;
   return next < order.length ? {type: 'focus', path: order[next]!} : {type: 'scope', scope: 'all'};
 }
+
+const nextOf = (input: PanelInput): Act => nextWorkspace(input.workspaces.map(ws => ws.path), input.focus, input.scope);
 
 // The views' own figures: what there is behind each key, at a glance.
 function badge(input: PanelInput, view: View): Seg[] {
@@ -200,7 +203,7 @@ export function panelRows(input: PanelInput): PanelRow[] {
     // With one folder there is nothing for `w` to step through.
     if (several) {
       items.push(
-        item(row([sp(1), seg('w', theme.text), sp(2), seg('next workspace', theme.dim)], [], {id: 'panel:next', act: nextWorkspace(input)}), 'keys'),
+        item(row([sp(1), seg('w', theme.text), sp(2), seg('next workspace', theme.dim)], [], {id: 'panel:next', act: nextOf(input)}), 'keys'),
       );
     }
 
@@ -231,7 +234,7 @@ export function panelRows(input: PanelInput): PanelRow[] {
         item(
           row([sp(1), seg(glyph.gitBranch, theme.text), sp(2), key('w', false)], [seg(String(input.counts.workspaces), theme.accent), sp(1)], {
             id: 'panel:next',
-            act: nextWorkspace(input),
+            act: nextOf(input),
           }),
           'keys',
         ),

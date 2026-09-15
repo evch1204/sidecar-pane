@@ -9,6 +9,10 @@
 // before anything is printed or matched. Ink and the app are imported after
 // that switch, because chalk decides once, when it is loaded.
 process.env.FORCE_COLOR = '3';
+// These checks are about the stream, so every pane skips the opening, has no
+// side panel and starts in Changes rather than on Home.
+process.env.SIDECAR_NO_OPENING = '1';
+process.env.SIDECAR_PANEL = 'off';
 
 import {execFileSync} from 'node:child_process';
 import fs from 'node:fs';
@@ -377,8 +381,9 @@ function pane(root: string, cols = COLS, rows = ROWS) {
     debug: true,
     exitOnCtrlC: false,
   });
+  stdin.write('1');
 
-  const frame = () => out.at(-1) ?? '';
+  const frame = () => out.filter(chunk => chunk.includes('\n')).at(-1) ?? '';
   const text = () => plain(frame());
   const rowsOf = () => frame().split('\n');
   // The two rows of chrome the checks about state read: the bar says who the
