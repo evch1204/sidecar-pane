@@ -350,8 +350,13 @@ if (fs.existsSync(plan) && (await onto('PLAN.md'))) {
   await wait(400);
   await show('files: PLAN.md as written, line numbers and the Source pill');
   check(litPill(headRow()) === 'Source', `r should light the Source pill, and the head row reads "${plain(headRow()).trim()}"`);
-  const numbered = numbers(1).length;
-  check(numbered > height(1) / 2, `Source should number its lines, and it numbered ${numbered} of ${height(1)} rows`);
+  // Counted from the file's first row: a file a turn changed today has a
+  // "Changed by" block above it, and on a short pane that block is most of
+  // the window.
+  const source = text(1).slice(Math.max(0, text(1).findIndex(row => lineNo(row) > 0)));
+  // A blank line has its number and nothing after it.
+  const numbered = source.filter(row => /^[\s│▎]*\d+(?: |$)/.test(row)).length;
+  check(numbered > source.length / 2, `Source should number its lines, and it numbered ${numbered} of ${source.length} rows`);
 
   await press(click(plain(headRow()).indexOf(' Page ') + 1, headAt()));
   await wait(400);
@@ -615,8 +620,14 @@ fs.rmSync(stage, {recursive: true, force: true});
   const contentAt = (shot: string) => (plain(shot).split('\n').find(row => row.includes('GO TO')) ?? '').indexOf('GO TO') - 2;
   const rowsOf = (shot: string) => plain(shot).split('\n');
 
+  // A fresh home means a first snapshot of the whole repository, so Home is
+  // waited for rather than a fixed time.
+  const home = async (shot: () => string) => {
+    for (let n = 0; n < 40 && !plain(shot()).includes('GO TO'); n++) await wait(250);
+  };
+
   const p = pane(target, {cols: 72, rows: 40});
-  await wait(1800);
+  await home(p.frame);
   await p.show('72 columns: the panel folded to a strip');
   check(rowsOf(p.frame())[1]?.[1] === '»', `at 72 columns the panel should be folded, with » in row 1 column 1, and row 1 reads "${rowsOf(p.frame())[1]}"`);
   check(contentAt(p.frame()) === 9, `beside the folded panel the content should start 9 columns in, and it starts ${contentAt(p.frame())}`);
@@ -651,7 +662,7 @@ fs.rmSync(stage, {recursive: true, force: true});
   await p.quit();
 
   const n = pane(target, {cols: 40, rows: 40});
-  await wait(1800);
+  await home(n.frame);
   check(contentAt(n.frame()) === 0, `at 40 columns there should be no panel, and the content starts ${contentAt(n.frame())} columns in`);
   await n.press('1');
   await wait(400);
