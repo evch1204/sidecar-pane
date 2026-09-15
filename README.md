@@ -4,6 +4,14 @@ A viewer pane that sits beside the Claude Code CLI. Working name.
 
 Four views, a menu bar, a mouse, and no editing.
 
+It opens on **Home**: where you are, what Claude is doing now, what today has
+been, and where each key goes. `h` comes back to it from anywhere. Before Home,
+a three second opening plays while the first read runs, and every number in it
+is real; any key or click skips it, `--no-opening` skips it for one run and
+`SIDECAR_NO_OPENING=1` for good. At 80 columns and up a side panel on the left
+lists the views and the folders of the repository, `b` folds it, and `w` steps
+through the folders.
+
 - **Changes** is one stream. Every prompt you sent is a block on a left line:
   what Claude said about it, the files it changed, and the diff, which opens
   under its own row. A past turn is one row: its size as five cells, green and
@@ -16,8 +24,8 @@ Four views, a menu bar, a mouse, and no editing.
   the same coloured square marks the files it wrote. An agent given a git
   worktree of its own carries one fact row saying which folder, how much is in
   it, and whether any of that has arrived here — `↑1 · not in demo yet`, `✓
-  merged 11:56`, `removed`. `w` widens Changes to every worktree of the
-  repository and adds a map at the head of the stream.
+  merged 11:56`, `removed`. `w` steps Changes, Files and Agents through the
+  folders of the repository, one at a time and then all of them at once.
 - **Usage** shows where the tokens went, and your 5 hour and weekly limits if
   you connect the status line script.
 
@@ -118,19 +126,20 @@ says that is what it is doing.
 
 ## Keys
 
-Everywhere: `1` Changes, `2` Files, `3` Agents, `4` Usage, `m` or `?` menu,
-`M` mouse on or off, `q` quit. Everything below is also in the menus.
+Everywhere: `h` Home, `1` Changes, `2` Files, `3` Agents, `4` Usage, `w` next
+workspace, `b` fold or unfold the side panel, `m` or `?` menu, `M` mouse on or
+off, `q` quit. Everything below is also in the menus.
 
 | Key | What it does |
 |---|---|
 | `↑` `↓` or `k` `j` | move through the stream, line by line inside a diff |
 | `→` or `Enter` | open or close the row in place; on a hunk header, fold it; on a gap, open it; on a file in the tree, peek it |
 | `←` or `Esc` | back up to the row that owns what you are in; close it; leave the reader |
-| `space` / `b` | page down / up |
+| `space` / `PgUp` | page down / up |
 | `g` / `G` | top / bottom |
 | `]` / `[` | Changes: next / previous turn, file or hunk. Files: next / previous change |
 | `v` | group by turn, by file, or everything uncommitted |
-| `w` | this folder only, or every worktree of the repository |
+| `w` | the next folder of the repository, then all of them, then yours again |
 | `s` | one chat at a time, or all of them |
 | `z` | fold or unfold every hunk of this file |
 | `W` | hide changes that are only whitespace |

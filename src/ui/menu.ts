@@ -75,12 +75,14 @@ export function menus(state: MenuState): Menu[] {
     {label: 'Usage', key: '4', checked: state.view === 'usage', command: {do: 'view', view: 'usage'}},
   ];
 
-  // What `w` has picked, by name: one folder, or all of them.
-  const picked = state.focus ? (state.workspaces.find(ws => ws.path === state.focus)?.label ?? 'one folder') : state.scope === 'all' ? 'all folders' : 'this folder';
+  // The item says what `w` does, and is ticked while you are somewhere other
+  // than your own folder; which folder that is, the pills row names.
   const everywhere: Item[] = [
     ...(state.panel !== 'off' ? [{label: 'Panel', key: 'b', checked: state.panel === 'open', command: {do: 'panel'}} as Item] : []),
     // Only a repository with more than one folder has anywhere to step to.
-    ...(state.folders > 1 ? [{label: `Workspace: ${picked}`, key: 'w', checked: state.focus !== null || state.scope === 'all', command: {do: 'focus'}} as Item] : []),
+    ...(state.folders > 1
+      ? [{label: 'Next workspace', key: 'w', checked: state.focus !== null || state.scope === 'all', command: {do: 'focus'}} as Item]
+      : []),
   ];
 
   const options: Item[] =
