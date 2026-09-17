@@ -1,6 +1,7 @@
 import {statusOf, type AgentRun} from './agents';
 import {pathKey} from './git';
 import {sizeLit} from './size';
+import {sameDay} from './time';
 import {daySummary, type TurnChange} from './turns';
 import {landingsOf, stateWord, type Landing, type WorktreeRun} from './worktrees';
 
@@ -42,7 +43,6 @@ export type HomeFactsInput = {
   newest: TurnChange | undefined;
 };
 
-const sameDay = (a: number, b: number): boolean => new Date(a).toDateString() === new Date(b).toDateString();
 
 export function homeFacts(input: HomeFactsInput): HomeFacts {
   const {root, now, loaded, changes, agents, worktrees, asking, working, newest} = input;
@@ -57,6 +57,8 @@ export function homeFacts(input: HomeFactsInput): HomeFacts {
 
   // The pane's own turn is work in its folder too, though no agent file says so.
   const words = worktrees.map(wt => ({wt, word: stateWord(wt, now, wt.here && working)}));
+  // Unmerged is about work that has not arrived here yet, which a folder
+  // nobody is in can still be holding.
   const live = (word: string): boolean => word === 'working' || word === 'ahead' || word === 'dirty';
 
   // Same order as the status at the right of the bar.
@@ -84,7 +86,9 @@ export function homeFacts(input: HomeFactsInput): HomeFacts {
     unmerged: words.filter(({wt, word}) => !wt.here && live(word)).length,
     landings: landingsOf(worktrees).filter(landing => sameDay(landing.at, now)),
     today: loaded ? today(changes, now) : null,
-    workspaces: {total: worktrees.length, active: words.filter(({word}) => live(word)).length},
+    // Active is somebody working in it now, the one meaning the panel, the
+    // Workspaces list and Home all give the word.
+    workspaces: {total: worktrees.length, active: words.filter(({word}) => word === 'working').length},
   };
 }
 

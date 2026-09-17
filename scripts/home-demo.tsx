@@ -21,6 +21,7 @@ const landing = {
   files: [],
   added: 0,
   removed: 0,
+  commits: 1,
 } satisfies Landing;
 
 const facts: HomeFacts = {

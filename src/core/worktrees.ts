@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {statusOf, type AgentRun} from './agents';
 import {defaultBranch, git, isAncestor, landedIn, parseStats, pathKey, type FileStat, type GitState} from './git';
+import {sameDay} from './time';
 
 // Claude Code gives a background agent a git worktree of its own: the same
 // repository, checked out into another folder on its own branch, so three
@@ -83,6 +84,11 @@ export type WorktreeRun = {
   merged: boolean;
   // When the merge that brought it in was made.
   mergedAt: number | null;
+  // Its head is in the pane's own folder: merged into the trunk while the
+  // pane sits on a branch of its own is merged, but it has not landed here.
+  arrived: boolean;
+  // How many commits it brought, once merged; nought before.
+  commits: number;
   // Agents of this project's chats that worked in it, oldest first.
   agents: AgentRun[];
   // One of them is running now.
@@ -94,10 +100,20 @@ export type WorktreeRun = {
   parent: string;
 };
 
-// `born` is the first head the pane ever saw the folder at. A folder whose head
-// has moved on from it made commits of its own, which is the only way to tell
-// a fast-forwarded branch from a fresh checkout of the same commit.
-type Remembered = {name: string; branch: string; head: string; at: number; mergedAt?: number; born?: string};
+// `born` is the first head the pane ever saw the folder at, `bornAhead` how
+// many commits of its own it had then, and `bornBase` where it had left its
+// parent. A folder that never had a commit of its own — still at the head it
+// was first seen at, and nothing ahead then — is a checkout, not work, and a
+// checkout of an old commit is reachable from the parent without having been
+// merged. Anything else that the parent can reach, it brought.
+//
+// `mergedAt` is written once, the first time the pane sees it merged, so a
+// merge with no merge commit of its own keeps the time it was first seen at
+// rather than the time of whatever was committed after it.
+type Remembered = {
+  name: string; branch: string; head: string; at: number;
+  mergedAt?: number; born?: string; bornAhead?: number; bornBase?: string;
+};
 type Memory = Record<string, Remembered>;
 
 type Memo = {
@@ -110,6 +126,8 @@ type Memo = {
   ahead: number;
   merged: boolean;
   mergedAt: number | null;
+  arrived: boolean;
+  commits: number;
   files: FileStat[];
 };
 
@@ -218,6 +236,11 @@ export async function readWorktrees(
   const rootKey = pathKey(root);
   const here = live.find(wt => pathKey(wt.path) === rootKey) ?? null;
   const trunk = (await defaultBranch(root)) ?? '';
+  // Where the trunk is now, as a sha. The trunk moves without the pane's own
+  // head moving whenever the pane sits on a branch of its own, and the answers
+  // below are remembered by the shas they were asked about: asked by name,
+  // a merge into the trunk would go unseen until the pane's own head moved.
+  const trunkAt = trunk ? (await git(root, ['rev-parse', '--verify', '--quiet', trunk]))?.trim() || trunk : '';
 
   // Who worked where. An agent with a worktree of its own says so in its meta
   // file; every other agent ran in the folder its transcript names, which is
@@ -241,7 +264,8 @@ export async function readWorktrees(
     // An entry written before `born` was kept has no first head, and the head
     // it has now is not one: guessing would call it merged the day it moves.
     memory[wt.path] = {
-      name: path.basename(wt.path), branch: wt.branch, head: wt.head, at: now, mergedAt: was?.mergedAt, born: was ? was.born : wt.head,
+      name: path.basename(wt.path), branch: wt.branch, head: wt.head, at: now,
+      mergedAt: was?.mergedAt, born: was ? was.born : wt.head, bornAhead: was?.bornAhead, bornBase: was?.bornBase,
     };
     changed = true;
   }
@@ -287,7 +311,8 @@ export async function readWorktrees(
     // The heads are free: the worktree list has already said them. So a
     // folder nothing has moved in is only asked how dirty it is, and one
     // nobody is working in is not even asked that more than now and then.
-    const refs = `${wt.head}\0${parent}\0${here?.head ?? ''}`;
+    const against = parent === trunk ? trunkAt : parent;
+    const refs = `${wt.head}\0${against}\0${here?.head ?? ''}`;
     const idle = !isHere && !active;
     const memo = memos.get(key);
     if (memo && memo.refs === refs && idle && now - memo.at < IDLE_MS) {
@@ -310,34 +335,62 @@ export async function readWorktrees(
     let ahead = 0;
     let merged = false;
     let mergedAt: number | null = null;
+    let arrived = false;
+    let commits = 0;
     let files: FileStat[] = [];
     if (wt.head && parent) {
       ahead = Number((await git(root, ['rev-list', '--count', `${parent}..${wt.head}`]))?.trim() ?? 0) || 0;
+      const kept = memory[wt.path];
+      // The first time the folder is measured is the one time how far ahead
+      // it was when it was born can be told: after that its commits may be
+      // in the parent and the count is nought either way.
+      if (kept && kept.born === wt.head && kept.bornAhead === undefined) {
+        kept.bornAhead = ahead;
+        kept.bornBase = (await git(root, ['merge-base', wt.head, parent]))?.trim() || undefined;
+        changed = true;
+      }
+
       // The trunk cannot be merged into itself, and the folder the pane is in
       // is where everything else is going, so neither is asked.
       const trunkItself = wt.main && (wt.branch === trunk || `origin/${wt.branch}` === trunk);
       let from: string | undefined;
-      if (!isHere && !trunkItself && (await isAncestor(root, wt.head, parent))) {
+      if (!isHere && !trunkItself && (await isAncestor(root, wt.head, against))) {
         // Reachable is not the same as merged. A folder checked out at its
         // parent's head, or at any older commit of it, and never committed
         // in, is reachable too, and calling it merged put a landing in the
-        // stream for work that never happened. It merged only if it brought
-        // something: a merge commit took it in from off the parent's own
-        // line, or its head has moved on from the one it was first seen at.
+        // stream for work that never happened. So a folder that never had a
+        // commit of its own is left out; everything else the parent can
+        // reach, a fast-forward included, it brought.
         const landing = await landedIn(root, wt.head, parent);
-        const born = memory[wt.path]?.born;
         const viaMerge = Boolean(landing?.merge && landing.parent !== wt.head);
-        if (landing && (viaMerge || (born && born !== wt.head))) {
+        // An entry from before `born` was kept knows nothing of where it
+        // started, so only a merge commit can say it brought anything.
+        const fresh = kept?.born === undefined ? !viaMerge : wt.head === kept.born && (kept.bornAhead ?? 0) === 0;
+        if (!fresh) {
           merged = true;
-          mergedAt = landing.at;
-          // What it brought is measured from the commit before it arrived:
-          // where it left the line the merge was made on, or the head it
-          // started from.
-          from = viaMerge ? (await git(root, ['merge-base', wt.head, landing.parent]))?.trim() || undefined : born;
-          if (memory[wt.path] && memory[wt.path]!.mergedAt !== mergedAt) {
-            memory[wt.path]!.mergedAt = mergedAt;
+          // The merge commit's own time when there is one. A fast-forward has
+          // none, and the commit after it on the parent is somebody else's
+          // work, so its time is the one the pane first saw it merged — now,
+          // if this pane saw it unmerged — or else its own last commit's.
+          const sawItOpen = memo !== undefined && !memo.merged && memo.refs.split('\0')[0] === wt.head;
+          const own = async () => Number((await git(root, ['log', '-1', '--format=%ct', wt.head]))?.trim() ?? 0) * 1000 || null;
+          mergedAt = viaMerge ? landing!.at : (kept?.mergedAt ?? (sawItOpen ? now : await own()));
+          if (kept && kept.mergedAt === undefined && mergedAt !== null) {
+            kept.mergedAt = mergedAt;
             changed = true;
           }
+
+          // What it brought is measured from the commit before it arrived:
+          // where it left the line the merge was made on, or where it left
+          // its parent when it was first seen.
+          from = viaMerge
+            ? (await git(root, ['merge-base', wt.head, landing!.parent]))?.trim() || undefined
+            : (kept?.bornBase ?? (kept?.born && kept.born !== wt.head ? kept.born : undefined));
+          if (from) commits = Number((await git(root, ['rev-list', '--count', `${from}..${wt.head}`]))?.trim() ?? 0) || 0;
+          // Its work is in the pane's folder only if the pane's head can
+          // reach it: a branch merged into the trunk while you sit on a
+          // branch of your own has landed somewhere else.
+          arrived = Boolean(here?.head) && (parent === here!.head || (await isAncestor(root, wt.head, here!.head)));
         }
       }
 
@@ -347,9 +400,9 @@ export async function readWorktrees(
       if (!isHere && (!merged || from)) files = await changedIn(root, wt, parent, from);
     }
 
-    const fresh: Memo = {at: now, refs, status: status.key, dirty: status.dirty, ahead, merged, mergedAt, files};
-    memos.set(key, fresh);
-    out.push(row(wt, isHere, mine, active, parent, fresh));
+    const measured: Memo = {at: now, refs, status: status.key, dirty: status.dirty, ahead, merged, mergedAt, arrived, commits, files};
+    memos.set(key, measured);
+    out.push(row(wt, isHere, mine, active, parent, measured));
   }
 
   if (changed) writeMemory(root, memory);
@@ -380,6 +433,8 @@ function row(
     ahead: memo.ahead,
     merged: memo.merged,
     mergedAt: memo.mergedAt,
+    arrived: memo.arrived,
+    commits: memo.commits,
     agents,
     active,
     files: memo.files,
@@ -427,7 +482,8 @@ export function journeyOf(wt: WorktreeRun, now: number): Journey {
   // nought, so "no commit yet" would be a lie about a folder that plainly
   // committed.
   const commits = wt.ahead > 0 ? plural(wt.ahead, 'commit') : wt.merged ? 'committed' : 'no commit yet';
-  const merged = wt.merged ? (wt.mergedAt ? `✓ merged ${clock(wt.mergedAt)}` : 'merged') : 'not merged';
+  // No check mark: the mark is the UI's to draw, where it has the room.
+  const merged = wt.merged ? (wt.mergedAt ? `merged ${clock(wt.mergedAt)}` : 'merged') : 'not merged';
 
   // A folder git lists has at least been started, whatever else is true.
   const stage: Journey['stage'] =
@@ -445,7 +501,6 @@ export function journeyOf(wt: WorktreeRun, now: number): Journey {
 
 const plural = (n: number, one: string): string => `${n} ${n === 1 ? one : `${one}s`}`;
 
-const sameDay = (a: number, b: number): boolean => new Date(a).toDateString() === new Date(b).toDateString();
 
 // The folders a list of them shows: every one on disk, and a gone one only on
 // the day its work landed here, which is the day that is news. Everything
@@ -457,13 +512,16 @@ export function visibleWorktrees(worktrees: WorktreeRun[], now: number): Worktre
 }
 
 // A branch that arrived in the pane's folder: one row of its own in the stream.
-export type Landing = {wt: WorktreeRun; at: number; files: FileStat[]; added: number; removed: number};
+// `commits` is what it brought, counted from where it left its parent.
+export type Landing = {wt: WorktreeRun; at: number; files: FileStat[]; added: number; removed: number; commits: number};
 
-// Newest first, like the stream it is laid into. A merge with no time cannot
-// be placed among the turns, so it is left out rather than guessed at.
+// Newest first, like the stream it is laid into. Only what the pane's own
+// head can reach has landed here; a merge into the trunk while the pane sits
+// on a branch is news for the trunk, not for this folder. A merge with no time
+// cannot be placed among the turns, so it is left out rather than guessed at.
 export function landingsOf(worktrees: WorktreeRun[]): Landing[] {
   return worktrees
-    .filter(wt => wt.merged && wt.mergedAt)
-    .map(wt => ({wt, at: wt.mergedAt!, files: wt.files, added: wt.lines.added, removed: wt.lines.removed}))
+    .filter(wt => wt.merged && wt.arrived && wt.mergedAt)
+    .map(wt => ({wt, at: wt.mergedAt!, files: wt.files, added: wt.lines.added, removed: wt.lines.removed, commits: wt.commits}))
     .sort((a, b) => b.at - a.at);
 }
