@@ -130,8 +130,8 @@ Sidecar pane ──reads────▶ the transcripts    (chat, prompts, tools
   opens on a card with its own name on it instead of an empty stream (see "The
   bar and the first frame").
 - Done: follow mode, on by default. While a turn runs the pane opens the file
-  it has just written; anything you press or click pauses it, `f` hands it
-  back.
+  it has just written; anything you press or click inside a stream pauses it,
+  going to another view, folder or menu does not, and `f` hands it back.
 - Done: one hook, and only one. Claude Code asking to allow a tool call is the
   one thing the transcript never records, so `hooks/attention.mjs` writes it
   down and the pane reads `● asking you` off it (see "Where the history comes
@@ -417,11 +417,12 @@ Decisions, and why:
   all: what it was and how much it did are why the row is there.
 - **An agent that worked somewhere else says so in one row.** Under its own
   row, a fact row: `in agent-docs   1 file ▄▄▄▄▄` on the left, and on the
-  right the first of these that is true — `⠧ Opus 4.5 · 12m` while it runs, `✓
-  merged 11:56`, `removed`, `not recorded`, `↑1 · not in demo yet`, or `clean`.
-  One thing, because the first one that applies is the whole truth about that
-  folder. At 40 columns the count gives way and the right side reads `not
-  merged`: which folder it is not in is the part you already know. Once the
+  right the folder's state word, said the one way every list of folders says
+  it — `⠧ Opus 4.5 · 12m` while it runs, `✓ merged 11:56`, `removed`, `not
+  recorded`, `↑1 · not merged`, `2 uncommitted`, or `clean` (see "The state
+  words"). One thing, because the first one that applies is the whole truth
+  about that folder. The Agents view's folder rows say the same words. At 40
+  columns the count gives way and `↑1 · not merged` is `not merged`. Once the
   folder is merged, removed or never recorded there is nothing left to count,
   so the left side is `in agent-docs` alone rather than a count of nothing.
 - **Opening such an agent lists that folder's own files**, read from its git,
@@ -550,17 +551,26 @@ hang them on.
 - **Remembered heads.** A merged agent worktree is usually deleted the moment
   it lands, which is exactly when you want to know it landed. So while the
   pane runs it writes each worktree's head into
-  `~/.sidecar/<project>/worktrees.json`. A head we remember that is now an
-  ancestor of this folder's head reads `✓ merged HH:MM` — the time of the
-  commit that brought it in — even after the folder is gone, **as long as it
-  brought a commit**. Reachable is not the same as merged: a folder checked
-  out at this one's head and never committed in is reachable too, and calling
-  it merged put a landing in the stream for work that never happened. So it
-  counts as merged only when a merge commit took it in from off the line, or
-  its head has moved on from the first head the pane saw it at (`born`, kept
-  beside the head). What it brought is measured from the commit before it
-  arrived, not from the merge base, which after a merge is its own head. One
-  that is gone and never arrived reads `removed`. **If the pane was not running when it
+  `~/.sidecar/<project>/worktrees.json`. A head we remember that its parent
+  can now reach reads `✓ merged HH:MM` even after the folder is gone, **as
+  long as it ever had a commit of its own**. Reachable is not the same as
+  merged: a folder checked out at an old commit and never committed in is
+  reachable too, and calling it merged put a landing in the stream for work
+  that never happened. So the pane writes down, the first time it sees a
+  folder, the head it was at (`born`), how many commits it was ahead then
+  (`bornAhead`) and where it had left its parent (`bornBase`). A folder still
+  at its first head with nothing ahead then is fresh, and a fresh folder is
+  never merged; everything else its parent can reach is, a fast-forward
+  included. The time is the merge commit's own when there is one. A
+  fast-forward has none, and the next commit on the parent is somebody
+  else's, so its time is when this pane first saw it merged — written once,
+  beside the head — or, for a merge that happened while the pane was closed,
+  its own last commit's. What it brought is measured from where it left its
+  parent, never from the merge base, which after a merge is its own head, and
+  the commits are counted there too. The trunk is asked about by its sha, not
+  its name, because it moves without the pane's own head moving whenever the
+  pane sits on a branch. One that is gone and never arrived reads `removed`.
+  **If the pane was not running when it
   existed, nothing wrote its head down**, and then the row says `not
   recorded`: the branch and the folder are both gone and there is nothing left
   to measure.
@@ -576,13 +586,13 @@ built: the list, the picked folder's name, its journey, and where its work
 stands.
 
 ```
-  By turn  ·  By file  ·  Uncommitted      in B2: wordmark and opening
+  By turn  ·  By file  ·  Uncommitted      in worktree-agent-a0f86dd2…
 
  WORKSPACES                                              1 active of 7
-   ⠴ worktree-pane-ide-uiux                      agent · 9 uncommitted
- ▎ ○ B2: wordmark and opening                           ✓ merged 14:20
-   ○ B3: Home view                                      ✓ merged 14:19
-   ○ B4: Changes view workspaces                        ✓ merged 14:26
+   ⠏ worktree-pane-ide-uiux                     agent · 18 uncommitted
+ ▎ ○ worktree-agent-a0f86dd29bd76af16                   ✓ merged 14:20
+   ○ worktree-agent-a6ffe834c553b62ce                   ✓ merged 14:19
+   ○ worktree-agent-a96ec96af866df087                   ✓ merged 14:26
    ○ clarify-worktree-display                                    clean
    ○ improve-pane-layout-polish                                  clean
    ○ main                                                        clean
@@ -913,8 +923,13 @@ boards were drawn with:
   workspace leaves Home, and Home never shows a picked one.
 - **GO TO rows are the only rows the cursor stops on.** Each one does what
   its key does, Enter or a click, and carries that view's news on the right.
-  The descriptions go all together when the pane is narrow, so the column
-  never reads as a ragged list of half sentences.
+  A description is cut to what its row leaves it, so an 80 column pane with
+  the panel open still has them; under eight columns a cut one says nothing,
+  and then they all go together, so the column never reads as a few half
+  sentences and a few gaps.
+- **The bar says what Home says.** Its status is drawn from the same
+  `homeFacts`, and the footer on Home and in Usage always names the pane's
+  own folder: only Changes, Files and Agents are ever about a picked one.
 - **No tab row on Home.** There is nothing to group, and the GO TO rows are
   the tabs. The footer says `enter go  h home  ↑↓ move  m menu  q quit`.
 
@@ -944,9 +959,15 @@ commits, and at the end today's own pluses and minuses.
 
 Any key or click skips it and does nothing else, bar `q`, which still quits:
 a key that did something as well would do it to a page you have not seen.
-Home's own rows say `reading…` until the read is over, so skipping early is
-safe. `--no-opening`, or `SIDECAR_NO_OPENING=1` for good, goes straight to
-the card; `--snapshot` and anything that is not a terminal never play it.
+Skipped, it goes straight to Home, not to a card: Home's NOW row says
+`reading…` and its TODAY row `reading…` until the read is over, so skipping
+early is safe. `--no-opening`, or `SIDECAR_NO_OPENING=1` (or `true`) for
+good, does the same from the start; `0`, `false` or an empty value leave it
+on. `cli.tsx` is the one place that reads the variable, and App trusts the
+prop it is handed. `--snapshot` and anything that is not a terminal never
+play it. The card itself is left for a folder Claude Code has never been run
+in, drawn in the opening's own order: the readout, the bar's row, and where
+you are. The pointer does not peek the panel open while it plays.
 `src/ui/opening.ts` is a function of the time since the opening started and
 of what the read has found, with no state and no timer, so any moment of it
 can be printed: `npx tsx scripts/opening-demo.tsx`.
@@ -968,16 +989,16 @@ Open and folded, printed by `npx tsx scripts/panel-demo.tsx`:
 ```
  «  fold          b  │        »      │
  h  Home             │        ◆  h   │
-▎1  Changes        8 │       ▎+− 1   │
- 2  Files          3 │        ≡  2   │
+▎1  Changes        3 │       ▎+− 1   │
+ 2  Files            │        ≡  2   │
  3  Agents       ⠹ 2 │        ■  3 ⠹ │
  4  Usage        58% │        ▄▆ 4   │
                      │               │
  WORKSPACES     3/5  │        ⎇  w 3 │
 ▎⠹ improve-pane-la…  │
- ⠹ usage round thr…  │
- ⠹ markdown page v…  │
- ○ commit-backed t…  │
+ ⠹ usage-round-thr…  │
+ ⠹ markdown-page-v…  │
+ ○ commit-backed-t…  │
  ○ main              │
    all folders       │
                      │
@@ -985,13 +1006,21 @@ Open and folded, printed by `npx tsx scripts/panel-demo.tsx`:
  m  menu             │
 ```
 
+- **Its figures are Home's.** Changes carries the uncommitted files, as
+  Home's Changes row does; Files carries none, because its figure would be
+  the same number again; Agents carries the agents running, with a spinner;
+  Usage the five hour window's percent. `3/5` is the folders somebody is
+  working in over the folders listed, the same `active` Home and the list
+  count.
+
 - **`b` folds and unfolds it**, and the choice is kept per project in
   `~/.sidecar/<project>/ui.json`. Only a choice is written: a width the pane
   picked for itself is worked out again next time. An open panel at 64 to 79
   columns is honoured, because it still leaves the content 42. Under 64 there
   is no panel whatever was chosen, and `b` says the pane is too narrow.
   `SIDECAR_PANEL=off|open|folded` wins over both, which is how the smoke
-  scripts pin the old layout.
+  scripts pin the old layout — but nothing, that included, leaves the
+  content under 40 columns: a panel that would is not drawn.
 - **The folded strip peeks open** under a pointer that rests on it for 150
   ms, the way Claude Desktop's collapsed sidebar does, drawn over the content
   so nothing under it moves, and folds again once the pointer has been off
@@ -1015,10 +1044,23 @@ that folder: its own turns, the agents that worked in it, its own tree and
 its own git. `w` steps through them in the list's order, yours first and
 the main checkout last, then all of them at once, then back to yours; in a
 repository with one folder it says there is nothing else to show. A picked
-folder and all of them are never both true. The pills row names the picked
-folder, and a click on the name, or Esc at the top of its stream, comes back.
-A fresh stream starts its cursor on the newest turn, under the list: the
-list is a way to go somewhere else, and the turn is what you came for.
+folder and all of them are never both true, and with all of them in view no
+row carries the `▎` that marks the one you are in. A row is named by its
+branch, or its folder's name when nothing is checked out — never by an
+agent's task, which is a sentence, changes with every agent sent there, and
+is no name anybody types. The pills row names the picked folder, cut to the
+room it has, and a click on the name comes back; so does Esc on any row that
+is not inside something open. Picking a folder closes the diffs that were
+open, because each was read from the folder that was picked then. A fresh
+stream starts its cursor on the newest turn, under the list: the list is a
+way to go somewhere else, and the turn is what you came for.
+
+A folder is **active** when somebody is working in it — its state word is
+`working`, the pane's own folder while its turn runs included — and that is
+the one meaning the word has, in the panel's `3/5`, the list's `3 active of
+5` and Home's Workspaces row. Home's `not merged yet` is a different count:
+folders other than yours whose work has not arrived, working, ahead or
+dirty.
 
 A picked folder's stream is headed by its **journey**, the four stops of a
 folder's way from started to removed:
@@ -1040,7 +1082,11 @@ to arrive with no row of its own: forty files turned up under whichever turn
 happened to be next. Now a branch that merged into the pane's folder is a row
 among that day's turns, at the time it landed, in the add colour, that opens
 to show what it brought — who worked there, how many commits, how long, and
-its files as text, because their diff lives in that folder's git:
+its files as text, because their diff lives in that folder's git. It is a
+landing only if the pane's own head can reach it: a branch merged into the
+trunk while the pane sits in a feature worktree has landed somewhere else,
+and is not news here. The commits it shows are counted when it merged, from
+where it left its parent; its `ahead` is nought by then and says nothing.
 
 ```
  ▸  ✓ merged  commit-backed turns      7 files ▄▄▄▄▄     13:20
@@ -1055,7 +1101,7 @@ is true (`stateWord` in `src/core/worktrees.ts`):
 | Word | When |
 |---|---|
 | `working` | an agent is running in it, or it is the pane's folder and its turn is running |
-| `merged` | its head has arrived in the folder it answers to, and it brought a commit |
+| `merged` | the folder it answers to can reach its head, and it ever had a commit of its own (a fast-forward counts) |
 | `removed` | the folder is gone and its work never arrived |
 | `not recorded` | the folder is gone and nothing wrote its head down |
 | `ahead` | it has commits its parent does not |
@@ -1107,8 +1153,11 @@ a menu title, a tab or a meter that had to be cut at a narrow width loses its
 zone with its text. A click while the opening plays skips it and does
 nothing else.
 
-**Anything you do with the mouse pauses follow mode**, the same as a key press,
-because the page is yours the moment you reach for it. `f` hands it back. The
+**Anything you do to a stream with the mouse pauses follow mode**, the same as
+a key press, because the page is yours the moment you reach for it. Going
+somewhere does not: `1`–`4`, `h`, `w`, `b`, `m`, `?`, `q`, anything on Home,
+and a click or Enter that changes the view, the folder, the scope, the
+grouping or a filter, or opens a menu, leaves it following. `f` hands it back. The
 footer says which it is: `f following` in `accent` while it is on, `f follow`
 in `dim` while it is not — where there is room for it. It is one of the last
 hints, so a row with a long verb and something to go back out to pushes it off
@@ -1177,7 +1226,7 @@ File tree, plain preview with line numbers, keyboard control, Windows Terminal s
 1. ~~Shadow snapshots on prompt start and on stop.~~ Done, driven by the
    transcript rather than by hooks.
 2. ~~Turn list: each prompt you sent, with its own diff and counts.~~ Done.
-3. ~~Follow mode: the pane jumps to whatever Claude just edited. Any key press pauses it; a key turns it back on.~~ **Done, and on by default.** Each poll the pane compares the running turn's known files with the last poll's, and a file that was not there before gets its diff opened, the one before it closed — one followed diff at a time — and the cursor moved onto it three rows down the page. It compares the snapshot's list, not the Edit calls, so a file a shell command changed without naming it counts. Any key, click or wheel but `f` pauses it; `f` hands it back; when the turn ends the last diff it opened stays open.
+3. ~~Follow mode: the pane jumps to whatever Claude just edited. Any key press pauses it; a key turns it back on.~~ **Done, and on by default.** Each poll the pane compares the running turn's known files with the last poll's, and a file that was not there before gets its diff opened, the one before it closed — one followed diff at a time — and the cursor moved onto it three rows down the page. It compares the snapshot's list, not the Edit calls, so a file a shell command changed without naming it counts. Any key, click or wheel inside a stream pauses it, while going to another view, folder or menu does not (see "Mouse"); `f` hands it back; when the turn ends the last diff it opened stays open.
 4. Works in folders without git.
 
 - **Done when:** you can leave the pane alone for a whole session and it always shows the right thing.
