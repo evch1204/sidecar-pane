@@ -2,7 +2,7 @@
 // second git worktree with an agent working in it, the commits that carried the
 // work away and the snapshots sidecar would have taken while it ran — then
 // drives the pane over it and checks every part of the drawing. This is the
-// only way to see measured per-turn diffs, `✓ merged` and a worktree map
+// only way to see measured per-turn diffs, `✓ merged` and the Workspaces list
 // without living through a real session.
 //   npx tsx scripts/smoke-history.tsx [--cols 40] [--rows 34]
 // Colour is on so a check can find the cursor's own row, and stripped again
@@ -10,8 +10,8 @@
 // that switch, because chalk decides once, when it is loaded.
 process.env.FORCE_COLOR = '3';
 // These checks are about the stream, so every pane skips the opening, has no
-// side panel and starts in Changes rather than on Home.
-process.env.SIDECAR_NO_OPENING = '1';
+// side panel and starts in Changes rather than on Home. The opening is App's
+// own prop, which cli.tsx sets from the environment; this renders App itself.
 process.env.SIDECAR_PANEL = 'off';
 
 import {execFileSync} from 'node:child_process';
@@ -375,7 +375,7 @@ function pane(root: string, cols = COLS, rows = ROWS) {
   const stdout = Object.assign(new PassThrough(), {columns: cols, rows, isTTY: true});
   stdout.on('data', c => out.push(String(c)));
 
-  const app = render(<App root={root} interactive />, {
+  const app = render(<App root={root} interactive opening={false} />, {
     stdin: stdin as unknown as NodeJS.ReadStream,
     stdout: stdout as unknown as NodeJS.WriteStream,
     debug: true,
@@ -460,7 +460,18 @@ await wait(1800);
 await p.press('g');
 const opening = await p.show('changes: the day, and the turn you are in');
 check(opening.includes('TODAY'), 'the day should head the stream');
-check(!opening.includes('WORKTREES'), 'this folder alone is no map: a worktree is where an agent worked, not a head of the stream');
+// With no panel, the folders of the repository head the stream: this one and
+// the agent's, one row each, named by their branches.
+{
+  const rows = opening.split('\n');
+  const head = rows.findIndex(row => row.trim().startsWith('WORKSPACES'));
+  const end = rows.findIndex((row, i) => i > head && !row.trim());
+  const listed = head < 0 ? [] : rows.slice(head + 1, end < 0 ? rows.length : end);
+  check(head >= 0, 'the Workspaces list should head the stream when there is no panel');
+  check(listed.length === 2, `and have one row per folder, two, and it has ${listed.length}`);
+  check(listed.some(row => row.includes('improve-greet')) && listed.some(row => row.includes('agent-docs')), `and name each folder by its branch, and it reads "${listed.map(row => row.trim()).join('" / "')}"`);
+  check(/^ ▎ \S improve-greet/.test(listed[0] ?? ''), `with this folder marked as the one in view, and it reads "${listed[0]?.trim()}"`);
+}
 check(/[▁▂▃▄▅▆▇█]{2} [▁▂▃▄▅▆▇█]{2} /.test(opening), 'and the day should keep its skyline whatever else is in scope');
 
 // A turn is a row that opens, so it is marked like one, and the one that is
@@ -495,8 +506,8 @@ await wait(300);
 const fact = rowUnder(opening, 'Write the guide');
 check(fact.includes('in agent-docs'), `the row under the agent should name the folder it worked in, and it reads "${fact.trim()}"`);
 check(
-  COLS < 56 ? fact.includes('not merged') : /↑1 · not in demo yet/.test(fact),
-  'and say that none of it is in this folder yet, with how far ahead it is when there is room',
+  COLS < 56 ? fact.includes('not merged') : /↑1 · not merged/.test(fact),
+  `and say that none of it is merged yet, with how far ahead it is when there is room, and it reads "${fact.trim()}"`,
 );
 
 if (await p.onto('Write the guide')) {
@@ -590,6 +601,17 @@ if (await p.onto('mention the licence')) {
 }
 
 // ---- the worktrees, before the merge ------------------------------------
+// `w` steps through the folders: the agent's first, then all of them. The
+// first step is a stream of that folder alone, under its journey.
+await p.press('w');
+await wait(1200);
+await p.press('g');
+const picked = await p.show("changes: w picked the agent's folder");
+check(COLS < 56 || /\bin agent-docs\b/.test(picked), `the pills row should name the folder w picked, by its branch`);
+check(/^ ▎ \S agent-docs/m.test(picked), 'and the Workspaces list should mark it');
+check(saysIt(picked, 'write the guide and commit it'), "and the stream should be that folder's own chat");
+check(!saysIt(picked, 'make greet friendlier'), "and nothing of this folder's own");
+
 // The scope moves the cursor's row down the stream, which scrolls the head of
 // it away, so `g` walks back up after the switch rather than before it.
 await p.press('w');
@@ -598,10 +620,11 @@ await p.press('g');
 p.mark();
 const all = await p.show('changes: every worktree of the repository, scope all');
 // At 40 columns the grouping pills win and the scope pill gives way; the
-// menu still has it, and the map still heads the stream.
+// menu still has it, and the list still heads the stream.
 check(COLS < 56 || all.includes('in all 2 worktrees'), 'the scope pill should say how many folders are in view');
-check(all.includes('WORKTREES'), 'the map should head the stream, and only in this scope');
-check(/[▸▾] {2}WORKTREES/.test(all), 'and fold from a chevron of its own');
+check(all.includes('WORKSPACES'), 'the Workspaces list should still head the stream in scope all');
+// Every folder at once is not one folder: none of them carries the mark.
+check(!all.split('\n').some(row => row.startsWith(' ▎ ')), 'and with every folder in view, no folder should be marked as the one you are in');
 // Closed, and at 40 columns the chip, the count and the clock leave the words
 // nothing: the turn is in the stream and opens on Enter, but there is no
 // reading it where it stands.
@@ -633,10 +656,12 @@ await wait(4000);
 const after = await p.show('changes: the same folder, merged and then removed');
 check(/✓ merged \d\d:\d\d/.test(after), 'a merged worktree should say when it landed, even once it is gone');
 
+// From every folder, `w` comes round to this one again.
 await p.press('w');
 await wait(600);
 p.mark();
-await p.show('changes: back to this folder, and the merge on the newest turn');
+const backHere = await p.show('changes: back to this folder, and the merge on the newest turn');
+check(!backHere.includes('in all 2 worktrees'), 'w from scope all should come back to this folder');
 // The merge is the last row of the newest turn's block, under the agent and
 // the files it wrote, so a short window reaches it by stepping.
 await p.onto('hand the guide');
@@ -893,7 +918,7 @@ const oneFolder = await q.show('changes: a day of four turns, and the skyline th
 check(/[▁▂▃▄▅▆▇█]{2} [▁▂▃▄▅▆▇█]{2} /.test(oneFolder), 'the day should draw a skyline of its turns');
 check(/[+]\d+ −\d+/.test(oneFolder), "the day's own totals should be on the skyline row");
 check(!oneFolder.includes('✓ merged'), 'and never merged: there is nothing here it could have been merged into');
-check(!oneFolder.includes('WORKTREES'), 'one folder is no map');
+check(!oneFolder.includes('WORKSPACES'), 'one folder is no list of them');
 
 // One click zone a turn, three columns each: the third pair is the big turn.
 const skyRow = q.rowsOf().findIndex(row => /[▁▂▃▄▅▆▇█]{2} [▁▂▃▄▅▆▇█]{2} /.test(plain(row)));

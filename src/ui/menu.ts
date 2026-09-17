@@ -49,10 +49,8 @@ export type MenuState = {
   scope: 'mine' | 'all';
   // Where the side panel is, and `off` when the pane is too narrow for it.
   panel: 'open' | 'folded' | 'off';
-  // The one folder the views are looking at, or null for the pane's own, and
-  // every folder there is to pick from.
+  // The one folder the views are looking at, or null for the pane's own.
   focus: string | null;
-  workspaces: {path: string; label: string}[];
   // The cursor is inside a diff, so folding every hunk means something.
   inDiff: boolean;
   // A markdown file is open in the reader, so it can be read as written.
@@ -250,6 +248,14 @@ export type Pill = {label: string; on: boolean; act: Act; tone?: string; clear?:
 // fact at the right end — a dim count, or the scope pill, which is a button of
 // its own. A narrow pane keeps only the pill that is lit and cycles through the
 // rest on a click.
+// The columns a row of pills takes, the separators between them included.
+export const pillsWidth = (pills: Pill[]): number =>
+  pills.reduce((n, pill, i) => n + (i ? 3 : 0) + pill.label.length + 2 + (pill.clear ? 2 : 0), 0);
+
+// What the right end of a pills row has left once the pills have theirs: the
+// note's own room, so a name there can be cut to it rather than dropped.
+export const noteRoom = (cols: number, pills: Pill[]): number => cols - 2 - RIGHT_PAD - pillsWidth(pills) - 2;
+
 export function pillRow(cols: number, pills: Pill[], note: Seg[] = [], noteAct?: Act): Line {
   const draw = (shown: Pill[], acts: Act[], right: Seg[]): Line => {
     const left: Seg[] = [sp(1)];
@@ -274,7 +280,7 @@ export function pillRow(cols: number, pills: Pill[], note: Seg[] = [], noteAct?:
   // Measured, not guessed: a pill whose text had to be clipped would leave a
   // click zone over words that are not there any more.
   const roomFor = (right: Seg[]) => cols - 2 - RIGHT_PAD - widthOf(right) - (right.length ? 2 : 0);
-  const wide = pills.reduce((n, pill, i) => n + (i ? 3 : 0) + pill.label.length + 2 + (pill.clear ? 2 : 0), 0);
+  const wide = pillsWidth(pills);
   const acts = pills.map(pill => pill.act);
   if (wide <= roomFor(note)) return draw(pills, acts, note);
   // The grouping pills win: they say what this list is, and the fact on the

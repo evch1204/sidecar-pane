@@ -10,7 +10,8 @@ process.env.FORCE_COLOR = '3';
 // The checks below were written against a pane with no opening and no side
 // panel, and they still run against one. The opening and the panel have
 // checks of their own at the end, which put these back the way they need.
-process.env.SIDECAR_NO_OPENING = '1';
+// The opening is App's `opening` prop, which cli.tsx sets from the flag and
+// the environment; this script renders App itself, so it passes it.
 process.env.SIDECAR_PANEL = 'off';
 
 import {execFileSync} from 'node:child_process';
@@ -112,7 +113,7 @@ function pane(root: string, size: {cols: number; rows: number} = {cols: COLS, ro
   const stdout = Object.assign(new PassThrough(), {columns: size.cols, rows: size.rows, isTTY: true});
   stdout.on('data', chunk => frames.push(String(chunk)));
 
-  const app = render(<App root={root} interactive />, {
+  const app = render(<App root={root} interactive opening={false} />, {
     stdin: stdin as unknown as NodeJS.ReadStream,
     stdout: stdout as unknown as NodeJS.WriteStream,
     debug: true,
@@ -204,19 +205,41 @@ await show('changes: the bar, the tabs, the pills and the stream');
 // The Workspaces list heads the stream whenever there is no panel and the
 // repository has more than one folder. The cursor starts under it, on the
 // newest thing in the stream.
+const listAt = () => text().findIndex(row => row.trim().startsWith('WORKSPACES'));
 const listRows = (): number => {
   const rows = text();
-  const at = rows.findIndex(row => row.trim().startsWith('WORKSPACES'));
+  const at = listAt();
   if (at < 0) return 0;
   const end = rows.findIndex((row, i) => i > at && !row.trim());
   return (end < 0 ? rows.length : end) - at - 1;
 };
+// The row the cursor is on, by where it is and what it says: under the list,
+// and a row of the stream itself (a turn, or a branch that landed), never one
+// of the folders. A short pane has already scrolled the list away to show it.
+{
+  const at = listAt();
+  const n = listRows();
+  const lit = cursorAt();
+  check(lit >= 0 && lit > (at < 0 ? -1 : at + n), `the cursor should start under the Workspaces list (rows ${at}..${at + n}), and it is on row ${lit}, "${cursorRow().trim()}"`);
+  check(/^ [▾▸⠀-⣿] /.test(cursorRow()) || cursorRow().includes('merged'), `the cursor should start on the newest turn or landing, and it is on "${cursorRow().trim()}"`);
+}
+
+// The folders git lists that are still on disk: every one of them is a row of
+// the list, so a repository with more than one and no list is a failure, not
+// a check to skip. The list is counted from the top of the stream: `g` goes to
+// its first row, and a notch of the wheel brings its head row back in.
+await press('g', wheelUp(20, streamTop() + 2));
+await wait(200);
 const listed = listRows();
-check(text().findIndex(row => row === cursorRow()) > listed, `the cursor should start under the Workspaces list, and it is on "${cursorRow().trim()}"`);
+const onDisk = execFileSync('git', ['-C', target, 'worktree', 'list', '--porcelain'], {encoding: 'utf8'})
+  .split('\n')
+  .filter(line => line.startsWith('worktree '))
+  .filter(line => fs.existsSync(line.slice(9).trim())).length;
+check(onDisk < 2 || listed >= onDisk, `this repository has ${onDisk} folders, so the Workspaces list should have at least ${onDisk} rows, and it has ${listed}`);
 
 // A branch that landed after the newest turn began sits above it.
 const turnHead = () => /^ [▾⠀-⣿] /.test(cursorRow());
-for (let n = 0; n < 12 && !turnHead(); n++) await press(DOWN);
+for (let n = 0; n < 40 && !turnHead(); n++) await press(DOWN);
 check(turnHead(), `the cursor should be on the newest turn, and it is on "${cursorRow().trim()}"`);
 
 await press(DOWN, DOWN, ENTER);
@@ -427,7 +450,7 @@ await wait(300);
 // The pills row's right end says which folder the stream is about. Before `w`
 // that is this folder's scope pill; after it, the folder `w` picked, which is
 // also the one the Workspaces list marks.
-if (listed) {
+if (onDisk > 1) {
   const pillsRow = () => plain(frame()).split('\n').find(row => row.includes('By turn')) ?? '';
   const nameOf = (row: string) => /\bin (.+?)\s*▾?\s*$/.exec(row)?.[1]?.trim() ?? '';
   // A narrow pane gives the pills row's right end up to the grouping pills,
@@ -438,8 +461,9 @@ if (listed) {
   await press(...Array.from({length: 12}, () => UP));
   await wait(300);
   const before = nameOf(pillsRow());
-  // The spinner turns between two frames, so the mark is compared without it.
-  const markedRow = () => (text().find(row => row.startsWith(' ▎')) ?? '').replace(/[⠀-⣿]/g, ' ').trim();
+  // The picked row's name: its left side only. The mark before it spins and
+  // the sentence after it carries an elapsed time, and neither is the row.
+  const markedRow = () => /^ ▎ \S (.+?)(?: {2,}|$)/.exec(text().find(row => row.startsWith(' ▎')) ?? '')?.[1]?.trim() ?? '';
   const markedBefore = markedRow();
   await press('w');
   await wait(1200);
@@ -450,7 +474,10 @@ if (listed) {
   if (before) {
     check(after !== '' && after !== before, `w should pick another folder, and the pills row still reads "in ${after}"`);
     check(!pillsRow().includes('▾'), 'a picked folder is named, not offered as a scope to widen');
-    check(marked.includes(after.replace(/…$/, '').slice(0, 12)), `the Workspaces list should mark "${after}", and it marks "${marked.trim()}"`);
+    // Both name the folder by its branch, each cut to its own room.
+    const stem = (name: string) => name.replace(/…$/, '');
+    const shorter = Math.min(stem(after).length, stem(marked).length);
+    check(shorter > 0 && stem(after).slice(0, shorter) === stem(marked).slice(0, shorter), `the Workspaces list should mark "${after}", and it marks "${marked.trim()}"`);
   }
   await press('h');
   await wait(300);
@@ -588,10 +615,12 @@ fs.rmSync(stage, {recursive: true, force: true});
     return rows.some((_, i) => big(rows[i]) && big(rows[i + 1]) && big(rows[i + 2]));
   };
 
+  // With the opening skipped the first frame is Home, and Home's own rows say
+  // the read is still going: the card is only the empty stream's.
   const c = pane(project);
   const first = c.shots()[0] ?? '';
-  check(wordmark(first), 'the first frame should carry the wordmark');
-  check(first.includes('reading'), `the first frame should say it is reading, and it says "${first.split('\n')[0]?.trim()}"`);
+  check(first.includes('GO TO') && !wordmark(first), 'the first frame should be Home, not the card');
+  check(/reading…/.test(first), `the first frame should say it is reading, and it says "${first.split('\n').find(row => row.includes('NOW'))?.trim()}"`);
   check(!first.includes('By turn'), 'the first frame should have no pills yet');
 
   await wait(1800);

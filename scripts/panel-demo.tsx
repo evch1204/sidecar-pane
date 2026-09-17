@@ -15,18 +15,18 @@ const base: Omit<PanelInput, 'mode' | 'rows'> = {
   // The frame that draws `⠹`, as the boards do.
   frame: 2,
   now,
-  counts: {changes: 8, files: 3, agents: 2, agentsLive: true, usage: '58%', workspaces: 3},
+  counts: {changes: 3, agents: 2, usage: '58%', workspaces: 3},
   agentsTab: true,
+  // A folder is named by its branch, as every list of them names it.
   workspaces: [
-    {path: null, label: 'improve-pane-layout', hue: hues[0], state: 'working', live: true},
-    {path: 'C:/work/sidecar-pane/.claude/worktrees/agent-a384', label: 'usage round three', hue: hues[1], state: 'working', live: true},
-    {path: 'C:/work/sidecar-pane/.claude/worktrees/agent-aeed', label: 'markdown page view', hue: hues[2], state: 'working', live: true},
-    {path: 'C:/work/sidecar-pane/.claude/worktrees/agent-a868', label: 'commit-backed turns', hue: hues[3], state: 'merged', live: false},
-    {path: 'C:/Users/evanc/Desktop/sidecar-pane', label: 'main', hue: hues[4], state: 'clean', live: false},
+    {path: null, label: 'improve-pane-layout', hue: hues[0], state: 'working'},
+    {path: 'C:/work/sidecar-pane/.claude/worktrees/agent-a384', label: 'usage-round-three', hue: hues[1], state: 'working'},
+    {path: 'C:/work/sidecar-pane/.claude/worktrees/agent-aeed', label: 'markdown-page-view', hue: hues[2], state: 'working'},
+    {path: 'C:/work/sidecar-pane/.claude/worktrees/agent-a868', label: 'commit-backed-turns', hue: hues[3], state: 'merged'},
+    {path: 'C:/Users/evanc/Desktop/sidecar-pane', label: 'main', hue: hues[4], state: 'clean'},
   ],
   focus: null,
   scope: 'mine',
-  cursor: null,
 };
 
 // What a row does, in a word, so the printout shows the zones as well as the text.

@@ -1,5 +1,5 @@
 import type {StateWord} from '../core/worktrees';
-import {cut, fit, seg, sp, spinner, type Act, type Seg, type View, type Zone} from './cells';
+import {cut, fit, seg, sp, spinner, workspaceMark, type Act, type Seg, type View, type Zone} from './cells';
 import {glyph, theme} from './theme';
 
 // The side panel: the views and the folders of the repository down the left
@@ -21,13 +21,17 @@ export const PANEL_FOLDED = 9; // 8 and the rule
 // choice you made is kept wherever it still leaves the content room, and the
 // width decides the rest. An open panel at 64 columns still leaves 42 for the
 // content, which is enough to read by, so a pref of `open` is honoured there;
-// under 64 there is not, whatever was chosen.
+// under 64 there is not, whatever was chosen. Nothing, the environment
+// included, may leave the content under 40 columns: the rows are not laid out
+// for less, and a panel beside a pane too narrow to read is no help.
 export function panelMode(cols: number, pref: 'open' | 'folded' | undefined, env: string | undefined): PanelMode {
-  if (env === 'off' || env === 'open' || env === 'folded') return env;
-  if (cols >= 80) return pref ?? 'open';
-  if (cols >= 64) return pref ?? 'folded';
-  return 'off';
+  const want: PanelMode =
+    env === 'off' || env === 'open' || env === 'folded' ? env : cols >= 80 ? (pref ?? 'open') : cols >= 64 ? (pref ?? 'folded') : 'off';
+  return cols < panelWidth(want) + CONTENT_MIN ? 'off' : want;
 }
+
+// The fewest columns the content beside the panel is ever given.
+const CONTENT_MIN = 40;
 
 export const panelWidth = (mode: PanelMode): number => (mode === 'open' ? PANEL_OPEN : mode === 'folded' ? PANEL_FOLDED : 0);
 
@@ -38,15 +42,16 @@ export type PanelInput = {
   view: View;
   frame: number;
   now: number;
-  counts: {changes: number; files: number; agents: number; agentsLive: boolean; usage: string | null; workspaces: number};
+  // The figures Home shows beside the same keys, so the two never disagree:
+  // uncommitted files, agents running, the five hour window, and the folders
+  // somebody is working in.
+  counts: {changes: number; agents: number; usage: string | null; workspaces: number};
   // Whether the Agents tab exists right now.
   agentsTab: boolean;
   // Every folder of the repository; a null path is the pane's own.
-  workspaces: {path: string | null; label: string; hue: string; state: StateWord; live: boolean}[];
+  workspaces: {path: string | null; label: string; hue: string; state: StateWord}[];
   focus: string | null;
   scope: 'mine' | 'all';
-  // The panel's own cursor, when the panel has the keyboard.
-  cursor: string | null;
 };
 
 export type PanelRow = {segs: Seg[]; zones: Zone[]; id?: string; act?: Act};
@@ -58,9 +63,6 @@ type Item = {row: PanelRow; drop: Drop};
 
 const DROP_ORDER: Drop[] = ['blank', 'keys', 'all', 'folder'];
 
-// A state that has nothing left to do reads as a hollow ring; one with work
-// still in it keeps its folder's hue.
-const SETTLED: ReadonlySet<StateWord> = new Set(['merged', 'clean', 'removed', 'not recorded']);
 
 const VIEWS: {view: View; key: string; label: string}[] = [
   {view: 'home', key: 'h', label: 'Home'},
@@ -97,20 +99,19 @@ export function nextWorkspace(paths: (string | null)[], focus: string | null, sc
 
 const nextOf = (input: PanelInput): Act => nextWorkspace(input.workspaces.map(ws => ws.path), input.focus, input.scope);
 
-// The views' own figures: what there is behind each key, at a glance.
+// The views' own figures: what there is behind each key, at a glance. Files
+// has none: its figure would be the same uncommitted files Changes carries.
 function badge(input: PanelInput, view: View): Seg[] {
   const {counts} = input;
   switch (view) {
     case 'changes':
       return counts.changes ? [seg(String(counts.changes), theme.dim)] : [];
-    case 'files':
-      return counts.files ? [seg(String(counts.files), theme.dim)] : [];
     case 'agents':
-      if (counts.agentsLive) return [seg(`${spinner(input.frame)} ${counts.agents}`, theme.accent)];
+      if (counts.agents) return [seg(`${spinner(input.frame)} ${counts.agents}`, theme.accent)];
       // A hidden tab still has its row here, so the key is still learnt; the
       // mark says there is nothing behind it yet.
       if (!input.agentsTab) return [seg(glyph.minus, theme.faint)];
-      return counts.agents ? [seg(String(counts.agents), theme.dim)] : [];
+      return [];
     case 'usage':
       return counts.usage ? [seg(counts.usage, theme.dim)] : [];
     default:
@@ -127,7 +128,7 @@ export function panelRows(input: PanelInput): PanelRow[] {
   // lands in the gap between a label and its figure still counts.
   const row = (left: Seg[], right: Seg[], more: {id?: string; act?: Act; lit?: boolean} = {}): PanelRow => {
     const {id, act, lit} = more;
-    const bg = lit || (id !== undefined && id === input.cursor) ? theme.surface2 : undefined;
+    const bg = lit ? theme.surface2 : undefined;
     return {
       segs: [...fit(left, right, inner, bg), seg(glyph.spine, theme.faint)],
       zones: act ? [{from: 0, to: inner + 1, act}] : [],
@@ -177,12 +178,7 @@ export function panelRows(input: PanelInput): PanelRow[] {
         // Scope all and a picked folder are never both true, so with every
         // folder shown no one folder is marked as the one you are in.
         const picked = input.scope === 'mine' && ws.path === input.focus;
-        const state =
-          ws.live || ws.state === 'working'
-            ? seg(spinner(input.frame), theme.accent)
-            : SETTLED.has(ws.state)
-              ? seg(glyph.ring, theme.faint)
-              : seg(glyph.dot, ws.hue);
+        const state = workspaceMark(ws.state, false, ws.hue, input.frame);
         const name = seg(cut(ws.label, 16), picked ? theme.ink : ws.hue, {bold: picked});
         items.push(item(row([mark(picked), state, sp(1), name], [], {id: wsId(ws.path), act: {type: 'focus', path: ws.path}}), 'folder'));
       }
@@ -215,7 +211,7 @@ export function panelRows(input: PanelInput): PanelRow[] {
       const on = view === input.view;
       // Folded, a view keeps only its live mark: the counts need the room the
       // labels had, and a running agent is the one figure worth a column.
-      const live = view === 'agents' && input.counts.agentsLive ? [seg(spinner(input.frame), theme.accent)] : [];
+      const live = view === 'agents' && input.counts.agents ? [seg(spinner(input.frame), theme.accent)] : [];
       items.push(
         item(
           row([mark(on), ...FOLDED[view], sp(1), key(k, on)], [...live, sp(1)], {

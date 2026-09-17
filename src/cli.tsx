@@ -37,7 +37,10 @@ if (interactive) {
 
 // The opening plays while the first read runs. A flag turns it off for one
 // run, and the environment turns it off for good, for anyone who has seen it.
-const opening = !args.includes('--no-opening') && process.env.SIDECAR_NO_OPENING !== '1';
+// This is the one place the variable is read: App trusts what it is handed.
+// `0`, `false` or an empty value leave it on, as anyone setting one would mean.
+const noOpening = (process.env.SIDECAR_NO_OPENING ?? '').trim().toLowerCase();
+const opening = !args.includes('--no-opening') && noOpening !== '1' && noOpening !== 'true';
 
 const app = render(
   <App root={root} interactive={interactive} mouseDebug={args.includes('--mouse-debug')} opening={opening} />,

@@ -8,7 +8,7 @@ import {readFileView, type FileView} from '../core/file';
 import {loadFolders} from '../core/folders';
 import {changedLines, loadGit, pathKey, type GitState} from '../core/git';
 import {highlightLines} from '../core/highlight';
-import {homeFacts} from '../core/home';
+import {homeFacts, type HomeFacts} from '../core/home';
 import {formatMarkdown, isMarkdown} from '../core/markdown';
 import {panelEnv, readPrefs, writePrefs, type Prefs} from '../core/prefs';
 import {countChats, newReadState, readSessions} from '../core/sessions';
@@ -20,7 +20,7 @@ import {landingsOf, readWorktrees, visibleWorktrees, type WorktreeRun} from '../
 import {brief, cut, dimmed, overlay, pageRow, seg, sp, spinner, widthOf, type Act, type Group, type Line, type Seg, type View} from './cells';
 import type {DiffGroup} from './diffrows';
 import {follow as keepInView, scrollFromThumb, thumb} from './layout';
-import {footer, isAction, MENU_WIDTH, menuBar, menuBox, menus, pillRow, tabRow, type Command, type Hint, type Pill} from './menu';
+import {footer, isAction, MENU_WIDTH, menuBar, menuBox, menus, noteRoom, pillRow, tabRow, type Command, type Hint, type Pill} from './menu';
 import {DOUBLE_CLICK_MS, MOUSE_MOVE_OFF, MOUSE_MOVE_ON, MOUSE_OFF, MOUSE_ON, parseMouse, type MouseEvent} from './mouse';
 import {openingCard, openingPush, tPushStart, type OpeningInput} from './opening';
 import {nextWorkspace, PANEL_FOLDED, PANEL_OPEN, panelMode, panelRows, panelWidth, type PanelInput} from './panel';
@@ -28,7 +28,7 @@ import {splashLines, type Counts} from './splash';
 import {Screen} from './Screen';
 import {glyph, theme} from './theme';
 import {agentsBadge, agentsLines, agentsTabVisible, runningAgents} from './views/agents';
-import {changesLines, fileKey, turnKey, workspaceList, type Open} from './views/changes';
+import {changesLines, fileKey, turnKey, workspaceList, type Open, type Workspace} from './views/changes';
 import {
   changedPlaces, filesLines, firstReadId, MORE_ROWS, nodeId, paperMeasure, peekEnd, readerHead, readerIdAt,
   readerLineOf, readerLines, type Marks,
@@ -85,6 +85,85 @@ type Follow = 'on' | 'paused' | 'off';
 // Acts that add or remove lines. The row they were aimed at has to stay where
 // it was, or the next click lands on something else.
 const TOGGLING: ReadonlySet<Act['type']> = new Set(['turn', 'file', 'toggle', 'hunk', 'gap', 'node']);
+
+// Going somewhere is not reaching for the page. These keys and these acts move
+// between views, folders and menus, and the stream they leave keeps following
+// the running turn; only what moves or opens something inside a stream is
+// you taking the page over. Everything on Home is going somewhere.
+const GOING_KEYS: ReadonlySet<string> = new Set(['1', '2', '3', '4', 'h', 'w', 'b', 'm', '?', 'q', 'f']);
+const GOING_ACTS: ReadonlySet<Act['type']> = new Set(['view', 'menu', 'item', 'panel', 'focus', 'scope', 'group', 'filter', 'skip']);
+
+// The bar's status, from the same facts Home's NOW rows are drawn from, so the
+// two can never disagree about what is going on.
+function barStatus(facts: HomeFacts, frame: number): Seg[] {
+  switch (facts.now) {
+    case 'reading':
+      return [seg(spinner(frame), theme.accent), seg(' reading', theme.dim)];
+    case 'agents':
+      return [seg(spinner(frame), theme.accent), seg(` ${facts.agentsRunning} agent${facts.agentsRunning === 1 ? '' : 's'}`, theme.ink)];
+    case 'asking':
+      return [seg(glyph.dot, theme.warn), seg(' asking you', theme.warn)];
+    case 'working':
+      return [
+        seg(spinner(frame), theme.accent),
+        seg(` ${facts.tool ? `${cut(facts.tool, TOOL_COLS)} ` : ''}${brief(facts.elapsedMs ?? 0)}`, theme.ink),
+      ];
+    case 'yours':
+      return [seg(glyph.dot, theme.ink), seg(' your turn', theme.text)];
+    case 'idle':
+      return [seg(glyph.dot, theme.faint), seg(' idle', theme.dim)];
+  }
+}
+
+// The side panel's input, from what the pane already holds. Its figures are
+// the ones Home puts beside the same keys: uncommitted files, agents running,
+// the five hour window, and the folders somebody is working in.
+function panelInputOf(at: {
+  mode: 'open' | 'folded' | 'off'; rows: number; view: View; frame: number; now: number;
+  uncommitted: number; agentsRunning: number; usagePct: number | null; agentsTab: boolean;
+  listed: Workspace[]; focus: string | null; scope: 'mine' | 'all';
+}): PanelInput | null {
+  if (at.mode === 'off') return null;
+  return {
+    mode: at.mode, rows: at.rows, view: at.view, frame: at.frame, now: at.now,
+    counts: {
+      changes: at.uncommitted,
+      agents: at.agentsRunning,
+      usage: at.usagePct === null ? null : `${Math.round(at.usagePct)}%`,
+      workspaces: at.listed.filter(ws => ws.state === 'working').length,
+    },
+    agentsTab: at.agentsTab,
+    workspaces: at.listed.map(ws => ({path: ws.path, label: ws.label, hue: ws.hue, state: ws.state})),
+    focus: at.focus,
+    scope: at.scope,
+  };
+}
+
+// The right end of the pills row. A repository with more than one folder has
+// something to say there that a count of dirty files cannot: which folders
+// this stream is covering, and one click to widen it. With one folder picked
+// it names that folder, lit, and a click goes back to your own.
+// `room` is what the pills leave the note: a picked folder's branch is cut to
+// it, down to eight columns, rather than dropped for being long.
+function scopePillOf(at: {
+  view: View; picked: Workspace | undefined; folders: number; scope: 'mine' | 'all'; project: string; room: number;
+}): {segs: Seg[]; act?: Act} {
+  if (at.picked && (at.view === 'changes' || at.view === 'files')) {
+    const name = cut(at.picked.label, Math.max(8, Math.min(24, at.room - 3)));
+    return {segs: [seg('in ', theme.faint), seg(name, theme.ink, {bold: true})], act: {type: 'focus', path: null}};
+  }
+
+  if (at.view !== 'changes' || at.folders <= 1) return {segs: []};
+  const all = at.scope === 'all';
+  return {
+    segs: [
+      seg('in ', theme.faint),
+      seg(all ? `all ${at.folders} worktrees` : at.project, all ? theme.accent : theme.text, {bold: true}),
+      seg(` ${glyph.open}`, theme.dim),
+    ],
+    act: {type: 'scope', scope: all ? 'mine' : 'all'},
+  };
+}
 
 function flipped(set: ReadonlySet<string>, key: string): ReadonlySet<string> {
   const next = new Set(set);
@@ -345,7 +424,7 @@ export function App({root, interactive, mouseDebug = false, opening = true}: Pro
   // The opening: when it started, and the time since. It never plays where
   // nobody is watching, and it is off for good for anyone who has seen it.
   const [openingAt, setOpeningAt] = useState<number | null>(() =>
-    interactive && opening && !process.env.SIDECAR_NO_OPENING ? Date.now() : null,
+    interactive && opening ? Date.now() : null,
   );
   const [t, setT] = useState(0);
   // When the read's two halves came back, on the opening's clock, so its bar
@@ -442,6 +521,18 @@ export function App({root, interactive, mouseDebug = false, opening = true}: Pro
   // ---- diffs for the file rows that are open ---------------------------------
 
   const settled = useRef(new Set<string>());
+  // A diff was read from the folder that was picked when it was opened, and a
+  // note like "That turn happened in X" was about that folder too. Picking
+  // another one forgets them all and closes the files, so nothing on screen is
+  // an answer about the folder you have just left.
+  const lastFocus = useRef(focused);
+  useEffect(() => {
+    if (lastFocus.current === focused) return;
+    lastFocus.current = focused;
+    settled.current.clear();
+    setDiffs(new Map());
+    setOpen(o => (o.files.size ? {...o, files: NONE} : o));
+  }, [focused]);
   useEffect(() => {
     let alive = true;
     const load = async (key: string): Promise<DiffGroup[]> => {
@@ -684,33 +775,22 @@ export function App({root, interactive, mouseDebug = false, opening = true}: Pro
   const list = menus({
     view, group, hideSpace, changedOnly, chat: chatName, folders: listed.length, scope, inDiff, markdown, raw, follow: follow === 'on', mouse,
     panel: mode, focus: focused,
-    workspaces: listed.flatMap(ws => (ws.path === null ? [] : [{path: ws.path, label: ws.label}])),
   });
   // The card, and not the stream, on the two occasions there is no stream: the
   // first frames, and a folder Claude Code has never been run in. Files is left
   // alone — the tree is worth looking at whether or not anything was ever typed
   // here — and so is every grouping but By turn, the only one the chats are the
   // content of.
-  const reading = !history.loaded && slot !== 'files' && slot !== 'reader';
+  // Home is not one of them: it has rows of its own that say it is reading.
+  const reading = !history.loaded && slot !== 'files' && slot !== 'reader' && slot !== 'home';
   const nothingYet = history.loaded && history.counts?.chats === 0 && slot === 'changes' && group === 'turn';
   const card = reading || nothingYet;
   // Reading comes first while it lasts: nothing else is known yet. Then agents
   // — while a fan-out is running, how many of them there are is the news, and
   // the turn they belong to is working by definition. Then a question waiting
-  // on you, then the turn, then yours, then idle.
-  const lastAction = newest?.turn.actions[newest.turn.actions.length - 1];
-  const sameDay = (ms: number) => new Date(ms).toDateString() === new Date(now).toDateString();
-  const status: Seg[] = !history.loaded
-    ? [seg(spinner(frame), theme.accent), seg(' reading', theme.dim)]
-    : agentsRunning
-      ? [seg(spinner(frame), theme.accent), seg(` ${agentsRunning} agent${agentsRunning === 1 ? '' : 's'}`, theme.ink)]
-      : asking
-        ? [seg(glyph.dot, theme.warn), seg(' asking you', theme.warn)]
-        : working && newest
-          ? [seg(spinner(frame), theme.accent), seg(` ${lastAction ? `${cut(lastAction.tool, TOOL_COLS)} ` : ''}${brief(now - newest.turn.at)}`, theme.ink)]
-          : newest?.turn.ended && sameDay(newest.turn.endedAt)
-            ? [seg(glyph.dot, theme.ink), seg(' your turn', theme.text)]
-            : [seg(glyph.dot, theme.faint), seg(' idle', theme.dim)];
+  // on you, then the turn, then yours, then idle. Home's facts ask exactly
+  // that, in that order, so the bar says what Home says.
+  const status = barStatus(facts, frame);
   // What is left of the bar once the menus and the status have had their
   // columns. The meters shrink in steps and then go, so the menus always fit.
   const barLeft = 2 + list.reduce((n, m) => n + m.title.length + 2, 0);
@@ -748,30 +828,14 @@ export function App({root, interactive, mouseDebug = false, opening = true}: Pro
             {label: uncommitted ? `Changed ${uncommitted}` : 'Changed', on: changedOnly, act: {type: 'filter', what: 'changedOnly', on: true}},
           ]
         : [];
-  // The right end of the pills row. A repository with more than one folder has
-  // something to say there that a count of dirty files cannot: which folders
-  // this stream is covering, and one click to widen it. With one folder
-  // picked it names that folder, lit, and a click goes back to your own.
-  const folders = listed.length;
-  const scopePill: Seg[] = focusedWs && (view === 'changes' || view === 'files')
-    ? [seg('in ', theme.faint), seg(cut(focusedWs.label, 24), theme.ink, {bold: true})]
-    : view === 'changes' && folders > 1
-      ? [
-          seg('in ', theme.faint),
-          seg(scope === 'all' ? `all ${folders} worktrees` : project, scope === 'all' ? theme.accent : theme.text, {bold: true}),
-          seg(` ${glyph.open}`, theme.dim),
-        ]
-      : [];
+  const {segs: scopePill, act: scopeAct} = scopePillOf({
+    view, picked: focusedWs, folders: listed.length, scope, project, room: noteRoom(room, pills),
+  });
   const note: Seg[] = scopePill.length
     ? scopePill
     : view === 'changes' && uncommitted
       ? [seg(`${uncommitted} uncommitted`, theme.dim)]
       : [];
-  const scopeAct: Act | undefined = !scopePill.length
-    ? undefined
-    : focusedWs
-      ? {type: 'focus', path: null}
-      : {type: 'scope', scope: scope === 'all' ? 'mine' : 'all'};
   // Nothing has been read, so there is nothing for a pill to be showing or
   // hiding yet: the first frame is the bar, the tabs and the card.
   const pillsLine = pills.length && !reading && !playing ? pillRow(room, pills, note, scopeAct) : null;
@@ -914,14 +978,16 @@ export function App({root, interactive, mouseDebug = false, opening = true}: Pro
   // it, and it is the whole of what the pane may do with a line: no file is
   // written, no command is run, and what lands there is a place, not the code.
   const copyPlace = (place: {path: string; line: number}) => {
-    const where = `${path.relative(root, place.path).split(path.sep).join('/')}:${place.line}`;
+    // Relative to the folder the views are about, which is the one the path
+    // means something in.
+    const where = `${path.relative(here, place.path).split(path.sep).join('/')}:${place.line}`;
     stdout.write(`\u001B]52;c;${Buffer.from(where).toString('base64')}\u0007`);
     say(`copied ${where}`);
   };
 
   const reveal = (file: string) => {
     const next = new Set(expanded);
-    for (let p = path.dirname(file); p.startsWith(root) && p !== root; p = path.dirname(p)) next.add(p);
+    for (let p = path.dirname(file); p.startsWith(here) && p !== here; p = path.dirname(p)) next.add(p);
     setExpanded(next);
   };
 
@@ -1208,7 +1274,8 @@ export function App({root, interactive, mouseDebug = false, opening = true}: Pro
   };
   useEffect(() => settle, []);
   const hover = (event: MouseEvent) => {
-    if (mode !== 'folded') return;
+    // The opening owns the whole pane while it plays, the panel included.
+    if (mode !== 'folded' || openingAt !== null) return;
     const want = peek ? event.x < PANEL_OPEN : event.y >= 1 && event.x < PANEL_FOLDED;
     if (want === peek) return settle();
     if (hoverWant.current === want) return;
@@ -1250,10 +1317,17 @@ export function App({root, interactive, mouseDebug = false, opening = true}: Pro
     }
 
     if (mouseDebug) say(`${event.kind} ${event.button} col ${event.x} row ${event.y}`);
-    pause();
     const inStream = event.y >= top.length && event.y < top.length + height;
+    // A click that goes somewhere leaves follow mode alone; one that does
+    // something to the page, or lands on it and does nothing but move the
+    // cursor, is you taking it over. Home is only ever going somewhere.
+    const reach = (act: Act | undefined, onPage: boolean) => {
+      if (view === 'home') return;
+      if (act ? !GOING_ACTS.has(act.type) : onPage) pause();
+    };
 
     if (event.kind === 'wheel') {
+      reach(undefined, true);
       return setScroll(s => ({...s, [slot]: Math.max(0, Math.min(most, s[slot] + event.wheel * WHEEL_ROWS))}));
     }
 
@@ -1263,7 +1337,10 @@ export function App({root, interactive, mouseDebug = false, opening = true}: Pro
     }
 
     if (event.kind === 'drag') {
-      if (dragging.current) setScroll(s => ({...s, [slot]: scrollFromThumb(lines.length, height, event.y - top.length)}));
+      if (dragging.current) {
+        reach(undefined, true);
+        setScroll(s => ({...s, [slot]: scrollFromThumb(lines.length, height, event.y - top.length)}));
+      }
       return;
     }
 
@@ -1278,25 +1355,33 @@ export function App({root, interactive, mouseDebug = false, opening = true}: Pro
 
     // The menu and the bar are laid over the whole width; everything under
     // the bar is in the columns the panel leaves.
+    // The menus, the bar, the panel and the chrome over the stream are all
+    // ways to go somewhere, and a click on them only pauses what it does.
+    const go = (act: Act | undefined) => {
+      reach(act, false);
+      perform(act);
+    };
+
     if (menu) {
       const row = menuLines[event.y - 1];
       const inside = row && event.x >= menuLeft && event.x < menuLeft + MENU_WIDTH;
-      if (inside) return perform(row.act);
-      if (event.y === 0 && zoneAt(bar.line, event.x)?.type === 'menu') return perform(zoneAt(bar.line, event.x));
+      if (inside) return go(row.act);
+      if (event.y === 0 && zoneAt(bar.line, event.x)?.type === 'menu') return go(zoneAt(bar.line, event.x));
       return setMenu(null);
     }
 
-    if (event.y === 0) return perform(zoneAt(bar.line, event.x));
+    if (event.y === 0) return go(zoneAt(bar.line, event.x));
     // The panel, or the open panel peeking over the content.
     const panelHit = peek ? peekPanel : sideRows;
-    if (event.x < (peek ? PANEL_OPEN : side) && panelHit.length) return perform(zoneAt(panelHit[event.y - 1], event.x));
+    if (event.x < (peek ? PANEL_OPEN : side) && panelHit.length) return go(zoneAt(panelHit[event.y - 1], event.x));
     const x = event.x - side;
     const zoneOf = (line: Line | undefined): Act | undefined => zoneAt(line, x);
 
-    if (event.y < top.length) return perform(zoneOf(top[event.y]));
+    if (event.y < top.length) return go(zoneOf(top[event.y]));
     if (!inStream) return;
 
     if (x >= room - 1 && lines.length > height) {
+      reach(undefined, true);
       dragging.current = true;
       return setScroll(s => ({...s, [slot]: scrollFromThumb(lines.length, height, event.y - top.length)}));
     }
@@ -1305,6 +1390,7 @@ export function App({root, interactive, mouseDebug = false, opening = true}: Pro
     const line = visible[row];
     if (!line) return;
     const act = zoneOf(line) ?? line.act;
+    reach(act, true);
     if (act && TOGGLING.has(act.type)) {
       // Rows that carry a toggle but no cursor stop, a wrapped prompt or a
       // meta line, belong to the row above: anchor and move there.
@@ -1335,7 +1421,6 @@ export function App({root, interactive, mouseDebug = false, opening = true}: Pro
       }
 
       if (notice) setNotice(null);
-      if (input !== 'f') pause();
 
       if (menu) {
         const items = list[menu.open]!.items;
@@ -1359,6 +1444,13 @@ export function App({root, interactive, mouseDebug = false, opening = true}: Pro
         // Any other key falls through, so a shortcut still works with a menu open.
         setMenu(null);
       }
+
+      // Past the menu, a key is either going somewhere or taking the page:
+      // Enter goes by what the row under the cursor does.
+      const entering = key.return || key.rightArrow;
+      const going =
+        view === 'home' || GOING_KEYS.has(input) || (entering && current?.act !== undefined && GOING_ACTS.has(current.act.type));
+      if (!going) pause();
 
       if (input === 'q') return exit();
       // `?` is where people look for help, and the menus are the help.
@@ -1401,7 +1493,9 @@ export function App({root, interactive, mouseDebug = false, opening = true}: Pro
           const node = nodes.find(n => nodeId(n.path) === current?.id);
           if (node?.isDir && node.open) return setExpanded(flipped(expanded, node.path));
           const parent = node ? nodes.slice(0, nodes.indexOf(node)).reverse().find(n => n.depth < node.depth) : undefined;
-          return moveTo(parent ? nodeId(parent.path) : null);
+          if (parent) return moveTo(nodeId(parent.path));
+          // At the top of a picked folder's tree the way out is to your own.
+          return focused ? run({do: 'focus', to: null}) : undefined;
         }
 
         // On a row that is open: close it. A turn's own title row closes the
@@ -1412,9 +1506,9 @@ export function App({root, interactive, mouseDebug = false, opening = true}: Pro
         if (id.startsWith('t:') && lines[cursor + 1]?.pins?.includes(id)) return perform({type: 'turn', key: id.slice(2)});
         const isOpen = (act?.type === 'file' && open.files.has(act.key)) || (act?.type === 'toggle' && open[act.set].has(act.key));
         if (isOpen) return perform(act);
-        // At the top of a picked folder's stream there is nothing left to
-        // close, and the way back out is to your own folder.
-        if (slot === 'changes' && focused && cursor === lines.findIndex(line => line.pick)) return run({do: 'focus', to: null});
+        // On a row that is inside nothing, in a picked folder, there is
+        // nothing left to close, and the way back out is to your own folder.
+        if (focused) return run({do: 'focus', to: null});
         return;
       }
 
@@ -1569,8 +1663,11 @@ export function App({root, interactive, mouseDebug = false, opening = true}: Pro
         return Array.from({length: height}, (_, i) => rows[i - lead] ?? blank);
       })();
 
-  // The footer names the folder the views are about.
-  const where = focusedWs
+  // The footer names the folder the view is about: the picked one in the three
+  // views a pick scopes, and the pane's own on Home and in Usage, which are
+  // always about where you are.
+  const scoped = view === 'changes' || view === 'files' || view === 'agents';
+  const where = focusedWs && scoped
     ? {project: path.basename(focusedWs.wt.path), branch: focusedWs.wt.branch || null}
     : {project, branch: git?.branch ?? null};
   const below: Line[] = [...top.slice(1), ...body, ...(roomy ? [blank] : []), footer(room, hints, notice, where, !mouse)];
@@ -1578,26 +1675,11 @@ export function App({root, interactive, mouseDebug = false, opening = true}: Pro
   // The panel runs down the left of every row under the bar, and the rows
   // beside it are laid out in what is left. Folded, it can peek open over the
   // content under a resting pointer; the rows under it do not move.
-  const panelInput: PanelInput | null =
-    mode === 'off'
-      ? null
-      : {
-          mode, rows: below.length, view: playing ? 'home' : view, frame, now,
-          counts: {
-            changes: facts.today?.turns ?? 0,
-            files: uncommitted,
-            agents: agentsRunning,
-            agentsLive: agentsRunning > 0,
-            usage: usageNow.pct === null ? null : `${Math.round(usageNow.pct)}%`,
-            workspaces: listed.filter(ws => ws.state === 'working').length,
-          },
-          agentsTab: showAgents,
-          workspaces: listed.map(ws => ({path: ws.path, label: ws.label, hue: ws.hue, state: ws.state, live: ws.state === 'working'})),
-          focus: focused, scope,
-          // The panel is worked with the mouse and its keys; the cursor stays
-          // in the content.
-          cursor: null,
-        };
+  const panelInput = panelInputOf({
+    mode, rows: below.length, view: playing ? 'home' : view, frame, now,
+    uncommitted, agentsRunning, usagePct: usageNow.pct, agentsTab: showAgents,
+    listed, focus: focused, scope,
+  });
   const sideRows = panelInput ? panelRows(panelInput) : [];
   const peekPanel = panelInput && peek && mode === 'folded' ? panelRows({...panelInput, mode: 'open'}) : [];
 
