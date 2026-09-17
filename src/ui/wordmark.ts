@@ -12,7 +12,10 @@ const LETTERS = [...'SIDECAR'].map(char => glyph.block[char as keyof typeof glyp
 // Seven letters and a column between each: 8+3+8+8+8+8+8 and six gaps.
 export const WORDMARK_COLS = 57;
 
-const FACE = '█';
+// The face of every letter is the full block, which the theme already has as
+// the tallest of its column glyphs (`█`); everything else in the font is the
+// shadow edge.
+const FACE = glyph.columns[8]!;
 
 // Two hex colours, `t` of the way from `a` to `b`, straight across RGB. The
 // two ends are close enough in hue that a straight line does not go muddy in

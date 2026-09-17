@@ -9,8 +9,8 @@ import {
 import {modelName} from '../../core/usage';
 import {journeyOf, stateWord, visibleWorktrees, type Landing, type StateWord, type WorktreeRun} from '../../core/worktrees';
 import {
-  blankRow, brief, chevron, chip, counts, cut, INDENT, INDENT2, num, padTo, pageRow, plural, sep, seg, sizeCells, sizeLit, SIZE_CELLS,
-  skylineCol, sp, span, spinner, splitBar, streamRoom, streamRow, tokens, turnMark, width, widthOf,
+  blankRow, brief, chevron, chip, counts, cut, INDENT, INDENT2, num, padTo, pageRow, plural, RIGHT_PAD, sep, seg, sizeCells, sizeLit, SIZE_CELLS,
+  skylineCol, sp, span, spinner, splitBar, streamRoom, streamRow, tokens, turnMark, width, widthOf, workspaceMark,
   type Group, type Line, type Seg, type Zone,
 } from '../cells';
 import {diffLines, viewRows, type DiffGroup} from '../diffrows';
@@ -748,27 +748,29 @@ function agentFolder(ctx: Ctx, agent: AgentRun): WorktreeRun | undefined {
   return ctx.worktrees?.find(wt => pathKey(wt.path) === pathKey(folder));
 }
 
-// Whether any of that folder's work has arrived where you are. The first of
-// these that applies is the whole truth about it, so the row says one thing.
-function factState(ctx: Ctx, wt: WorktreeRun): Seg[] {
-  const agent = [...wt.agents].reverse().find(run => statusOf(run, ctx.now) === 'running');
-  if (agent) return [seg(spinner(ctx.frame), theme.accent), seg(` ${modelName(agent.model)} ${glyph.sep} ${brief(ctx.now - agent.startedAt)}`, theme.text)];
-  if (wt.merged) return [seg(`${glyph.check} merged${wt.mergedAt ? ` ${clock(wt.mergedAt)}` : ''}`, theme.add)];
-  if (wt.removed) return [seg('removed', theme.faint)];
-  // Nothing wrote its head down before the folder went, so where it got to
-  // cannot be told either way.
-  if (wt.gone && !wt.known) return [seg('not recorded', theme.faint, {italic: true})];
-  if (wt.ahead > 0 || wt.dirty > 0) {
-    // A narrow row cannot hold both how far ahead it is and where it is not,
-    // and which of the two folders it is not in is the part you already know.
-    if (ctx.cols < NARROW) return [seg('not merged', theme.faint, {italic: true})];
-    return [
-      ...(wt.ahead ? [seg(`${glyph.ahead}${wt.ahead}`, theme.dim), seg(` ${glyph.sep} `, theme.faint)] : []),
-      seg(`not in ${path.basename(ctx.root)} yet`, theme.faint, {italic: true}),
-    ];
+// Where a folder's work has got to, on the right of the row that names it. It
+// is the folder's state word, said the way every list of folders says it, so
+// an agent's row and the Workspaces list never tell the same folder two ways.
+export function folderState(wt: WorktreeRun, now: number, frame: number, cols: number): Seg[] {
+  const word = stateWord(wt, now);
+  if (word === 'working') {
+    const agent = [...wt.agents].reverse().find(run => statusOf(run, now) === 'running');
+    return [seg(spinner(frame), theme.accent), ...(agent ? [seg(` ${modelName(agent.model)} ${glyph.sep} ${brief(now - agent.startedAt)}`, theme.text)] : [])];
   }
 
-  return [seg('clean', theme.faint)];
+  if (word === 'merged') return [seg(`${glyph.check} merged${wt.mergedAt ? ` ${clock(wt.mergedAt)}` : ''}`, theme.add)];
+  // Nothing wrote its head down before the folder went, so where it got to
+  // cannot be told either way.
+  if (word === 'not recorded') return [seg('not recorded', theme.faint, {italic: true})];
+  if (word === 'ahead') {
+    // A narrow row cannot hold both how far ahead it is and that it is not
+    // merged, and the second is the part that matters.
+    if (cols < NARROW) return [seg('not merged', theme.faint, {italic: true})];
+    return [seg(`${glyph.ahead}${wt.ahead}`, theme.dim), seg(` ${glyph.sep} `, theme.faint), seg('not merged', theme.faint, {italic: true})];
+  }
+
+  if (word === 'dirty') return [seg(`${wt.dirty} uncommitted`, theme.dim)];
+  return [seg(word, theme.faint)];
 }
 
 // The chart's own head row: the count first, then how they are getting on,
@@ -888,7 +890,7 @@ function chartRow(ctx: Ctx, node: AgentNode, change: TurnChange, pins: string[],
       else left.push(seg(`   ${plural(n, 'file')} `, theme.dim), ...sizeCells(wt.lines.added, wt.lines.removed));
     }
 
-    row(left, factState(ctx, wt));
+    row(left, folderState(wt, ctx.now, ctx.frame, cols));
   }
 
   if (!isOpen) return;
@@ -984,12 +986,12 @@ const folderChip = (folder: Folder): Seg[] => chip(folder.label, theme.surface2,
 const folderColour = (ctx: Ctx, wt: WorktreeRun): string =>
   allFolders(ctx).find(folder => pathKey(folder.wt.path) === pathKey(wt.path))?.colour ?? theme.text;
 
-// What a workspace is called in a list of them. The pane's folder and the main
-// checkout are known by their branch; an agent's folder is named after a hash,
-// so the job the newest agent in it was given says more.
+// What a workspace is called in a list of them: its branch, which is the name
+// git, the prompt and the merge all use for it, or the folder's own name when
+// it has none checked out. Never an agent's task: a task is a sentence, it
+// changes with every agent sent there, and it is not a name anybody types.
 function workspaceName(wt: WorktreeRun): string {
-  if (wt.here || wt.main) return wt.branch || wt.name;
-  return wt.agents[wt.agents.length - 1]?.task || wt.branch || wt.name;
+  return wt.branch || wt.name;
 }
 
 // One folder as every list of them draws it: the side panel, the Workspaces
@@ -1077,20 +1079,24 @@ function workspaceRows(ctx: Ctx, rows: Workspace[]): void {
     const word = words[i]!;
     const id = `ws:${wt.path}`;
     const here = id === sel;
-    const picked = ctx.focus ? pathKey(ctx.focus) === pathKey(wt.path) : wt.here;
-    const quiet = word === 'merged' || word === 'clean' || word === 'removed' || word === 'not recorded';
-    const mark = word === 'working' ? seg(spinner(frame), theme.accent) : quiet ? seg(glyph.ring, theme.faint) : seg(glyph.dot, folder.hue);
+    // Every folder at once is not one folder, so with scope all none of them
+    // is marked as the one you are in: the side panel says the same.
+    const picked = ctx.scope !== 'all' && (ctx.focus ? pathKey(ctx.focus) === pathKey(wt.path) : wt.here);
+    const right = workspaceState(ctx, wt, word);
+    // The name has whatever the sentence on the right leaves, less the mark in
+    // front and a space before the sentence.
+    const room = cols - 2 - RIGHT_PAD - 4 - widthOf(right) - 2;
     ctx.out.push(
       pageRow(
         cols,
         [
           picked ? seg(glyph.bar, theme.accent) : sp(1),
           sp(1),
-          mark,
+          workspaceMark(word, false, folder.hue, frame),
           sp(1),
-          seg(cut(folder.label, Math.max(8, cols - 40)), picked ? theme.ink : folder.hue, {bold: picked}),
+          seg(cut(folder.label, Math.max(4, room)), picked ? theme.ink : folder.hue, {bold: picked}),
         ],
-        workspaceState(ctx, wt, word),
+        right,
         {id, pick: true, bg: here ? theme.surface2 : undefined, hint: 'open', act: {type: 'focus', path: wt.here ? null : wt.path}},
       ),
     );
@@ -1116,12 +1122,11 @@ function journeyRows(ctx: Ctx, wt: WorktreeRun, prefix: Seg[], room: number): Se
     nodes.push(lit(i) ? seg(glyph.dot, hue) : seg(glyph.ring, theme.faint));
   }
 
-  // The lit node already says it merged, and `✓ merged 13:20` is one column
-  // too wide to leave a space before the label after it.
-  const check = `${glyph.check} `;
+  // The lit node already says it merged, so the label carries no check mark:
+  // `✓ merged 13:20` is one column too wide to leave a space after it.
   const names: Seg[] = [...prefix];
   labels.forEach((label, i) => {
-    const text = cut(label.startsWith(check) ? label.slice(check.length) : label, JOURNEY_GAP);
+    const text = cut(label, JOURNEY_GAP);
     const current = i === stage - 1;
     names.push(seg(i < labels.length - 1 ? padTo(text, JOURNEY_GAP + 1) : text, current ? theme.ink : i < stage ? theme.dim : theme.faint, {bold: current}));
   });
@@ -1199,8 +1204,9 @@ function landingRow(ctx: Ctx, landing: Landing): void {
   const row = (left: Seg[], right: Seg[] = [], more: Parameters<typeof streamRow>[3] = {}) =>
     ctx.out.push(streamRow(cols, left, right, {mark: line, pins: [id], ...more}));
 
+  // What it brought, counted when it merged: its `ahead` is nought by then.
   const facts = [
-    ...(wt.ahead > 0 ? [plural(wt.ahead, 'commit')] : []),
+    ...(landing.commits > 0 ? [plural(landing.commits, 'commit')] : []),
     ...(wt.agents.length ? [brief(agentsSpan(wt.agents, ctx.now))] : []),
     wt.gone ? 'folder removed' : 'folder kept',
   ];

@@ -62,12 +62,16 @@ export function splashLines(cols: number, at: Splash): Line[] {
   const inner = cols - 2 - RIGHT_PAD - left;
   const row = (segs: Seg[]): Line => pageRow(cols, [sp(left), ...segs]);
 
+  // The same three rows the opening ends on, in its order: what the read
+  // found, the bar's row, and where you are. The bar's row says the commits
+  // are still being measured while they are, and is blank after, so the
+  // folder never moves when the read comes back.
   return [
     ...name.map(row),
     row([]),
-    row(whereSegs(at.folder, at.branch)),
     ...state(at, inner).map(row),
-    ...(at.reading ? [row([seg(spinner(at.frame), theme.accent), seg(' reading the commits', theme.dim)])] : []),
+    at.reading ? row([seg(spinner(at.frame), theme.accent), seg(' reading the commits', theme.dim)]) : row([]),
+    row(whereSegs(at.folder, at.branch)),
   ];
 }
 

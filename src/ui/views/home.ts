@@ -107,7 +107,7 @@ function agentsRow(input: HomeInput): Line {
 
 function nowRows(input: HomeInput): Line[] {
   const {cols, frame, facts} = input;
-  if (facts.now === 'reading') return [nowRow(cols, seg(spinner(frame), theme.accent), seg('reading…', theme.dim))];
+  if (facts.now === 'reading') return [nowRow(cols, seg(spinner(frame), theme.accent), seg(`reading${glyph.ellipsis}`, theme.dim))];
 
   const out: Line[] = [];
   // Agents win the state whenever any runs, even with the main turn over, so
@@ -178,7 +178,7 @@ function todayRow(input: HomeInput): Line {
   const {cols, facts} = input;
   const day = facts.today;
   if (!day) {
-    return pageRow(cols, [sp(1), seg(facts.now === 'reading' ? 'reading…' : 'nothing yet today', theme.dim)]);
+    return pageRow(cols, [sp(1), seg(facts.now === 'reading' ? `reading${glyph.ellipsis}` : 'nothing yet today', theme.dim)]);
   }
 
   const lead = seg(plural(day.turns, 'turn'), theme.text);
@@ -266,23 +266,29 @@ function goRow(cols: number, go: Go, sel: string | null, described: boolean): Li
     sp(2),
     seg(go.label.padEnd(LABEL), fg),
   ];
-  // Padded to the column, or as far as the right side lets it: the widest
+  // Padded to the column, or cut to what the right side leaves it: the widest
   // right side (`58% · 1h 52m`) takes the last columns of the pad at 62.
-  const pad = Math.min(DESC, inner(cols) - FRONT - (go.right.length ? 1 + widthOf(go.right) : 0));
-  const desc = described ? [seg(padTo(go.desc, pad), theme.dim)] : [];
+  const pad = Math.min(DESC, descRoom(cols, go));
+  const desc = described ? [seg(padTo(cut(go.desc, pad), pad), theme.dim)] : [];
   return pageRow(cols, [...front, ...desc], go.right, {id, pick: true, hint: 'go', act: go.act, bg});
 }
+
+// The columns a row's description has: what is left after the front, the right
+// side and a space on either side of it.
+const descRoom = (cols: number, go: Go): number =>
+  inner(cols) - FRONT - 1 - (go.right.length ? 1 + widthOf(go.right) : 0);
 
 // Columns before a GO TO row's description: the mark, a space, the key, two
 // spaces and the padded label.
 const FRONT = 1 + 1 + 1 + 2 + LABEL;
 
-// The description is what goes when the pane is narrow: the key and the name
-// are the row, the right side is its news, and the description only repeats
-// what the name says. They go all together, so the column never reads as a
-// ragged list of half sentences.
-const describable = (cols: number, all: Go[]): boolean =>
-  all.every(go => FRONT + width(go.desc) + (go.right.length ? 1 + widthOf(go.right) : 0) <= inner(cols));
+// The description is what gives way when the pane is narrow: the key and the
+// name are the row, the right side is its news, and the description only
+// repeats what the name says. It is cut to the room first; under eight
+// columns a cut description says nothing, and then they all go together, so
+// the column never reads as a few half sentences and a few gaps.
+const DESC_MIN = 8;
+const describable = (cols: number, all: Go[]): boolean => all.every(go => descRoom(cols, go) >= DESC_MIN);
 
 // ---- the page -------------------------------------------------------------------
 

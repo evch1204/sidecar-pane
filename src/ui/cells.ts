@@ -1,5 +1,6 @@
 import stringWidth from 'string-width';
 import {sizeLit, SIZE_CELLS} from '../core/size';
+import type {StateWord} from '../core/worktrees';
 import {glyph, theme} from './theme';
 
 // The whole pane is drawn from one thing: a list of lines, each a list of
@@ -144,6 +145,20 @@ export const chevron = (isOpen: boolean, here: boolean): Seg =>
 
 // Which frame of the one spinner the pane has to draw now.
 export const spinner = (frame: number): string => glyph.spinner[frame % glyph.spinner.length]!;
+
+// The states a folder has nothing left to do in. They read as a hollow ring;
+// one with work still in it keeps its folder's hue.
+export const quietStates: ReadonlySet<StateWord> = new Set(['merged', 'clean', 'removed', 'not recorded']);
+
+// A folder's mark wherever a list of them is drawn, the side panel and the
+// Workspaces list alike, so the two never mark the same folder two ways.
+// `live` is somebody working in it that its state word does not know of yet.
+export const workspaceMark = (state: StateWord, live: boolean, hue: string, frame: number): Seg =>
+  live || state === 'working'
+    ? seg(spinner(frame), theme.accent)
+    : quietStates.has(state)
+      ? seg(glyph.ring, theme.faint)
+      : seg(glyph.dot, hue);
 
 // A turn's own mark, wherever a turn is drawn. It opens and closes in place,
 // so it carries the chevron every such row carries — in the folder's hue

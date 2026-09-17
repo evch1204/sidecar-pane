@@ -10,7 +10,7 @@ import {
 } from '../cells';
 import {glyph, hues, theme} from '../theme';
 import {wrap} from '../util';
-import {agentsByTurn, agentsFlat, agentStatus, agentTree, clock, dayLabel, turnKey, type Open} from './changes';
+import {agentsByTurn, agentsFlat, agentStatus, agentTree, clock, dayLabel, folderState, turnKey, type Open} from './changes';
 
 // When Claude hands work to subagents, its own screen mostly goes quiet. This
 // view is the part you cannot see from the terminal: who was started, for which
@@ -200,7 +200,7 @@ function groupsOf(input: AgentsInput, slots: Slot[]): Group[] {
 }
 
 // Where a group's work stands: the state on the right of its heading row.
-function groupState(group: Group, agents: AgentRun[]): Seg[] {
+function groupState(ctx: Ctx, group: Group, agents: AgentRun[]): Seg[] {
   if (group.here) {
     // Every agent in the pane's own folder only read: nothing of theirs is
     // waiting anywhere.
@@ -214,14 +214,10 @@ function groupState(group: Group, agents: AgentRun[]): Seg[] {
     return [];
   }
 
+  // One folder: its state word, said the way the Changes view's agent rows
+  // and the Workspaces list say it.
   const wt = group.trees[0];
-  // Nothing recorded its head, so where it got to cannot be told.
-  if (!wt || !wt.known) return [];
-  if (wt.merged) return [seg(wt.mergedAt ? `${glyph.check} merged ${clock(wt.mergedAt)}` : `${glyph.check} merged`, theme.add)];
-  if (wt.removed) return [seg('removed', theme.faint)];
-  if (!wt.gone && wt.ahead === 0 && wt.dirty === 0) return [seg('clean', theme.faint)];
-  // The same `↑N` the worktree map uses: how far ahead of your folder it is.
-  return wt.ahead ? [seg(`${glyph.ahead}${wt.ahead}`, theme.dim)] : [];
+  return wt ? folderState(wt, ctx.now, ctx.frame, ctx.cols) : [];
 }
 
 // ---- an agent ---------------------------------------------------------------
@@ -317,7 +313,7 @@ function agentUnder(ctx: Ctx, slot: Slot, group: Group, pins: string[], isOpen: 
           seg(folderLabel(wt.path), hues[slot.index % hues.length]!, {bold: true}),
           ...(files ? [seg(`   ${files} file${files === 1 ? '' : 's'} `, theme.dim), ...sizeCells(wt.lines.added, wt.lines.removed)] : []),
         ],
-        groupState({...group, trees: [wt], here: false}, [agent]),
+        groupState(ctx, {...group, trees: [wt], here: false}, [agent]),
       );
     }
   }
@@ -571,7 +567,7 @@ function openBlock(input: AgentsInput, out: Line[], change: TurnChange, agents: 
         ? 'one agent in each'
         : '';
     noted.add(group.key);
-    const state = groupState(group, group.slots.map(slot => slot.agent));
+    const state = groupState(ctx, group, group.slots.map(slot => slot.agent));
     const name = [seg('in ', theme.faint), seg(group.label, theme.text, {bold: true})];
     // The note is the first thing to go: the folder and its state are the row.
     const keep = note && widthOf(name) + width(note) + 3 + widthOf(state) + 2 <= room(cols);
