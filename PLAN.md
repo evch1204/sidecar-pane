@@ -94,6 +94,14 @@ Sidecar pane ──watches──▶ events.jsonl      (what is Claude doing righ
 
 **Tokens:** none. Hooks and the pane run locally. The only token cost is typing `/sidecar`, which is one small turn; the auto-open option avoids even that.
 
+## Progress
+
+- Done: Day 1 skeleton.
+- Done: Files view from the design mockup: indent guides, change badges, folder counts, "changed only" filter, the focused half grows, coloured code, green bar beside changed lines, pane closes on `q`.
+- Badges currently mean "different from the last commit". "Changed this session" arrives with snapshots on Day 6.
+- Not yet: formatted markdown, tabs, Changes view, Docs view, status, follow, mouse.
+- Design mockup: https://claude.ai/artifact/8RPeQxwrBW5zBrefY6UK75
+
 ## 4. The build, day by day
 
 Claude writes the code. You decide direction and design. Each day ends with something you can run. Stop after any day and you still have a working tool.

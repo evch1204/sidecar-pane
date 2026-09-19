@@ -15,6 +15,8 @@ if (!process.env.WT_SESSION) {
 
 // -w 0 means "this window". Arguments go as a list, so paths with spaces stay intact.
 const wtArgs = ['-w', '0', 'split-pane', '-V', '--size', '0.45', '-d', repo];
-const paneCommand = ['cmd', '/k', 'npx', 'tsx', 'src/cli.tsx', target];
+// /c closes the split when Sidecar quits. If it fails to start, `pause` keeps
+// the error on screen instead of closing the split at once.
+const paneCommand = ['cmd', '/c', 'npx', 'tsx', 'src/cli.tsx', target, '||', 'pause'];
 
 spawn('wt.exe', [...wtArgs, ...paneCommand], {detached: true, stdio: 'ignore'}).unref();
