@@ -1,80 +1,193 @@
-# Build plan
+# Sidecar: project plan
 
-Sidecar is a **viewer** that sits beside the Claude Code CLI. You look at things in it. Claude does the editing. It never replaces the terminal and it never becomes an editor.
+## 1. What this is
 
-The design goal: the pane and the Claude CLI should look like they belong in one terminal. No floating-window look. Same glyphs, same dim greys, one warm accent.
+Sidecar is a **viewer** that sits beside the Claude Code CLI and shows what Claude is doing to your project while it happens.
 
-Each day ends with something you can run and see. Stop after any day and you still have a working tool.
+You keep typing to Claude on the left. On the right you see your files, which ones Claude just touched, what changed, and a readable preview of any file. You never have to ask "what did you change?" or run `git status` to find out.
 
-## Day 1: skeleton, file tree, plain preview (done)
+It has three views:
 
-- Project set up with TypeScript and Ink (React for terminals).
-- File tree with folders that open and close.
-- Moving onto a file previews it, with line numbers and scrolling.
-- `npm run pane` opens it in a split beside your terminal.
-- Code lives in two halves: `src/core` knows about files, `src/ui` draws. Keep it that way.
+| View | What it answers |
+|---|---|
+| **Files** | What is in this project, and which files did Claude just touch? |
+| **Changes** | What changed this turn, and this session? Red and green. |
+| **Preview** | What does this file look like? Code in colour, markdown formatted. |
 
-**You learn:** how an Ink app is built, how keyboard input works, how to size a layout to the terminal.
+Plus one status line: is Claude working, idle, or waiting for you.
 
-## Day 2: make the preview worth looking at
+### What it is not
 
-- Start with a one-hour toolkit check: try mouse clicks and wheel scrolling in Ink. If it feels bad, try the same in OpenTUI (Bun is already installed). Decide once, then move on. Only `src/ui` would need rewriting.
-- Syntax colours for code files.
-- Markdown shown formatted: headings, bold, lists, code blocks, tables, links.
+- Not an editor. You look, Claude edits.
+- Not a terminal. It runs no commands for you.
+- Not a replacement for the Claude CLI. It sits next to it.
+- Not a git client. No staging, commits or branches.
 
-**Done when:** opening `PLAN.md` in the pane looks like a document, not like source.
+### Design goal
 
-**You learn:** how terminal colour works, and how to turn markdown into styled lines.
+The pane and the Claude CLI should look like one terminal. No box around the pane, no floating-window look. Same glyphs as the CLI (`●`, `⎿`, `▸`), dim grey for secondary text, one warm accent.
 
-## Day 3: open it from inside Claude
+### Why these features (from your own usage)
 
-- A `/sidecar` command that opens the split for the current project.
-- Works in Windows Terminal first. Prints a clear fallback message elsewhere.
-- Package the repo as a Claude Code plugin (`.claude-plugin/plugin.json`, `skills/`).
+Counts from 58 of your past sessions:
 
-**Done when:** in any project, typing `/sidecar` in Claude opens the pane on the right.
+- 24% of your prompts involve git. `git log` and `git diff` are among Claude's most-run commands. The Changes view answers those without a prompt.
+- 18% of your prompts are corrections. Seeing a change the moment it lands lets you stop a bad turn early instead of after it finishes.
+- You review diffs in GitHub Desktop after the fact. This brings that review next to the conversation.
 
-**You learn:** how skills and plugins are put together.
+## 2. How the pane attaches to the terminal
 
-## Day 4: make it aware of Claude
+There are four ways a tool like this can exist. This is the decision that shapes everything else.
 
-- Hooks (`UserPromptSubmit`, `PostToolUse`, `Stop`) append one line per event to a small events file. They print nothing and never block Claude.
-- The pane watches that file.
-- A file lights up in the tree the moment Claude touches it.
-- The header shows `● working` while Claude runs and `● idle` when it stops.
+| Option | How it works | Good | Bad |
+|---|---|---|---|
+| **A. Split pane** (chosen) | Sidecar is its own program. The terminal app splits the window and runs it on the right. | Simple and safe. If Sidecar crashes, Claude is untouched. How VeroDiff, Plan Viewer and diffai work. | Needs a terminal that can split. Each terminal has its own split command. |
+| B. Wrapper | Sidecar starts first and runs Claude *inside* itself, drawing Claude on the left and the pane on the right. How tmux works. | Works in every terminal on every OS. Truly one screen. | Very hard. It must re-draw everything Claude draws, pass through every key and mouse event, and survive Claude's fullscreen mode. Bugs here break your Claude session. |
+| C. Inside an editor | A VS Code extension panel. How Pixel Agents works: it draws a small web page inside VS Code and reads Claude's session log files. | Real fonts, images, smooth scrolling. | Only works for people running Claude inside VS Code. You use a plain terminal. |
+| D. Inside Claude itself | How the built-in `/diff` works. Claude Code draws it as part of its own screen. | Best possible fit. | Only Anthropic can do this. Plugins cannot draw inside Claude's screen. |
 
-**Done when:** you ask Claude to edit a file and watch its row light up without touching the pane.
+**Decision: A now.** It is the standard approach because it is robust. B is the only way to get a true single-screen feel, but it is roughly ten times the work and the failure mode is a broken Claude session. Revisit B only after Day 7, and only if the split still feels wrong.
 
-**You learn:** hooks, for real.
+### Which terminals can split
 
-## Day 5: changes and diffs
+| Terminal | OS | Split command | Status |
+|---|---|---|---|
+| Windows Terminal | Windows | `wt -w 0 split-pane -V` | Working (Day 1) |
+| tmux | Mac, Linux, WSL | `tmux split-window -h` | Day 3 |
+| WezTerm | All | `wezterm cli split-pane --right` | Day 3 |
+| iTerm2 | Mac | AppleScript: split vertically | Day 3, needs a Mac to test |
+| kitty | Mac, Linux | `kitty @ launch --location=vsplit` | Day 3, needs remote control turned on |
+| Terminal.app, VS Code terminal, others | | none | Fallback: print the command to run in a second window |
 
-- `+12 −3` badges on changed files, from git.
-- A changed file opens as a red and green diff, like the concept mockup.
-- Replace the hard-coded ignore list with `.gitignore` rules.
-- A clear message in folders that are not git repos.
+So **yes, it can work on a MacBook**: the app is plain Node and runs anywhere. Only the "open a split for me" step differs per terminal. Mac launchers are written on Day 3 but stay marked untested until someone runs them on a Mac.
 
-**Done when:** after a Claude turn you can see what changed without typing anything.
+### Pane behaviour to fix (known from Day 1)
 
-## Day 6: follow mode and feel
+- Pressing `q` leaves an empty shell behind. Cause: the launcher starts the pane with `cmd /k` (keep open). Fix: `cmd /c`, so the split closes when Sidecar quits.
+- The pane should close by itself when the Claude session ends (`SessionEnd` hook).
+- `/sidecar` should toggle: open if closed, close if open.
+- One pane per Claude session, keyed by project folder, so two sessions never mix.
 
-- Follow mode: the pane jumps to whatever Claude just edited. Any key press pauses it.
-- Mouse: click a row to select it, wheel to scroll.
-- A narrow layout for small panes.
-- Smooth behaviour when the terminal is resized.
+## 3. Architecture
 
-**Done when:** you can leave the pane alone for a whole session and it always shows the right thing.
+```
+Claude Code ──hooks──▶ hook.mjs ──append──▶ ~/.sidecar/<project>/events.jsonl
+                          │
+                          └── on prompt start / stop ──▶ snapshot into ~/.sidecar/<project>/shadow.git
 
-## Day 7: design pass and decision
+Sidecar pane ──watches──▶ events.jsonl      (what is Claude doing right now)
+             ──reads────▶ the project folder (tree, file contents)
+             ──runs─────▶ git                (status, diff, shadow-repo diff per turn)
+```
 
-- Go through every screen with the design goal in mind. Fix spacing, colour, empty states, error states.
-- An option to use the terminal's own 16 colours, so it follows any theme.
-- A colour-blind-safe diff palette.
-- README with a short GIF.
-- Decide: keep it private, or make the repo public.
+| Part | Job | Rules |
+|---|---|---|
+| `src/core` | Files, tree, git, diff parsing, markdown to styled lines, event reading. | Knows nothing about the screen. Has unit tests. |
+| `src/ui` | Draws the screen, handles keys and mouse. | Knows nothing about the file system except what `core` hands it. The only part to rewrite if the toolkit changes. |
+| `src/launch` | Detects the terminal and opens or closes the split. | One small file per terminal. |
+| `hooks/hook.mjs` | Runs when Claude fires an event. Appends one line, maybe takes a snapshot, exits. | No dependencies. Prints nothing (hook output can land in Claude's context). Marked `async` so Claude never waits. Exits 0 even when Sidecar is not running. |
+| `.claude-plugin`, `skills/` | Packaging so `/sidecar` and the hooks install in one step. | |
 
-## Rules to protect the project
+**No background server.** The hook writes a file, the pane watches the file. Nothing to start, nothing to die, no ports.
 
-- Viewer only. No editing, no file operations, no terminal inside the pane.
-- Hooks stay silent and fast. Anything a hook prints can end up in Claude's context.
-- If a feature does not help you see what Claude is doing, it does not go in.
+**Per-turn diffs** come from a hidden git repo kept outside the project. Already tested on this machine: a snapshot took 139 ms, caught a change made through a shell command, and left the project's own `.git` untouched. This also makes it work in folders that are not git repos.
+
+**Tokens:** none. Hooks and the pane run locally. The only token cost is typing `/sidecar`, which is one small turn; the auto-open option avoids even that.
+
+## 4. The build, day by day
+
+Claude writes the code. You decide direction and design. Each day ends with something you can run. Stop after any day and you still have a working tool.
+
+### Day 1: skeleton (done)
+
+File tree, plain preview with line numbers, keyboard control, Windows Terminal split launcher, smoke test that presses fake keys.
+
+### Day 2: make it look good
+
+1. Toolkit check, one hour, before anything else. Build the same tiny screen in Ink and in OpenTUI: click a row, wheel-scroll a list, resize. Pick the one that feels right in Windows Terminal. Ink is what Claude Code uses but has no built-in mouse. OpenTUI has mouse and scroll boxes but is pre-1.0 and needs Bun (already installed here).
+2. Syntax colours for code.
+3. Markdown formatted: headings, bold, italics, lists, quotes, code blocks, tables, links.
+4. Three heading styles to choose from, shown side by side in the pane.
+
+- **You decide:** toolkit, and the markdown look.
+- **Done when:** opening `PLAN.md` in the pane reads like a document.
+- **Risk:** terminals have one font size. Headings must work through colour, weight and spacing alone.
+
+### Day 3: attach properly
+
+1. `src/launch` with detection for Windows Terminal, tmux, WezTerm, iTerm2, kitty, and the fallback message.
+2. Pane closes on `q`. Remembered pane width.
+3. A `sidecar` command (`sidecar`, `sidecar open`, `sidecar close`).
+4. Plugin skeleton and the `/sidecar` skill that toggles the pane.
+
+- **Done when:** in any project, typing `/sidecar` in Claude opens the pane, and typing it again closes it.
+- **Risk:** Mac launchers cannot be tested from this machine.
+
+### Day 4: make it aware of Claude
+
+1. `hook.mjs` and the hook config for `SessionStart`, `UserPromptSubmit`, `PostToolUse`, `Notification`, `Stop`, `SessionEnd`. Added next to your existing Orca and toast hooks without touching them.
+2. Status line: `● working`, `● idle`, `● needs you` (permission prompts).
+3. Files light up in the tree the moment Claude touches them, then fade to a quieter "touched this session" mark.
+4. Optional auto-open when a Claude session starts. Auto-close when it ends.
+
+- **You decide:** what "lit up" looks like (colour, glyph, how long it lasts).
+- **Done when:** you ask Claude to edit a file and its row lights up without you touching the pane.
+- **Risk:** hooks must be silent and fast. Test that a broken or missing Sidecar never slows Claude.
+
+### Day 5: changes
+
+1. `+12 −3` badges on changed files, and a count on folders that contain changes.
+2. Changes view: list of changed files, red and green diff below, like the concept mockup.
+3. Word-level highlights inside changed lines.
+4. `.gitignore` rules replace the hard-coded ignore list.
+5. Clear message in folders that are not git repos (full support arrives on Day 6).
+
+- **Done when:** after a Claude turn you can see what changed without typing anything.
+
+### Day 6: turns and follow mode
+
+1. Shadow snapshots on prompt start and on stop.
+2. Turn list: each prompt you sent, with its own diff and counts. Includes changes Claude made through shell commands, which the built-in per-turn view misses.
+3. Follow mode: the pane jumps to whatever Claude just edited. Any key press pauses it; a key turns it back on.
+4. Works in folders without git.
+
+- **Done when:** you can leave the pane alone for a whole session and it always shows the right thing.
+- **Risk:** snapshot speed in big projects. Must respect `.gitignore` and skip `node_modules`; measure on `tolife1`.
+
+### Day 7: feel, polish, decision
+
+1. Mouse: click to select, wheel to scroll, click a view name to switch.
+2. Narrow layout for small panes. Clean behaviour on resize.
+3. Option to use the terminal's own 16 colours so the pane follows any theme. A colour-blind-safe diff palette.
+4. Every empty state and error state looked at once.
+5. README with a short GIF. Mac test checklist for whoever tries it first.
+
+- **You decide:** keep the repo private or make it public.
+
+## 5. After Day 7 (only if you still want more)
+
+In rough order of value:
+
+1. **Revert** a file or a whole turn back to its turn-start snapshot. Covers shell-command and subagent changes, which the built-in `/rewind` does not restore.
+2. **Line comments that reach Claude.** Press a key on a line, type a note. A `UserPromptSubmit` hook prints queued notes so they join your next prompt.
+3. **Risk flags.** Local rules that mark removed test assertions, newly skipped tests, new dependencies, edits to `.env` or CI files.
+4. **Log view.** Tail a dev-server log file in the pane. Viewer only: Sidecar does not start the server.
+5. **Wrapper mode (option B).** Only if the split still feels wrong after living with it.
+
+## 6. Rules that protect the project
+
+- Viewer only. No editing, no file operations, no running commands.
+- Hooks stay silent and fast, and never block Claude.
+- `core` and `ui` stay separate.
+- Every feature must answer: does this help me see what Claude is doing? If not, it does not go in.
+- Windows Terminal is the first-class target because that is what you use. Other terminals are best effort.
+- Before each commit: `npm run typecheck` and `npx tsx scripts/smoke.tsx`.
+
+## 7. Open questions
+
+| Question | Decide by |
+|---|---|
+| Ink or OpenTUI | Day 2, after the one-hour check |
+| Final name (`sidecar` is taken on npm; `sidecar-pane` is free) | Day 7, before going public |
+| Tree on top and preview below, or side by side when the pane is wide | Day 2, once colours are in |
+| Should auto-open be on by default | Day 4 |
