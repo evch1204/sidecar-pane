@@ -100,6 +100,9 @@ Sidecar pane ──watches──▶ events.jsonl      (what is Claude doing righ
 - Done: Files view from the design mockup: indent guides, change badges, folder counts, "changed only" filter, the focused half grows, coloured code, green bar beside changed lines, pane closes on `q`.
 - Done: tabs, and the Changes view (see "The Changes view" below).
 - Done: mouse. Click, wheel, drag the divider, drag a scrollbar.
+- Done: provenance. The Changes view groups by chat, day and prompt, and says
+  which turn wrote which hunk. Day 4 and Day 6 turned out to need no hooks at
+  all (see "Where the history comes from").
 - Badges currently mean "different from the last commit". "Changed this session" arrives with snapshots on Day 6.
 - Not yet: formatted markdown, Docs view, status, follow, launchers for anything but Windows Terminal.
 - Design mockup: https://claude.ai/artifact/8RPeQxwrBW5zBrefY6UK75
@@ -123,8 +126,21 @@ Both views now share one skeleton, so moving between them costs nothing:
  ↑↓ line  n/N hunk  ]/[ file  enter fold  q quit                   hints
 ```
 
+Grouped three ways, one key (`v`) apart:
+
+- **by turn** (the default) — chat, then day, then the prompt you typed, then
+  the files that prompt changed. Selecting the turn puts your own words, the
+  steps Claude took and what measurably changed in the body.
+- **by file** — the other question: this file looks wrong, which prompts
+  touched it? Its diff comes back banded, one band per turn.
+- **all changes** — everything since the last commit, the flat list.
+
 Decisions, and why:
 
+- **Your prompt is the row label.** Not a summary of it, not a generated title:
+  the words you typed are the reason the files moved.
+- **No restore.** The version-history view this borrows from has one. Sidecar
+  is a viewer; Claude edits.
 - **Unified, never split.** The pane is usually 50 to 70 columns. Two gutters and two code columns would leave under 30 columns a side, which is worse than one column with word-level marks.
 - **The list is a strip on top, not a sidebar.** Columns are scarce in a split, rows are not. This also settles the old "side by side when wide" question: on top, always, in both views.
 - **The rule between the halves doubles as the header** for the half below it, and is the handle you drag to resize. That buys back a row: chrome is five rows, not six.
@@ -133,6 +149,37 @@ Decisions, and why:
 - **No raw `@@ -12,7 +12,9 @@`.** Hunk headers say what they contain (`loadGit()`, `type Change`) and fold. When git's context does not name anything, the header falls back to a line range.
 - **Unchanged runs collapse** to "⋯ 38 unchanged lines" and open in place, read from the file rather than from another call to git. Gaps of four lines or fewer are filled in at load: they cost as much room as the lines they hide.
 - **No hover.** It needs any-motion tracking, which sends a report per cell crossed, and it would only light up rows that already have a cursor.
+
+## Where the history comes from
+
+Claude Code already writes everything needed, and writes it live. This was
+checked on this machine, not assumed.
+
+| Question | Where the answer is | How good |
+|---|---|---|
+| Which chat, which prompt, what Claude did about it | `~/.claude/projects/<project>/<session>.jsonl` | Exact, and it goes back through every past chat |
+| Which lines a turn changed | a snapshot of the project taken either side of the turn | Exact, from the moment sidecar first runs |
+| What differs from the last commit | git | Exact |
+
+Three things follow from that.
+
+**No hooks.** The transcript is flushed message by message: opening the file
+and reading the bytes appended since last time tells you the chat, the prompt,
+the tool running right now and when the turn ended. Day 4's status line and
+Day 6's turn list both fall out of it. The `hook.mjs` plan stays unbuilt until
+something actually needs it.
+
+**Never guess a file from a command.** The first attempt read paths out of
+shell commands and confidently attributed `Object.assign` and `frames.push`.
+In auto mode Claude edits through the shell, so there are no `Edit` records to
+lean on either. The only honest answer is to look at the project before and
+after: a bare git repo in `~/.sidecar/<project>/shadow.git` with the project as
+its work tree. Measured on this Mac: 89 ms cold, 57 ms warm, and the project's
+own `.git` is never touched.
+
+**Say which one you are looking at.** A turn from before sidecar ever ran shows
+its prompt and its steps, and its files are marked `not recorded` with no
+counts. Nothing pretends to a precision it does not have.
 
 ## Mouse
 
@@ -210,8 +257,9 @@ File tree, plain preview with line numbers, keyboard control, Windows Terminal s
 
 ### Day 6: turns and follow mode
 
-1. Shadow snapshots on prompt start and on stop.
-2. Turn list: each prompt you sent, with its own diff and counts. Includes changes Claude made through shell commands, which the built-in per-turn view misses.
+1. ~~Shadow snapshots on prompt start and on stop.~~ Done, driven by the
+   transcript rather than by hooks.
+2. ~~Turn list: each prompt you sent, with its own diff and counts.~~ Done.
 3. Follow mode: the pane jumps to whatever Claude just edited. Any key press pauses it; a key turns it back on.
 4. Works in folders without git.
 

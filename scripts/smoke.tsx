@@ -58,27 +58,33 @@ await press(RIGHT, DOWN, DOWN, DOWN);
 await show('files: preview focused, tree shrunk, scrolled 3 lines');
 
 await press(ESC, '2');
-await wait(700); // first diff read
-await show('changes: file list and the first diff');
+await wait(1400); // first diff, transcript and snapshot read
+await show('changes: every turn, newest first, with why on the right');
 
-await press('n');
-await show('changes: cursor jumped to the next hunk, diff focused');
+await press('\r');
+await show('changes: a turn opened, showing the files it changed');
+
+await press(DOWN, RIGHT);
+await show('changes: one file, as that turn left it');
+
+await press(ESC, 'v');
+await show('changes: grouped by file instead');
+
+await press('v');
+await show('changes: every change since the last commit');
+
+await press(DOWN, RIGHT, 'n');
+await show('changes: diff focused, cursor on the next hunk');
 
 await press('\r');
 await show('changes: that hunk folded');
 
-// Row 2 is the top of the file list, so this clicks the third changed file.
+// Row 2 is the top of the list, so this clicks the third row.
 await press(click(4, 4));
-await show('changes: third file opened by clicking its row');
-
-await press(DOWN, DOWN, DOWN, '\r');
-await show('changes: a gap expanded in place');
+await show('changes: a row opened by clicking it');
 
 await press(wheelDown(20, 14), wheelDown(20, 14));
 await show('changes: wheel over the diff scrolled it, cursor left alone');
-
-await press('w');
-await show('changes: whitespace-only changes hidden');
 
 await press(click(11, 0));
 await show('files: switched back by clicking the Files tab');

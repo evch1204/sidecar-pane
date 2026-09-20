@@ -9,9 +9,27 @@ import {fit, spaces, width as widthOf} from './util';
 // the renderer draws it, the cursor indexes into it, and a click maps a screen
 // row onto it. Folds, opened gaps and hidden whitespace are all applied here,
 // so the three can never disagree.
+export type Band = {
+  time: string;
+  prompt: string;
+  added: number;
+  removed: number;
+  measured: boolean;
+};
+
+// A file's diff can arrive in several pieces, one per turn that touched it.
+export type DiffGroup = {
+  key: string;
+  band: Band | null;
+  file: FileDiff | null;
+  note?: string;
+};
+
 export type ViewRow =
+  | {kind: 'band'; band: Band}
   | {
       kind: 'hunk';
+      group: number;
       hunk: number;
       label: string;
       // False when git found nothing worth naming and the label is a line range.
@@ -22,67 +40,76 @@ export type ViewRow =
       removed: number;
       folded: boolean;
     }
-  | {kind: 'gap'; hunk: number; count: number}
+  | {kind: 'gap'; group: number; hunk: number; count: number}
   | {kind: 'line'; line: DiffLine}
   | {kind: 'note'; text: string; tone?: 'dim' | 'warn'};
 
 export function viewRows(
-  file: FileDiff | null,
-  folded: ReadonlySet<number>,
-  opened: ReadonlyMap<number, DiffLine[]>,
+  groups: DiffGroup[],
+  folded: ReadonlySet<string>,
+  opened: ReadonlyMap<string, DiffLine[]>,
   hideSpace: boolean,
 ): ViewRow[] {
-  if (!file) return [];
   const out: ViewRow[] = [];
 
-  if (file.binary) {
-    out.push({kind: 'note', text: 'Binary file. There is nothing to compare.'});
-    return out;
-  }
+  groups.forEach((group, g) => {
+    if (group.band) out.push({kind: 'band', band: group.band});
+    if (group.note) out.push({kind: 'note', text: group.note});
 
-  if (file.status === 'renamed' && file.hunks.length === 0) {
-    out.push({kind: 'note', text: 'Renamed. The contents did not change.'});
-    return out;
-  }
+    const file = group.file;
+    if (!file) return;
 
-  file.hunks.forEach((hunk, i) => {
-    const open = opened.get(i);
-    if (open) for (const line of open) out.push({kind: 'line', line});
-    else {
-      const size = gapSize(file, i);
-      if (size > 0) out.push({kind: 'gap', hunk: i, count: size});
+    if (file.binary) {
+      out.push({kind: 'note', text: 'Binary file. There is nothing to compare.'});
+      return;
     }
 
-    const changed = hunk.lines.filter(l => l.kind !== 'context');
-    const label = hunkLabel(hunk.context);
-    out.push({
-      kind: 'hunk',
-      hunk: i,
-      label: label || `lines ${hunk.newStart}–${hunk.newStart + Math.max(0, hunk.newCount - 1)}`,
-      named: Boolean(label),
-      from: hunk.newStart,
-      to: hunk.newStart + Math.max(0, hunk.newCount - 1),
-      added: changed.filter(l => l.kind === 'add').length,
-      removed: changed.filter(l => l.kind === 'del').length,
-      folded: folded.has(i),
-    });
+    if (file.status === 'renamed' && file.hunks.length === 0) {
+      out.push({kind: 'note', text: 'Renamed. The contents did not change.'});
+      return;
+    }
 
-    if (folded.has(i)) return;
-    for (const line of hunk.lines) {
-      // With whitespace hidden, a pair that only moved spaces collapses back
-      // into the single unchanged line it really is.
-      if (hideSpace && line.spaceOnly) {
-        if (line.kind === 'del') continue;
-        // It is an unchanged line again, so it carries no word marks either.
-        out.push({kind: 'line', line: {...line, kind: 'context', oldNo: line.newNo, words: undefined}});
-        continue;
+    file.hunks.forEach((hunk, i) => {
+      const key = `${group.key}:${i}`;
+      const open = opened.get(key);
+      if (open) for (const line of open) out.push({kind: 'line', line});
+      else {
+        const size = gapSize(file, i);
+        if (size > 0) out.push({kind: 'gap', group: g, hunk: i, count: size});
       }
 
-      out.push({kind: 'line', line});
-    }
+      const changed = hunk.lines.filter(l => l.kind !== 'context');
+      const label = hunkLabel(hunk.context);
+      out.push({
+        kind: 'hunk',
+        group: g,
+        hunk: i,
+        label: label || `lines ${hunk.newStart}–${hunk.newStart + Math.max(0, hunk.newCount - 1)}`,
+        named: Boolean(label),
+        from: hunk.newStart,
+        to: hunk.newStart + Math.max(0, hunk.newCount - 1),
+        added: changed.filter(l => l.kind === 'add').length,
+        removed: changed.filter(l => l.kind === 'del').length,
+        folded: folded.has(key),
+      });
+
+      if (folded.has(key)) return;
+      for (const line of hunk.lines) {
+        // With whitespace hidden, a pair that only moved spaces collapses back
+        // into the single unchanged line it really is.
+        if (hideSpace && line.spaceOnly) {
+          if (line.kind === 'del') continue;
+          out.push({kind: 'line', line: {...line, kind: 'context', oldNo: line.newNo, words: undefined}});
+          continue;
+        }
+
+        out.push({kind: 'line', line});
+      }
+    });
+
+    if (file.truncated) out.push({kind: 'note', text: 'Too big to show in full.', tone: 'warn'});
   });
 
-  if (file.truncated) out.push({kind: 'note', text: 'Too big to show in full.', tone: 'warn'});
   return out;
 }
 
@@ -134,6 +161,29 @@ export function Diff({rows, scroll, cursor, hscroll, cols, height, focused, mess
         const index = scroll + i;
         const here = focused && index === cursor;
         const track = bar && i >= bar.from && i < bar.to ? glyph.thumb : ' ';
+
+        if (row.kind === 'band') {
+          const counts = `${row.band.added ? `+${row.band.added}` : ''}${
+            row.band.added && row.band.removed ? ' ' : ''
+          }${row.band.removed ? `${glyph.minus}${row.band.removed}` : ''}`;
+          const label = fit(row.band.prompt, Math.max(8, cols - 22 - widthOf(counts)));
+          const fill = Math.max(2, cols - 12 - widthOf(row.band.time) - widthOf(label) - widthOf(counts));
+
+          return (
+            <Text key={index} wrap="truncate-end" backgroundColor={here ? theme.selBg : undefined}>
+              <Text color={theme.rule}>{'  '}{glyph.rule}{glyph.rule}{' '}</Text>
+              <Text color={theme.accent}>{row.band.time}</Text>
+              <Text>{'  '}</Text>
+              <Text color={row.band.measured ? theme.ink : theme.dim}>{label}</Text>
+              <Text color={theme.rule}>{' '}{glyph.rule.repeat(fill)}{' '}</Text>
+              <Text color={theme.add}>{row.band.added ? `+${row.band.added}` : ''}</Text>
+              <Text color={theme.del}>
+                {row.band.removed ? `${row.band.added ? ' ' : ''}${glyph.minus}${row.band.removed}` : ''}
+              </Text>
+              <Text color={theme.rule}>{' '}{glyph.rule}{glyph.rule}</Text>
+            </Text>
+          );
+        }
 
         if (row.kind === 'hunk') {
           const counts = `${row.added ? `+${row.added}` : ''}${row.added && row.removed ? ' ' : ''}${

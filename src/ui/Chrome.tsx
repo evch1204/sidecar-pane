@@ -10,15 +10,16 @@ type TabsProps = {
   branch: string;
   cols: number;
   filtered: boolean;
+  note?: string;
 };
 
 // The one title row. The tabs are just words: the bright one is the view you
 // are in. No brackets, no box, so the pane reads as one screen with the CLI
 // beside it.
-export function Tabs({view, changedCount, project, branch, cols, filtered}: TabsProps) {
+export function Tabs({view, changedCount, project, branch, cols, filtered, note}: TabsProps) {
   const stops = tabStops(changedCount);
   const right = branch ? `${project} ${glyph.bullet} ${branch}` : project;
-  const used = stops[1]!.end + (filtered ? 10 : 0);
+  const used = stops[1]!.end + (filtered ? 10 : 0) + (note ? note.length + 3 : 0);
   const room = cols - used - 2;
   const tail = room >= width(right) ? right : room >= width(project) ? project : '';
 
@@ -34,6 +35,7 @@ export function Tabs({view, changedCount, project, branch, cols, filtered}: Tabs
         {stops[1]!.label}
       </Text>
       {filtered ? <Text color={theme.warn}>  changed</Text> : null}
+      {note ? <Text color={theme.dim}>{'  '}{glyph.bullet} {note}</Text> : null}
       <Text>{spaces(cols - used - width(tail) - 1)}</Text>
       <Text color={theme.dim}>{tail}</Text>
     </Text>
