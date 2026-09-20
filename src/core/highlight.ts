@@ -96,3 +96,48 @@ export function highlightLines(filePath: string, lines: string[]): Segment[][] |
   walk(tree, null);
   return out;
 }
+
+export type Piece = {text: string; kind: Kind | null; marked: boolean};
+
+// One line of a diff, cut to the visible column window and split wherever the
+// syntax colour or the word-level mark changes. `spans` are character ranges
+// that differ from the line this one replaced.
+export function layoutLine(
+  text: string,
+  segments: Segment[] | null,
+  spans: readonly {start: number; end: number}[] | undefined,
+  from: number,
+  width: number,
+): Piece[] {
+  if (width <= 0) return [];
+  const chars = [...text];
+  const to = Math.min(chars.length, from + width);
+  if (from >= chars.length) return [];
+
+  // Character index -> syntax kind, so segments and spans can be applied in
+  // one pass without worrying about which boundaries fall where.
+  const kinds: (Kind | null)[] = new Array(chars.length).fill(null);
+  if (segments) {
+    let at = 0;
+    for (const segment of segments) {
+      for (const _ of segment.text) {
+        if (at < kinds.length) kinds[at] = segment.kind;
+        at++;
+      }
+    }
+  }
+
+  const marked: boolean[] = new Array(chars.length).fill(false);
+  for (const span of spans ?? []) {
+    for (let i = Math.max(0, span.start); i < Math.min(chars.length, span.end); i++) marked[i] = true;
+  }
+
+  const out: Piece[] = [];
+  for (let i = from; i < to; i++) {
+    const last = out[out.length - 1];
+    if (last && kinds[i] === last.kind && marked[i] === last.marked) last.text += chars[i]!;
+    else out.push({text: chars[i]!, kind: kinds[i] ?? null, marked: marked[i] ?? false});
+  }
+
+  return out;
+}
