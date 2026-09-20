@@ -14,6 +14,18 @@ export const theme = {
   keyword: '#C6A0F0',
   string: '#A8CF8E',
   selBg: '#3D2B21',
+
+  // Diff. The line tints sit just far enough off the background to read as a
+  // band without drowning the syntax colours on top of them. The word tints
+  // are the same hues pushed harder, so the exact edit stands out inside an
+  // already-coloured line.
+  addBg: '#16291D',
+  delBg: '#2B1719',
+  addWordBg: '#2F6B44',
+  delWordBg: '#7A2F33',
+  addDim: '#4E7A5C',
+  delDim: '#8A5A58',
+  gapBg: '#241F1B',
 } as const;
 
 export const glyph = {
@@ -25,7 +37,13 @@ export const glyph = {
   bullet: '•',
   changedBar: '▎',
   minus: '−',
+  plus: '+',
   ellipsis: '…',
+  gap: '⋯',
+  arrow: '→',
+  track: '│',
+  thumb: '┃',
+  hunk: '⋯',
 } as const;
 
 type Style = {color?: string; bold?: boolean; italic?: boolean; underline?: boolean};

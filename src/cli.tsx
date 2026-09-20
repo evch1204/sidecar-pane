@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {render} from 'ink';
 import {App} from './ui/App';
+import {MOUSE_OFF, MOUSE_ON} from './ui/mouse';
 
 const args = process.argv.slice(2);
 const snapshot = args.includes('--snapshot');
@@ -21,9 +22,20 @@ const enterScreen = '\u001B[?1049h\u001B[H';
 const leaveScreen = '\u001B[?1049l';
 
 if (interactive) {
-  process.stdout.write(enterScreen);
-  process.on('exit', () => process.stdout.write(leaveScreen));
+  process.stdout.write(enterScreen + MOUSE_ON);
+  // Mouse reporting outlives the process if it is not turned off, which would
+  // leave the user's shell printing escape codes at every click. Every way out
+  // goes through here.
+  const restore = () => process.stdout.write(MOUSE_OFF + leaveScreen);
+  process.on('exit', restore);
+  process.on('uncaughtException', error => {
+    restore();
+    console.error(error);
+    process.exit(1);
+  });
 }
 
-const app = render(<App root={root} interactive={interactive} />);
+const app = render(
+  <App root={root} interactive={interactive} mouseDebug={args.includes('--mouse-debug')} />,
+);
 await app.waitUntilExit();

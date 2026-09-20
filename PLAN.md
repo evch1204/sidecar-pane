@@ -98,9 +98,65 @@ Sidecar pane ──watches──▶ events.jsonl      (what is Claude doing righ
 
 - Done: Day 1 skeleton.
 - Done: Files view from the design mockup: indent guides, change badges, folder counts, "changed only" filter, the focused half grows, coloured code, green bar beside changed lines, pane closes on `q`.
+- Done: tabs, and the Changes view (see "The Changes view" below).
+- Done: mouse. Click, wheel, drag the divider, drag a scrollbar.
 - Badges currently mean "different from the last commit". "Changed this session" arrives with snapshots on Day 6.
-- Not yet: formatted markdown, tabs, Changes view, Docs view, status, follow, mouse.
+- Not yet: formatted markdown, Docs view, status, follow, launchers for anything but Windows Terminal.
 - Design mockup: https://claude.ai/artifact/8RPeQxwrBW5zBrefY6UK75
+
+## The Changes view
+
+Both views now share one skeleton, so moving between them costs nothing:
+
+```
+ sidecar   Files   Changes 3                  sidecar-pane • main   tab bar
+──────────────────────────────────────────────────────────────────
+ M src/core/git.ts                                        +5 −2    a list
+ M src/ui/App.tsx                                         +3 −1
+─ src/core/git.ts ───────────────────────── hunk 1/2  1-21 of 40 ─ divider
+     ▾ type Change                                   5–11  +3 −1    a body
+   5   export type Change = {
+▎  7 -   added: number | null;
+▎  7 +   added: number;
+       ⋯  38 unchanged lines
+──────────────────────────────────────────────────────────────────
+ ↑↓ line  n/N hunk  ]/[ file  enter fold  q quit                   hints
+```
+
+Decisions, and why:
+
+- **Unified, never split.** The pane is usually 50 to 70 columns. Two gutters and two code columns would leave under 30 columns a side, which is worse than one column with word-level marks.
+- **The list is a strip on top, not a sidebar.** Columns are scarce in a split, rows are not. This also settles the old "side by side when wide" question: on top, always, in both views.
+- **The rule between the halves doubles as the header** for the half below it, and is the handle you drag to resize. That buys back a row: chrome is five rows, not six.
+- **Changed lines are a background tint, not red and green text.** Foreground colouring destroys syntax colour and makes the eye read the sign column on every row. A tint reads as a shape, and the `+`/`-` column and the bar keep it working without colour.
+- **Word-level marks** use the same two hues pushed harder, so the exact edit stands out inside an already-coloured line. Only for delete and add runs of equal length whose lines are at least 30% alike; anything else is a rewrite, and marking all of it is noise.
+- **No raw `@@ -12,7 +12,9 @@`.** Hunk headers say what they contain (`loadGit()`, `type Change`) and fold. When git's context does not name anything, the header falls back to a line range.
+- **Unchanged runs collapse** to "⋯ 38 unchanged lines" and open in place, read from the file rather than from another call to git. Gaps of four lines or fewer are filled in at load: they cost as much room as the lines they hide.
+- **No hover.** It needs any-motion tracking, which sends a report per cell crossed, and it would only light up rows that already have a cursor.
+
+## Mouse
+
+Ink has no mouse support, so the pane turns on the terminal's own reporting
+(`1000` press and release, `1002` motion while held, `1006` for the SGR form)
+and parses the escape sequences itself. Ink's input parser already hands each
+report to `useInput` on its own with the escape stripped, so nothing has to be
+hijacked: `src/ui/mouse.ts` is one regular expression.
+
+| Where | Click | Wheel | Drag |
+|---|---|---|---|
+| A tab | switch view | | |
+| A list row | select it; a folder opens | scroll the list | |
+| The divider | focus the half below; double-click resets the split | scroll the body | resize the split |
+| A hunk header | fold or unfold | scroll | |
+| A gap | open it | scroll | |
+| A diff line | move the cursor; double-click opens it in Files | scroll | |
+| A scrollbar | jump there | scroll | drag the thumb |
+
+Turning mouse reporting on stops the terminal doing its own text selection.
+Shift and drag still selects in Windows Terminal, iTerm2, kitty, WezTerm and
+Alacritty; `m` turns reporting off entirely for terminals that do not.
+`--mouse-debug` prints each report and the region it hit in the footer, which
+is how you check a new terminal counts rows the way the pane does.
 
 ## 4. The build, day by day
 
@@ -112,7 +168,7 @@ File tree, plain preview with line numbers, keyboard control, Windows Terminal s
 
 ### Day 2: make it look good
 
-1. Toolkit check, one hour, before anything else. Build the same tiny screen in Ink and in OpenTUI: click a row, wheel-scroll a list, resize. Pick the one that feels right in Windows Terminal. Ink is what Claude Code uses but has no built-in mouse. OpenTUI has mouse and scroll boxes but is pre-1.0 and needs Bun (already installed here).
+1. ~~Toolkit check.~~ **Decided: Ink stays.** Its input parser already splits SGR mouse reports into their own events, so the mouse costs one regular expression instead of a new toolkit, and OpenTUI's pre-1.0 risk buys nothing.
 2. Syntax colours for code.
 3. Markdown formatted: headings, bold, italics, lists, quotes, code blocks, tables, links.
 4. Three heading styles to choose from, shown side by side in the pane.
@@ -195,7 +251,7 @@ In rough order of value:
 
 | Question | Decide by |
 |---|---|
-| Ink or OpenTUI | Day 2, after the one-hour check |
+| ~~Ink or OpenTUI~~ | Decided: Ink, with mouse reporting parsed by hand. |
 | Final name (`sidecar` is taken on npm; `sidecar-pane` is free) | Day 7, before going public |
-| Tree on top and preview below, or side by side when the pane is wide | Day 2, once colours are in |
+| ~~Tree on top, or side by side when wide~~ | Decided: on top, in both views. Columns are the scarce resource in a split. |
 | Should auto-open be on by default | Day 4 |
