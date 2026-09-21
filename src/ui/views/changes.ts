@@ -3,6 +3,7 @@ import {statusOf, type AgentRun} from '../../core/agents';
 import type {DiffLine, FileDiff, FileStatus} from '../../core/diff';
 import {modelName} from '../../core/usage';
 import type {ChangedFile, FileHistory, TurnChange} from '../../core/turns';
+import type {WorktreeRun} from '../../core/worktrees';
 import {
   blankRow, chevron, counts, INDENT, INDENT2, pageRow, RIGHT_PAD, seg, sp, span, spineRow, tokens, widthOf,
   type Group, type Line, type Seg,
@@ -46,6 +47,13 @@ export type ChangesInput = {
   opened: ReadonlyMap<string, DiffLine[]>;
   hideSpace: boolean;
   sel: string | null;
+  // Every folder of this repository the pane can say something about, and how
+  // much of it this view is covering. Both optional: without them the view
+  // shows the pane's own folder, which is all it used to know about.
+  worktrees?: WorktreeRun[];
+  scope?: 'mine' | 'all';
+  // The chat's own model, so an agent is only marked with one when it differs.
+  chatModel?: string;
 };
 
 const FILES_SHOWN = 8;

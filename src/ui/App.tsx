@@ -12,6 +12,7 @@ import {openStore, take, type Store} from '../core/snapshot';
 import {visibleNodes} from '../core/tree';
 import {byFile, fileInTurn, loadTurns, type TurnChange} from '../core/turns';
 import {newUsageState, readLimits, readSpends, type Limits, type Spend} from '../core/usage';
+import {readWorktrees, type WorktreeRun} from '../core/worktrees';
 import {dimmed, overlay, seg, sp, widthOf, type Act, type Group, type Line, type Seg, type View} from './cells';
 import type {DiffGroup} from './diffrows';
 import {follow, scrollFromThumb, thumb} from './layout';
@@ -131,10 +132,17 @@ function useDiff(root: string, active: boolean, live: boolean) {
 // time round. The transcript says which prompt; the snapshots say which lines.
 // This runs in every view: a turn that happens while you are looking at Files
 // still has to be measured.
-function useHistory(root: string, live: boolean) {
+//
+// The working tree comes in from `useGit`, which has already read it this
+// poll: a turn with nothing committed can only be called uncommitted if
+// something it touched is dirty right now. It arrives through a ref, because
+// the poll must not restart every time git hands back a new object.
+function useHistory(root: string, live: boolean, git: GitState | null) {
   const reader = useRef(newReadState());
   const agentReader = useRef(newAgentState());
   const store = useRef<Store | null>(null);
+  const latest = useRef(git);
+  latest.current = git;
   const [state, setState] = useState<{changes: TurnChange[]; agents: AgentRun[]; now: number; version: number; loaded: boolean}>({
     changes: [], agents: [], now: Date.now(), version: 0, loaded: false,
   });
@@ -145,11 +153,24 @@ function useHistory(root: string, live: boolean) {
     const sessions = readSessions(root, reader.current);
     const agents = readAgents(root, agentReader.current);
     if (store.current) await take(store.current, root, now);
-    const changes = await loadTurns(root, store.current, sessions, now);
+    const changes = await loadTurns(root, store.current, sessions, now, latest.current);
     setState(s => ({changes, agents, now, version: s.version + 1, loaded: true}));
   }, [root], true, live);
 
   return {...state, store: store.current};
+}
+
+// Every folder of this repository the pane has something to say about. A
+// worktree somebody is working in moves as often as the rest of the pane; the
+// others cost a git call or two, so they are looked at on the slow cadence.
+function useWorktrees(root: string, agents: AgentRun[], git: GitState | null, live: boolean, busy: boolean) {
+  const latest = useRef({agents, git});
+  latest.current = {agents, git};
+  const [trees, setTrees] = useState<WorktreeRun[]>([]);
+  usePolling(async () => {
+    setTrees(await readWorktrees(root, latest.current.agents, latest.current.git, Date.now()));
+  }, [root], true, live, busy ? REFRESH_MS : SLOW_MS);
+  return trees;
 }
 
 // The tokens and the limits are read in every view, because the right end of
@@ -234,7 +255,7 @@ export function App({root, interactive, mouseDebug = false}: Props) {
 
   const {git, loaded, version} = useGit(root, interactive);
   const {diff, version: diffVersion} = useDiff(root, view === 'changes', interactive);
-  const history = useHistory(root, interactive);
+  const history = useHistory(root, interactive, git);
   const {spends, limits} = useUsage(view === 'usage', interactive);
   const say = (text: string) => setNotice({text});
   const refuse = (text: string) => setNotice({text, warn: true});
@@ -245,6 +266,13 @@ export function App({root, interactive, mouseDebug = false}: Props) {
   const newest = history.changes[history.changes.length - 1];
   const working = Boolean(newest?.running);
   const agentsRunning = runningAgents(history.agents, now);
+  const worktrees = useWorktrees(root, history.agents, git, interactive, working || agentsRunning > 0);
+  // The chat's own model. An agent is only worth a model chip when its model
+  // is not this one, and a turn still waiting for its first reply has none.
+  const chatModel = useMemo(
+    () => [...history.changes].reverse().find(change => change.turn.model)?.turn.model ?? '',
+    [history.changes],
+  );
 
   // The spinner only ticks while there is something spinning.
   useEffect(() => {
@@ -361,12 +389,19 @@ export function App({root, interactive, mouseDebug = false}: Props) {
         head: [],
         lines: changesLines({
           cols, now, frame, root, group, changes: mine, histories, flat: diff ? diff.files : null, agents: history.agents,
-          open, diffs, folded, opened, hideSpace, sel: at,
+          open, diffs, folded, opened, hideSpace, sel: at, worktrees, scope: 'mine', chatModel,
         }),
       };
     }
 
-    if (slot === 'agents') return {head: [], lines: agentsLines({cols, now, frame, root, changes: history.changes, agents: history.agents, open, sel: at})};
+    if (slot === 'agents') {
+      return {
+        head: [],
+        lines: agentsLines({
+          cols, now, frame, root, changes: history.changes, agents: history.agents, open, sel: at, worktrees, chatModel,
+        }),
+      };
+    }
     if (slot === 'usage') {
       const last = [...history.changes].sort((a, b) => a.turn.endedAt - b.turn.endedAt).pop();
       // The cache hit belongs to this chat, so the chat's own id goes with it.
@@ -409,7 +444,7 @@ export function App({root, interactive, mouseDebug = false}: Props) {
 
     return {...made, index};
   }, [
-    slot, sel, cols, now, frame, group, mine, histories, diff, history.agents, open, diffs, folded, opened, hideSpace,
+    slot, sel, cols, now, frame, group, mine, histories, diff, history.agents, worktrees, chatModel, open, diffs, folded, opened, hideSpace,
     nodes, git, changedOnly, peekPath, peekFile.view, peekFile.segments, peekFile.marks, peekFrom, peekRows,
     readerPath, readFile.view, readFile.segments, readFile.marks, formatted, spends, limits, root,
   ]);

@@ -53,6 +53,12 @@ export const theme = {
   addWordBg: '#1F5A33',
   delWordBg: '#6B2227',
   markBg: '#15100D',
+
+  // The ground under a chip that carries a number: the same hues as the diff
+  // tints, but a chip sits on the bare terminal rather than in a well, so they
+  // are pitched to read as a tint of the figure on them and nothing more.
+  tintAdd: '#12301D',
+  tintDel: '#33161A',
 } as const;
 
 // Subagents are told apart by a label first and a colour second.
@@ -63,6 +69,11 @@ export const agentColours = [theme.link, theme.string, theme.warn, theme.keyword
 // keeps clear of the colours that already mean something: `accent` is the
 // cursor, `warn` is a warning, `add` and `del` are an edit.
 export const modelColours = [theme.link, theme.string, theme.keyword, theme.teal, theme.pink] as const;
+
+// The same five, under the name the rest of the pane hands them out by: a
+// folder in a turn's landed bar, an agent in a turn, a worktree in the map.
+// One list, so two things in the same hue are never on screen at once.
+export const hues = modelColours;
 
 // One big number, as a proportional pixel font: five pixel rows a glyph, `#`
 // lit, drawn on three screen rows of half blocks. A glyph is exactly as wide
@@ -107,6 +118,9 @@ export const glyph = {
   heavy: '━',
   heavyHalf: '╸',
   dot: '●',
+  // A hollow dot: a block that is finished, beside the filled one of a block
+  // that is live.
+  ring: '○',
   bullet: '•',
   diamond: '◆',
   thought: '✦',
@@ -134,6 +148,13 @@ export const glyph = {
   codeTop: '┌',
   codeSide: '│',
   codeBottom: '└',
+  // What hangs under a row: the step an agent is on, a file it wrote.
+  elbow: '⎿',
+  // The two ends of a chip. Each is half a cell of the chip's own background
+  // colour, drawn as a foreground, so a chip has a soft edge without a box and
+  // without painting a whole cell either side of its text.
+  chipL: '▐',
+  chipR: '▌',
   columns: [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'],
   spinner: ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'],
   digits,

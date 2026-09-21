@@ -21,7 +21,10 @@ export function pathKey(p: string): string {
   return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
 }
 
-function git(cwd: string, args: string[]): Promise<string | null> {
+// Every git call in core goes through this one door: a timeout, a big enough
+// buffer, no console window on Windows, and null instead of a throw whenever
+// git is missing, the folder is not a repo, or the command says no.
+export function git(cwd: string, args: string[]): Promise<string | null> {
   return new Promise(resolve => {
     execFile(
       'git',
@@ -158,10 +161,39 @@ export function parseStats(names: string, counts: string): FileStat[] {
 // repository's first commit.
 export const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 
-export type Commit = {sha: string; at: number; parent: string};
+export type Commit = {
+  sha: string;
+  at: number;
+  parent: string;
+  subject: string;
+  // Two or more parents: a branch landing here, not a commit made here.
+  merge: boolean;
+};
 
 const commits = new Map<string, Commit[]>();
 const KEEP_LOGS = 8;
+
+// Every cache in this file is keyed by the HEAD sha, and one poll's worth of
+// calls share a single reading of it, so a poll that finds nothing moved costs
+// exactly one `rev-parse`. The window is well under the poll interval, so a
+// commit made while the pane runs is never missed by more than one poll.
+const HEAD_MS = 1000;
+const heads = new Map<string, {at: number; sha: string | null}>();
+
+async function headSha(root: string, at = Date.now()): Promise<string | null> {
+  const key = pathKey(root);
+  const hit = heads.get(key);
+  if (hit && at - hit.at < HEAD_MS) return hit.sha;
+  const sha = (await git(root, ['rev-parse', 'HEAD']))?.trim() || null;
+  heads.set(key, {at, sha});
+  return sha;
+}
+
+// A subject can hold anything a keyboard can type, tabs and newlines included,
+// so the fields are separated by `%x1f` — a unit separator, which no subject
+// contains — and `-z` ends each record with a NUL rather than a newline.
+const FIELD = '\u001f';
+const LOG_FORMAT = '--format=%H' + FIELD + '%ct' + FIELD + '%P' + FIELD + '%s';
 
 // Commits on HEAD's first-parent history, oldest first, none older than
 // `since`. A merge counts as one commit, which is what the branch it landed
@@ -172,27 +204,110 @@ const KEEP_LOGS = 8;
 // Each commit carries its own first parent, so working out the base of a window
 // costs no extra call. Null outside a git repo, or in one with no commits yet.
 export async function commitsSince(root: string, since: number): Promise<Commit[] | null> {
-  const head = (await git(root, ['rev-parse', 'HEAD']))?.trim();
+  const head = await headSha(root);
   if (!head) return null;
 
   const key = `${pathKey(root)}\0${head}\0${since}`;
   const hit = commits.get(key);
   if (hit) return hit;
 
-  const out = await git(root, ['log', '--first-parent', '--format=%H %ct %P', `--since=${new Date(since).toISOString()}`, head]);
+  const out = await git(root, ['log', '--first-parent', '-z', LOG_FORMAT, `--since=${new Date(since).toISOString()}`, head]);
   if (out === null) return null;
 
   const list: Commit[] = [];
-  for (const line of out.split('\n')) {
-    const match = /^([0-9a-f]{7,64}) (\d+)(?: (.*))?$/.exec(line.trim());
-    if (!match) continue;
-    list.push({sha: match[1]!, at: Number(match[2]) * 1000, parent: (match[3] ?? '').split(' ')[0] ?? ''});
+  for (const record of out.split('\0')) {
+    const [sha, at, parents, subject] = record.split(FIELD);
+    if (!sha || !/^[0-9a-f]{7,64}$/.test(sha) || !at) continue;
+    const family = (parents ?? '').split(' ').filter(Boolean);
+    list.push({
+      sha,
+      at: Number(at) * 1000,
+      parent: family[0] ?? '',
+      subject: (subject ?? '').trim(),
+      merge: family.length > 1,
+    });
   }
 
   list.reverse();
   if (commits.size >= KEEP_LOGS) commits.clear();
   commits.set(key, list);
   return list;
+}
+
+const trunks = new Map<string, string | null>();
+
+// What this project calls its trunk: whatever `origin/HEAD` points at, else a
+// local `main` or `master`, else nothing. Cached by HEAD, so a fetch that
+// creates the remote's own HEAD is picked up the next time a commit lands.
+export async function defaultBranch(root: string): Promise<string | null> {
+  const head = await headSha(root);
+  if (!head) return null;
+  const key = `${pathKey(root)}\0${head}`;
+  const hit = trunks.get(key);
+  if (hit !== undefined) return hit;
+
+  let name = (await git(root, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD']))?.trim() || null;
+  for (const local of ['main', 'master']) {
+    if (name) break;
+    if ((await git(root, ['rev-parse', '--verify', '--quiet', local])) !== null) name = local;
+  }
+
+  if (trunks.size >= KEEP_LOGS) trunks.clear();
+  trunks.set(key, name);
+  return name;
+}
+
+const upstreams = new Map<string, string | null>();
+
+// The branch this one tracks, when it has one. On the trunk itself that is the
+// only thing "merged" can mean, so it is worth its own call.
+export async function upstreamOf(root: string): Promise<string | null> {
+  const head = await headSha(root);
+  if (!head) return null;
+  const key = `${pathKey(root)}\0${head}`;
+  const hit = upstreams.get(key);
+  if (hit !== undefined) return hit;
+
+  const name = (await git(root, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}']))?.trim() || null;
+  if (upstreams.size >= KEEP_LOGS) upstreams.clear();
+  upstreams.set(key, name);
+  return name;
+}
+
+const ancestry = new Map<string, boolean>();
+const KEEP_ANCESTRY = 2000;
+
+// Is `a` already in `b`? A yes is permanent — what a branch holds it keeps —
+// so it is remembered for good. A no only holds until something moves, so it
+// is remembered against this HEAD and asked again after the next commit.
+export async function isAncestor(root: string, a: string, b: string): Promise<boolean> {
+  if (!a || !b) return false;
+  const head = await headSha(root);
+  if (!head) return false;
+
+  const key = `${pathKey(root)}\0${a}\0${b}`;
+  if (ancestry.get(key)) return true;
+  if (ancestry.get(`${key}\0${head}`) === false) return false;
+
+  const yes = (await git(root, ['merge-base', '--is-ancestor', a, b])) !== null;
+  if (ancestry.size >= KEEP_ANCESTRY) ancestry.clear();
+  ancestry.set(yes ? key : `${key}\0${head}`, yes);
+  return yes;
+}
+
+// The commit on `into`'s own first-parent history that first held `sha`: the
+// merge that brought a branch in. A branch that was fast-forwarded has no
+// merge commit, and then this is the first commit after it, which is the same
+// minute. Null when `sha` has not arrived there at all.
+export async function landedIn(root: string, sha: string, into: string): Promise<Commit | null> {
+  const out = await git(root, ['log', '--first-parent', '--ancestry-path', '-z', LOG_FORMAT, `${sha}..${into}`]);
+  if (out === null) return null;
+  const records = out.split('\0').filter(record => record.includes(FIELD));
+  // Oldest last: the first commit of `into` that could see `sha`.
+  const last = records[records.length - 1]?.split(FIELD);
+  if (!last?.[0] || !last[1]) return null;
+  const family = (last[2] ?? '').split(' ').filter(Boolean);
+  return {sha: last[0], at: Number(last[1]) * 1000, parent: family[0] ?? '', subject: (last[3] ?? '').trim(), merge: family.length > 1};
 }
 
 // Which files two commits differ in, and by how much. `--relative` keeps the

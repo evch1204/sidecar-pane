@@ -1,5 +1,6 @@
 import {statusOf, type AgentRun} from '../../core/agents';
 import type {TurnChange} from '../../core/turns';
+import type {WorktreeRun} from '../../core/worktrees';
 import {blankRow, pageRow, RIGHT_PAD, seg, sp, spineRow, tokens, widthOf, type Line, type Seg} from '../cells';
 import {glyph, theme} from '../theme';
 import {wrap} from '../util';
@@ -21,6 +22,11 @@ export type AgentsInput = {
   agents: AgentRun[];
   open: Pick<Open, 'agents' | 'folded'>;
   sel: string | null;
+  // The folders the agents worked in, and the chat's own model, so a lane can
+  // be grouped by worktree and an agent only shows a model chip when its model
+  // is not the chat's. Both optional: without them the view reads as it did.
+  worktrees?: WorktreeRun[];
+  chatModel?: string;
 };
 
 // Past this many agents in one turn, the finished ones fold into one row. The

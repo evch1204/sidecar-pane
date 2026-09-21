@@ -31,6 +31,9 @@ export type Act =
   // that can be cleared from where they are shown.
   | {type: 'group'; group: Group}
   | {type: 'filter'; what: 'chat' | 'changedOnly'; on: boolean}
+  // How much of the repository the Changes view covers: the folder the pane is
+  // in, or every worktree of it.
+  | {type: 'scope'; scope: 'mine' | 'all'}
   // The reader's two pills: a markdown file as a page, or as it is written.
   | {type: 'page'; raw: boolean}
   | {type: 'back'}
@@ -149,23 +152,57 @@ export function spineRow(
   };
 }
 
+// Column 0 is the margin, the mark is column 1, and a stream row's content
+// starts at column 4.
+export const STREAM_PREFIX = 4;
+
+// The same row with one more column of air: the mark, two spaces, and the
+// content from column 4. A block's own rows are read as a group, and a column
+// of space between the line and the words is what makes them one; a two column
+// mark (a tree branch, `├─`) takes that column back, so every row in a block
+// starts its text in the same place and the right edge never moves.
+export function streamRow(
+  cols: number,
+  left: Seg[] = [],
+  right: Seg[] = [],
+  more: RowMore & {mark?: Seg; live?: boolean} = {},
+): Line {
+  const {bg, mark, live, ...rest} = more;
+  const first = mark ?? spineMark(live);
+  const w = width(first.text);
+  const gap = Math.max(1, STREAM_PREFIX - 1 - w);
+  return {
+    ...rest,
+    segs: [
+      sp(1),
+      {...first, bg: first.bg ?? bg},
+      sp(gap, bg),
+      ...fit(left, right, cols - 1 - w - gap - RIGHT_PAD, bg),
+      sp(RIGHT_PAD, bg),
+    ],
+  };
+}
+
 // A well is the dark inset a diff or a file sits in. It always hangs off a
 // left line, so it starts at the content column and ends where every other
-// row ends.
-export const wellWidth = (cols: number): number => cols - 4 - RIGHT_PAD;
+// row ends. `wide` is the same well under a `streamRow`, one column further in.
+export const wellWidth = (cols: number, wide = false): number => cols - 4 - RIGHT_PAD - (wide ? 1 : 0);
 
-type WellMore = RowMore & {live?: boolean};
+type WellMore = RowMore & {live?: boolean; wide?: boolean};
 
 export function wellRow(cols: number, left: Seg[] = [], right: Seg[] = [], more: WellMore = {}): Line {
-  const {bg, live, ...rest} = more;
-  const inner = fit(left, right, wellWidth(cols), bg ?? theme.well);
-  return {...rest, segs: [sp(1), spineMark(live), sp(1), ...inner, sp(RIGHT_PAD)]};
+  const {bg, live, wide, ...rest} = more;
+  const inner = fit(left, right, wellWidth(cols, wide), bg ?? theme.well);
+  return {...rest, segs: [sp(1), spineMark(live), sp(wide ? 2 : 1), ...inner, sp(RIGHT_PAD)]};
 }
 
 // Half a row of breathing room where the page meets a well.
 function wellEdge(cols: number, half: string, more: WellMore): Line {
-  const {live, bg, ...rest} = more;
-  return {...rest, segs: [sp(1), spineMark(live), sp(1), seg(half.repeat(wellWidth(cols)), theme.well), sp(RIGHT_PAD)]};
+  const {live, bg, wide, ...rest} = more;
+  return {
+    ...rest,
+    segs: [sp(1), spineMark(live), sp(wide ? 2 : 1), seg(half.repeat(wellWidth(cols, wide)), theme.well), sp(RIGHT_PAD)],
+  };
 }
 
 export function wellTop(cols: number, more: WellMore = {}): Line {
@@ -186,7 +223,7 @@ export function overlay(base: Seg[], at: number, over: Seg[], total: number): Se
 
 // A run of block glyphs is a fill painted as a foreground, so it has to dim
 // like a fill. Greying it would leave bright strips behind an open menu.
-const BLOCKS = /^[▄▀█▎▐▁▂▃▅▆▇]+$/;
+const BLOCKS = /^[▄▀█▎▐▌▁▂▃▅▆▇]+$/;
 
 // What sits behind an open menu: same shapes, no colour.
 export function dimmed(line: Line): Line {
@@ -299,6 +336,65 @@ export function bigDigits(
       return i ? [sp(scale, bg), ...cells] : cells;
     }),
   );
+}
+
+// A figure with ground under it: half a cell of the chip's colour, the text,
+// then the other half. Two columns wider than the words, no box, and nothing
+// painted on the rows above or below.
+export function chip(text: string, bg: string, fg: string, more: Omit<Seg, 'text' | 'color' | 'bg'> = {}): Seg[] {
+  return [seg(glyph.chipL, bg), seg(text, fg, {...more, bg}), seg(glyph.chipR, bg)];
+}
+
+// One bar in several colours. The parts are all the same glyph on the same
+// row, because in a terminal they are one run of text: drawing them with
+// different glyphs, or on two rows, would break the bar into pieces.
+export function splitBar(parts: [number, string][]): Seg[] {
+  return parts.filter(([cells]) => cells > 0).map(([cells, color]) => seg(glyph.lower.repeat(cells), color));
+}
+
+// How big a change is, in five cells. Lines, not files: a one line fix and a
+// rewrite are the two ends of this scale, and the steps are wide because what
+// is being read is "small, medium, big", not a number.
+export const SIZE_CELLS = 5;
+
+export function sizeLit(total: number): number {
+  if (total <= 0) return 0;
+  if (total < 10) return 1;
+  if (total < 50) return 2;
+  if (total < 150) return 3;
+  if (total < 500) return 4;
+  return SIZE_CELLS;
+}
+
+// Which way the change went. A turn that removed anything at all keeps at
+// least one red cell, and one that added anything keeps at least one green,
+// so neither side is ever rounded out of sight; when there is only one cell to
+// share, the larger side has it.
+export function sizeSplit(added: number, removed: number): {lit: number; green: number; red: number} {
+  const total = added + removed;
+  const lit = sizeLit(total);
+  if (lit === 0) return {lit: 0, green: 0, red: 0};
+
+  let red = removed ? Math.max(1, Math.round((lit * removed) / total)) : 0;
+  if (red >= lit && added > 0) red = lit === 1 ? (removed > added ? 1 : 0) : lit - 1;
+  return {lit, green: lit - red, red};
+}
+
+export function sizeCells(added: number, removed: number): Seg[] {
+  const {green, red} = sizeSplit(added, removed);
+  return splitBar([[green, theme.add], [red, theme.del], [SIZE_CELLS - green - red, theme.track]]);
+}
+
+// The eighths a turn's size reads as in the day's skyline. Nothing is ever
+// zero: a turn that changed nothing is still a turn, and an empty column would
+// read as a gap in the day.
+const SKYLINE = [1, 2, 3, 5, 6, 8];
+
+// One turn of the day, two columns wide so the chart keeps its shape in a
+// narrow pane.
+export function skylineCol(lit: number, colour: string): Seg[] {
+  const eighths = SKYLINE[Math.max(0, Math.min(SKYLINE.length - 1, lit))]!;
+  return [seg(glyph.columns[eighths]!.repeat(2), colour)];
 }
 
 // +12 −3, each in its own right-aligned column so a list lines up.

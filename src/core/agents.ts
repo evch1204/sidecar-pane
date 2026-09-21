@@ -41,6 +41,13 @@ export type AgentRun = {
   // 1 for an agent the main chat started, 2 for one started by an agent.
   depth: number;
   model: string;
+  // The folder Claude Code gave the agent of its own: a git worktree on its
+  // own branch, so several agents can edit the same repo at once. Its meta
+  // file says so; there is no other record once the folder is gone.
+  worktree?: {path: string; branch: string};
+  // Where the agent actually worked, from its own transcript. Usually the same
+  // folder as `worktree`, or the pane's folder for an agent without one.
+  cwd?: string;
   startedAt: number;
   endedAt: number;
   // The last reply ended the agent's turn, so it has handed back.
@@ -55,6 +62,9 @@ export type AgentRun = {
   // a child agent: then the child's, since it lives as long as the child does.
   quiet: {from: number; limit: number};
   tokens: number;
+  // Every tool call the agent made. Counted on its own rather than read off
+  // `steps`, so a view that trims that list cannot change the number.
+  toolUses: number;
   steps: AgentStep[];
   // Absolute paths the agent's own Edit and Write calls named.
   wrote: string[];
@@ -77,11 +87,22 @@ export function newAgentState(): AgentState {
   return {seen: new Map(), feeds: new Map(), notices: new Map()};
 }
 
-type Meta = {agentType?: string; description?: string; toolUseId?: string; spawnDepth?: number; model?: string};
+type Meta = {
+  agentType?: string;
+  description?: string;
+  toolUseId?: string;
+  spawnDepth?: number;
+  model?: string;
+  worktreePath?: string;
+  worktreeBranch?: string;
+  spawnedWithWorktree?: boolean;
+};
 
 type Line = {
   type?: string;
   timestamp?: string;
+  // Every line of a transcript carries the folder it was written in.
+  cwd?: string;
   // Both only on the lines that carry a task notification: what put the line
   // there, and, on a queued one, the notification's own text.
   turnOrigin?: string;
@@ -201,6 +222,10 @@ function parseInto(seen: Seen, lines: string[], notices: Map<string, Notice>): v
       run.endedAt = Math.max(run.endedAt, at);
     }
 
+    // The first line that says where it is running is enough: an agent cannot
+    // change folder half way through.
+    if (!run.cwd && line.cwd) run.cwd = line.cwd;
+
     // An agent that started a child agent is told here when the child stops,
     // exactly as a chat is.
     const notice = noticeIn(line);
@@ -234,6 +259,7 @@ function parseInto(seen: Seen, lines: string[], notices: Map<string, Notice>): v
       if (block.type === 'text' && block.text?.trim()) run.says = block.text.trim();
       if (block.type !== 'tool_use' || !block.name) continue;
       run.done = false;
+      run.toolUses += 1;
       if (block.id) seen.awaiting.add(block.id);
       const input = block.input ?? {};
       const file = typeof input.file_path === 'string' ? path.resolve(input.file_path) : null;
@@ -338,12 +364,19 @@ export function readAgents(root: string, state: AgentState): AgentRun[] {
             toolUseId: meta.toolUseId ?? '',
             depth: meta.spawnDepth ?? 1,
             model: meta.model ?? '',
+            // `spawnedWithWorktree` and the two paths travel together, but the
+            // paths are what matter, so either of them is enough.
+            worktree:
+              meta.worktreePath || meta.worktreeBranch
+                ? {path: meta.worktreePath ?? '', branch: meta.worktreeBranch ?? ''}
+                : undefined,
             startedAt: 0,
             endedAt: 0,
             done: false,
             waiting: false,
             quiet: {from: 0, limit: STALLED_MS},
             tokens: 0,
+            toolUses: 0,
             steps: [],
             wrote: [],
             says: '',
@@ -398,6 +431,31 @@ export function readAgents(root: string, state: AgentState): AgentRun[] {
 }
 
 export type AgentStatus = 'running' | 'done' | 'stopped';
+
+// The most agents that were ever running at the same time. "3 agents · at
+// most 3 at once" is the difference between work done in parallel and work
+// done one after another, and a list of rows cannot show it.
+export function maxOverlap(agents: AgentRun[], now: number): number {
+  const edges: {at: number; delta: number}[] = [];
+  for (const run of agents) {
+    if (!run.startedAt) continue;
+    // One still running covers the span up to now.
+    const end = Math.max(run.startedAt, statusOf(run, now) === 'running' ? now : run.endedAt);
+    edges.push({at: run.startedAt, delta: 1}, {at: end, delta: -1});
+  }
+
+  // An agent that ends exactly as another starts was never beside it, so the
+  // ends are walked before the starts.
+  edges.sort((a, b) => a.at - b.at || a.delta - b.delta);
+  let at = 0;
+  let most = 0;
+  for (const edge of edges) {
+    at += edge.delta;
+    most = Math.max(most, at);
+  }
+
+  return most;
+}
 
 export function statusOf(run: AgentRun, now: number): AgentStatus {
   // The notification wins: Claude Code wrote it when the agent stopped, and it
