@@ -22,6 +22,10 @@ export const theme = {
   link: '#8FB4E8',
   keyword: '#C6A0F0',
   string: '#A8CF8E',
+  // Two more hues that mean nothing on their own, so a fifth and sixth model
+  // can be told apart without borrowing a colour that already has a job.
+  teal: '#6FC7C1',
+  pink: '#E39AC0',
 
   // The left line that runs under an open turn. Quiet enough to be structure
   // rather than content; the line of a running turn is drawn in `accent`.
@@ -53,6 +57,12 @@ export const theme = {
 
 // Subagents are told apart by a label first and a colour second.
 export const agentColours = [theme.link, theme.string, theme.warn, theme.keyword] as const;
+
+// Models are told apart by colour alone — the same hue carries a model's own
+// line, its slice of the stacked bar and its chip in the legend — so this list
+// keeps clear of the colours that already mean something: `accent` is the
+// cursor, `warn` is a warning, `add` and `del` are an edit.
+export const modelColours = [theme.link, theme.string, theme.keyword, theme.teal, theme.pink] as const;
 
 // One big number, as a proportional pixel font: five pixel rows a glyph, `#`
 // lit, drawn on three screen rows of half blocks. A glyph is exactly as wide

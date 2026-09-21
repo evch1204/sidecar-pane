@@ -173,6 +173,33 @@ export function paceOf(spends: Spend[], now: number): Pace {
   return {buckets, bucketMs, from};
 }
 
+// Where the pace of this window lands: either it runs out of allowance before
+// the window resets, or it ends the window with some left.
+export type Outlook = {kind: 'limit'; at: number; minutes: number} | {kind: 'end'; part: number};
+
+// Too little of a window behind us and the rate says nothing, so there is no
+// answer rather than a wild one.
+export const OUTLOOK_MIN_MS = 10 * 60_000;
+
+// Everything here comes off the reading itself, nothing is guessed. A window is
+// five hours long and the reading says when it resets, so its start is known;
+// `used / elapsed` is the rate the allowance has actually gone at, and what is
+// left of the window goes at that same rate. Null when there is nothing to say:
+// no reading, the window already over, nothing spent, or barely started.
+export function paceOutlook(win: Window | null, now: number): Outlook | null {
+  if (!win || !win.resetsAt) return null;
+  const elapsed = now - (win.resetsAt - WINDOW_MS);
+  const remaining = win.resetsAt - now;
+  const used = win.usedPercentage / 100;
+  if (elapsed < OUTLOOK_MIN_MS || remaining <= 0 || used <= 0) return null;
+  const rate = used / elapsed;
+  const projected = used + rate * remaining;
+  if (projected < 1) return {kind: 'end', part: projected};
+  // Already over the line counts as reaching it now.
+  const at = Math.min(win.resetsAt, now + Math.max(0, 1 - used) / rate);
+  return {kind: 'limit', at, minutes: Math.round((win.resetsAt - at) / 60_000)};
+}
+
 export type SessionWindow = {start: number; resetsAt: number; tokens: number};
 
 // The 5 hour window we are in, guessed from the transcripts alone: a window
