@@ -10,6 +10,8 @@ import path from 'node:path';
 // Nothing here is a hook. Sidecar reads what Claude Code already writes.
 
 export type Action = {
+  // The tool call's own id. A subagent's meta file points back at this.
+  id: string;
   tool: string;
   // The one-line description Claude gives its own tool calls.
   why: string;
@@ -18,6 +20,8 @@ export type Action = {
   at: number;
   // True when the call looks like it wrote something rather than read it.
   wrote: boolean;
+  // The shell command, or the kind of subagent, when the call has one.
+  detail: string;
 };
 
 export type Turn = {
@@ -26,6 +30,16 @@ export type Turn = {
   at: number;
   endedAt: number;
   prompt: string;
+  // The last thing Claude said in plain words: usually its own recap.
+  says: string;
+  // When Claude first answered. The gap from `at` is how long it thought.
+  firstReplyAt: number;
+  // New tokens this turn spent on the main thread: input, output and cache
+  // writes. Cache reads are left out, they are nearly free.
+  tokens: number;
+  // How full the context window was at the last reply, in tokens.
+  context: number;
+  model: string;
   actions: Action[];
   // Files this turn looks like it wrote, read out of the transcript. A hint,
   // not a measurement: only a snapshot either side of the turn knows what
@@ -44,7 +58,7 @@ export type Session = {
 
 export type ReadState = {
   // file path -> how far it has been read and what came out
-  seen: Map<string, {size: number; tail: string; session: Session}>;
+  seen: Map<string, {size: number; tail: string; session: Session; messages: Set<string>}>;
 };
 
 export function newReadState(): ReadState {
@@ -108,10 +122,24 @@ type Record_ = {
   turnOrigin?: string;
   isMeta?: boolean;
   isSidechain?: boolean;
-  message?: {role?: string; content?: unknown};
+  message?: {role?: string; content?: unknown; id?: string; model?: string; usage?: Usage};
 };
 
-function parseInto(session: Session, lines: string[], root: string): void {
+export type Usage = {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_creation_input_tokens?: number;
+  cache_read_input_tokens?: number;
+};
+
+// Tokens that count as new work. One reply is written as several records that
+// all repeat the same usage, so callers count each message id once.
+export function newTokens(usage: Usage | undefined): number {
+  if (!usage) return 0;
+  return (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0);
+}
+
+function parseInto(session: Session, lines: string[], root: string, messages: Set<string>): void {
   for (const raw of lines) {
     let record: Record_;
     try {
@@ -142,6 +170,11 @@ function parseInto(session: Session, lines: string[], root: string): void {
         at,
         endedAt: at,
         prompt: record.message.content.replace(/\s+/g, ' ').trim(),
+        says: '',
+        firstReplyAt: 0,
+        tokens: 0,
+        context: 0,
+        model: '',
         actions: [],
         claimed: [],
       });
@@ -153,7 +186,24 @@ function parseInto(session: Session, lines: string[], root: string): void {
     const content = record.message?.content;
     if (!Array.isArray(content)) continue;
 
-    for (const block of content as {type?: string; name?: string; input?: Record<string, unknown>}[]) {
+    if (record.type === 'assistant') {
+      if (!turn.firstReplyAt) turn.firstReplyAt = at;
+      turn.endedAt = Math.max(turn.endedAt, at);
+      if (record.message?.model) turn.model = record.message.model;
+      const usage = record.message?.usage;
+      if (usage) {
+        turn.context = (usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0);
+      }
+
+      const id = record.message?.id;
+      if (id && !messages.has(id)) {
+        messages.add(id);
+        turn.tokens += newTokens(record.message?.usage);
+      }
+    }
+
+    for (const block of content as {type?: string; id?: string; name?: string; text?: string; input?: Record<string, unknown>}[]) {
+      if (block.type === 'text' && record.type === 'assistant' && block.text?.trim()) turn.says = block.text.trim();
       if (block.type !== 'tool_use' || !block.name) continue;
       const input = block.input ?? {};
       const tool = block.name;
@@ -162,11 +212,18 @@ function parseInto(session: Session, lines: string[], root: string): void {
 
       turn.endedAt = Math.max(turn.endedAt, at);
       turn.actions.push({
+        id: block.id ?? '',
         tool,
         why: typeof input.description === 'string' ? input.description : '',
         file: named,
         at,
         wrote,
+        detail:
+          typeof input.command === 'string'
+            ? input.command
+            : typeof input.subagent_type === 'string'
+              ? input.subagent_type
+              : '',
       });
 
       if (!wrote) continue;
@@ -210,6 +267,7 @@ export function readSessions(root: string, state: ReadState): Session[] {
         size: 0,
         tail: '',
         session: {id: name.replace(/\.jsonl$/, ''), title: '', file, startedAt: 0, endedAt: 0, turns: []},
+        messages: new Set(),
       };
       state.seen.set(file, seen);
     }
@@ -229,7 +287,7 @@ export function readSessions(root: string, state: ReadState): Session[] {
     const lines = chunk.split('\n');
     seen.tail = lines.pop() ?? '';
     seen.size = size;
-    parseInto(seen.session, lines, full);
+    parseInto(seen.session, lines, full, seen.messages);
     out.push(seen.session);
   }
 
