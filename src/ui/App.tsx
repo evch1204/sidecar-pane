@@ -21,7 +21,10 @@ import {Screen} from './Screen';
 import {glyph, theme} from './theme';
 import {agentsBadge, agentsLines, agentsTabVisible, runningAgents} from './views/agents';
 import {changesLines, spinner, turnKey, type Open} from './views/changes';
-import {changedPlaces, filesLines, firstReadId, lineId, nodeId, PEEK_ROWS, readerHead, readerLines, type Marks} from './views/files';
+import {
+  changedPlaces, filesLines, firstReadId, MORE_ROWS, nodeId, peekEnd, readerHead, readerIdAt, readerLineOf, readerLines,
+  type Marks,
+} from './views/files';
 import {usageExtras, usageLines, type ExtrasRoom} from './views/usage';
 
 type Props = {
@@ -160,6 +163,16 @@ function useUsage(showing: boolean, live: boolean) {
   return {spends, limits};
 }
 
+// Two mark sets that say the same thing. Git is read every few seconds and
+// hands back a new set every time; anything watching the marks must not be
+// woken by a set that has not actually changed.
+function sameMarks(a: Marks, b: Marks): boolean {
+  if (a === 'all' || b === 'all') return a === b;
+  if (a.size !== b.size) return false;
+  for (const n of a) if (!b.has(n)) return false;
+  return true;
+}
+
 // One file, read, coloured, and marked where it differs from the last commit.
 function useFile(root: string, file: string | null, git: GitState | null, version: number) {
   const view = useMemo<FileView | null>(() => (file ? readFileView(file) : null), [file, version]);
@@ -168,10 +181,10 @@ function useFile(root: string, file: string | null, git: GitState | null, versio
   const [marks, setMarks] = useState<Marks>(NO_MARKS);
 
   useEffect(() => {
-    if (!file || !change) return setMarks(NO_MARKS);
+    if (!file || !change) return setMarks(prev => (sameMarks(prev, NO_MARKS) ? prev : NO_MARKS));
     let alive = true;
     void changedLines(root, file, change).then(next => {
-      if (alive) setMarks(next);
+      if (alive) setMarks(prev => (sameMarks(prev, next) ? prev : next));
     });
     return () => {
       alive = false;
@@ -208,7 +221,13 @@ export function App({root, interactive, mouseDebug = false}: Props) {
   const [changedOnly, setChangedOnly] = useState(false);
   const [peekPath, setPeekPath] = useState<string | null>(null);
   const [peekFrom, setPeekFrom] = useState(0);
+  // Rows the peek's last row has added. It is the peek that grows, not the
+  // page that changes: the tree stays, and so does the file's own row.
+  const [peekRows, setPeekRows] = useState(0);
   const [readerPath, setReaderPath] = useState<string | null>(null);
+  // The line the reader was asked for, in source lines. Resolved into a row
+  // once the file has been read, and again when formatting is toggled.
+  const [target, setTarget] = useState(0);
   const [raw, setRaw] = useState(false);
 
   const slot: Slot = view === 'files' && readerPath ? 'reader' : view;
@@ -299,18 +318,38 @@ export function App({root, interactive, mouseDebug = false}: Props) {
   const nodes = useMemo(() => visibleNodes(root, expanded, only), [root, expanded, only, version]);
   const peekFile = useFile(root, peekPath, git, version);
   const readFile = useFile(root, readerPath, git, version);
-  const formatted = useMemo(
-    () => (readerPath && !raw && isMarkdown(readerPath) && readFile.view?.kind === 'text' ? formatMarkdown(readFile.view.lines, Math.min(cols - 6, 78)) : null),
-    [readerPath, raw, readFile.view, cols],
+  // Markdown is laid out whether or not it is being shown, because `r` has to
+  // map the row under the cursor onto its source line and back.
+  const mdLines = useMemo(
+    () => (readerPath && isMarkdown(readerPath) && readFile.view?.kind === 'text' ? formatMarkdown(readFile.view.lines, Math.min(cols - 6, 78)) : null),
+    [readerPath, readFile.view, cols],
   );
+  const formatted = raw ? null : mdLines;
   const historyOf = (file: string | null) => (file ? (histories.find(h => h.path === file) ?? null) : null);
 
-  // A peek opens on the first thing that changed.
+  // A peek opens on the first thing that changed, and then stays where you put
+  // it. Positioning once per file is the whole point: git is read every few
+  // seconds, and a reset on every read undid `]` a moment after it landed.
+  const placed = useRef<string | null>(null);
   useEffect(() => {
+    if (!peekPath) {
+      placed.current = null;
+      return;
+    }
+
     const total = peekFile.view?.kind === 'text' ? peekFile.view.lines.length : 0;
     const first = changedPlaces(peekFile.marks, total)[0];
+    // The marks arrive after the file does, so the first place is part of the
+    // key: the peek is positioned again the once, when it is finally known.
+    const key = `${peekPath}|${first ?? 0}`;
+    if (placed.current === key) return;
+    placed.current = key;
     setPeekFrom(first ? Math.max(0, first - 4) : 0);
-  }, [peekPath, peekFile.marks]);
+  }, [peekPath, peekFile.view, peekFile.marks]);
+
+  // Growing the peek is about this window on this file, so a new file or a
+  // jump to another changed place starts over.
+  useEffect(() => setPeekRows(0), [peekPath, peekFrom]);
 
   // ---- the lines of the current view -----------------------------------------
 
@@ -342,7 +381,9 @@ export function App({root, interactive, mouseDebug = false}: Props) {
       head: [],
       lines: filesLines({
         cols, root, nodes, changes: git?.changes ?? null, changedOnly, sel: at,
-        peek: peekPath && peekFile.view ? {path: peekPath, view: peekFile.view, segments: peekFile.segments, marks: peekFile.marks, from: peekFrom, history: historyOf(peekPath)} : null,
+        peek: peekPath && peekFile.view
+          ? {path: peekPath, view: peekFile.view, segments: peekFile.segments, marks: peekFile.marks, from: peekFrom, extra: peekRows, history: historyOf(peekPath)}
+          : null,
       }),
     };
   };
@@ -350,8 +391,9 @@ export function App({root, interactive, mouseDebug = false}: Props) {
   // The cursor is remembered by id, so it stays on the same thing through a
   // refresh. When that thing is gone it falls to the nearest line that is left.
   const lastIndex = useRef<Record<Slot, number>>({changes: 0, files: 0, agents: 0, usage: 0, reader: 0});
-  // The row a toggle was aimed at, and the screen row it was on.
-  const anchor = useRef<{id: string; y: number} | null>(null);
+  // The row a toggle was aimed at, and the screen row it was on. `waits` lets
+  // it stand for a render or two while the row it names is still being built.
+  const anchor = useRef<{id: string; y: number; slot: Slot; waits?: number} | null>(null);
   const built = useMemo(() => {
     let made = build(sel[slot]);
     let index = made.lines.findIndex(line => line.pick && line.id === sel[slot]);
@@ -366,7 +408,7 @@ export function App({root, interactive, mouseDebug = false}: Props) {
     return {...made, index};
   }, [
     slot, sel, cols, now, frame, group, mine, histories, diff, history.agents, open, diffs, folded, opened, hideSpace,
-    nodes, git, changedOnly, peekPath, peekFile.view, peekFile.segments, peekFile.marks, peekFrom,
+    nodes, git, changedOnly, peekPath, peekFile.view, peekFile.segments, peekFile.marks, peekFrom, peekRows,
     readerPath, readFile.view, readFile.segments, readFile.marks, formatted, spends, limits, root,
   ]);
 
@@ -445,8 +487,14 @@ export function App({root, interactive, mouseDebug = false}: Props) {
     const moved = was.cursor !== cursor || was.height !== height || was.total !== lines.length || was.slot !== slot;
     followed.current = {cursor, height, total: lines.length, slot};
 
-    if (anchor.current) {
-      anchor.current = null;
+    const want = anchor.current;
+    if (want) {
+      // A row the reader was opened on only exists once the file has been
+      // read, so the anchor waits rather than being thrown away. It never
+      // waits for long: a line past the end of the file must not jam the page.
+      const found = lines.some(line => line.id === want.id);
+      const waits = (want.waits ?? 0) + 1;
+      anchor.current = found || want.slot !== slot || waits > 2 ? null : {...want, waits};
       setScroll(s => (s[slot] === at ? s : {...s, [slot]: at}));
       return;
     }
@@ -484,20 +532,25 @@ export function App({root, interactive, mouseDebug = false}: Props) {
   const openReader = (file: string, line = 0) => {
     setView('files');
     setReaderPath(file);
-    // Asked for a line: show the file as written, where line numbers mean something.
-    setRaw(line > 0);
-    // Without a line, the cursor lands on the first line of the file once it
-    // has been read; the effect below does it, because nothing is loaded yet.
-    setSel(s => ({...s, reader: line > 0 ? lineId(line) : null}));
-    setScroll(s => ({...s, reader: Math.max(0, line - 4)}));
+    setTarget(line);
+    // The cursor lands once the file has been read; the effect below does it,
+    // because nothing is loaded on the render that asked for it.
+    setSel(s => ({...s, reader: null}));
+    if (line <= 0) setScroll(s => ({...s, reader: 0}));
   };
 
-  // The reader opens on the file, not on the "Changed by" rows above it.
+  // The reader opens on the line it was asked for, and otherwise on the file
+  // itself rather than on the "Changed by" rows above it.
   useEffect(() => {
     if (!readerPath || sel.reader || !readFile.view) return;
-    const id = firstReadId({view: readFile.view, formatted});
-    if (id) setSel(s => ({...s, reader: id}));
-  }, [readerPath, readFile.view, formatted, sel.reader]);
+    const asked = target > 0 ? readerIdAt(target, formatted) : null;
+    const id = asked ?? firstReadId({view: readFile.view, formatted});
+    if (!id) return;
+    // Those rows mean a line's row is not its line number, so the screen row
+    // is set here instead of guessed from the number.
+    if (asked) anchor.current = {id, y: 3, slot: 'reader'};
+    setSel(s => ({...s, reader: id}));
+  }, [readerPath, readFile.view, formatted, sel.reader, target]);
 
   const reveal = (file: string) => {
     const next = new Set(expanded);
@@ -532,9 +585,22 @@ export function App({root, interactive, mouseDebug = false}: Props) {
         if (!git) return refuse('Not a git repo, so there are no changes to filter by.');
         setView('files');
         return setChangedOnly(command.on ?? !changedOnly);
-      case 'raw':
+      case 'raw': {
         if (!readerPath || !isMarkdown(readerPath)) return refuse('Only a markdown file can be read as written.');
+        // Keep your place. A formatted row covers a range of source lines, so
+        // the two shapes only line up through that range; falling back to the
+        // nearest row index turned line 248 into a paragraph from line 125.
+        const line = readerLineOf(current?.id, mdLines);
+        const to = readerIdAt(line, raw ? mdLines : null);
+        const y = current?.id ? visible.findIndex(row => row.id === current.id) : -1;
+        if (to) {
+          if (y >= 0) anchor.current = {id: to, y, slot: 'reader'};
+          setSel(s => ({...s, reader: to}));
+        }
+
         return setRaw(!raw);
+      }
+
       case 'foldAll': {
         const owner = [current?.id, ...(current?.pins ?? [])].find(id => id?.startsWith('f:'))?.slice(2);
         const groups = owner ? diffs.get(owner) : undefined;
@@ -596,6 +662,17 @@ export function App({root, interactive, mouseDebug = false}: Props) {
         return setPeekPath(act.path);
       case 'read':
         return openReader(act.path, act.line);
+      case 'more': {
+        // The label promised more of this file, so that is what it gives: the
+        // peek grows in place and the tree stays. `o` is still the only way
+        // into the whole-file reader. With a changed place below the window,
+        // the row is the `]` key instead, because that is what it says.
+        const total = peekFile.view?.kind === 'text' ? peekFile.view.lines.length : 0;
+        const end = peekEnd(total, peekFrom, peekRows);
+        if (changedPlaces(peekFile.marks, total).some(n => n > end)) return nextChange(1);
+        return setPeekRows(rows => rows + MORE_ROWS);
+      }
+
       case 'goTurn': {
         const isNewest = newest ? turnKey(newest) === act.key : false;
         setReaderPath(null);
@@ -653,11 +730,12 @@ export function App({root, interactive, mouseDebug = false}: Props) {
     if (slot === 'files' && peekPath && peekFile.view?.kind === 'text') {
       const places = changedPlaces(peekFile.marks, peekFile.view.lines.length);
       if (places.length === 0) return;
-      // A peek shows fourteen lines, so forward means the first change below
-      // them and back means the last change above the one we are anchored on.
+      // Forward means the first change below the lines the peek is showing,
+      // back means the last change above the line it is anchored on.
+      const end = peekEnd(peekFile.view.lines.length, peekFrom, peekRows);
       const to =
         dir > 0
-          ? (places.find(n => n > peekFrom + PEEK_ROWS) ?? places[0]!)
+          ? (places.find(n => n > end) ?? places[0]!)
           : ([...places].reverse().find(n => n < peekFrom + 4) ?? places[places.length - 1]!);
       return setPeekFrom(Math.max(0, to - 4));
     }
@@ -723,7 +801,7 @@ export function App({root, interactive, mouseDebug = false}: Props) {
       while (y > 0 && !visible[y]!.id) y--;
       const owner = visible[y];
       if (owner?.id) {
-        anchor.current = {id: owner.id, y};
+        anchor.current = {id: owner.id, y, slot};
         moveTo(owner.id);
       } else if (line.pick) moveTo(line.id);
     } else if (line.pick) moveTo(line.id);
@@ -783,7 +861,7 @@ export function App({root, interactive, mouseDebug = false}: Props) {
         // Same as a click: the row being opened or closed stays where it is.
         const act = current?.act;
         const y = current?.id ? visible.findIndex(line => line.id === current.id) : -1;
-        if (act && TOGGLING.has(act.type) && y >= 0 && current?.id) anchor.current = {id: current.id, y};
+        if (act && TOGGLING.has(act.type) && y >= 0 && current?.id) anchor.current = {id: current.id, y, slot};
         return perform(act);
       }
 

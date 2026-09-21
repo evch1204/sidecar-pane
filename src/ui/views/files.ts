@@ -18,6 +18,9 @@ import {clock, turnKey} from './changes';
 // on the same left line a turn's diff uses. `o` reads the whole file.
 
 export const PEEK_ROWS = 14;
+// What one press of the peek's last row adds. Enough to be worth the press,
+// small enough that the lines you asked for are still one screen away.
+export const MORE_ROWS = 40;
 
 export type Marks = ReadonlySet<number> | 'all';
 
@@ -28,8 +31,15 @@ export type Peek = {
   marks: Marks;
   // First line shown, zero-based.
   from: number;
+  // Rows the "more lines" row has added to the fourteen it starts with.
+  extra: number;
   history: FileHistory | null;
 };
+
+// The line after the last one a peek shows, one-based, so the tree row and the
+// keys that jump through a file agree on where the window ends.
+export const peekEnd = (total: number, from: number, extra: number): number =>
+  Math.min(total, from + PEEK_ROWS + Math.max(0, extra));
 
 const LETTER_COLOUR = {A: theme.add, M: theme.warn, D: theme.del} as const;
 const LANGUAGE: Record<string, string> = {
@@ -69,6 +79,7 @@ function deadEnd(message: string): string {
   if (/binary/i.test(message)) return 'Binary file, so there are no lines to read. Pick a text file instead.';
   if (/too large/i.test(message)) return `${message} Open it in your editor to read it all.`;
   if (/no longer exists/i.test(message)) return 'This file is gone. Pick another file from the tree.';
+  if (/empty/i.test(message)) return 'This file is empty, so there is nothing to read.';
   return `${message} Pick another file from the tree.`;
 }
 
@@ -89,7 +100,7 @@ function lastTouch(history: FileHistory | null): Seg[] {
 
 // The peek hangs under the file's own row: a rail in the mark column, the file
 // itself in a well, and one hint row. No card, no fills.
-function peekLines(cols: number, root: string, peek: Peek, owner: string): Line[] {
+function peekLines(cols: number, root: string, peek: Peek, owner: string, sel: string | null): Line[] {
   const pins = [owner];
   const rail = {pins};
   const out: Line[] = [spineRow(cols, crumbs(root, peek.path), [seg(kindOf(peek.path, peek.view), theme.dim)], rail)];
@@ -105,7 +116,7 @@ function peekLines(cols: number, root: string, peek: Peek, owner: string): Line[
   const digits = Math.max(3, String(lines.length).length);
   const room = wellWidth(cols) - digits - 3;
   const places = changedPlaces(peek.marks, lines.length);
-  const end = Math.min(lines.length, peek.from + PEEK_ROWS);
+  const end = peekEnd(lines.length, peek.from, peek.extra);
   const well = {pins};
 
   out.push(wellTop(cols, well));
@@ -121,18 +132,26 @@ function peekLines(cols: number, root: string, peek: Peek, owner: string): Line[
     );
   }
 
-  // The last row of the well opens the file at the first line it does not show.
+  // The last row of the well grows the peek in place, or jumps to the next
+  // changed place when there is one below. It says which, and what it costs.
   const below = places.filter(n => n > end).length;
+  const left = lines.length - end;
   const rest = below
     ? `${below} more changed place${below === 1 ? '' : 's'} below`
-    : end < lines.length
-      ? `${lines.length - end} more lines`
+    : left > 0
+      ? `${left} more line${left === 1 ? '' : 's'}`
       : '';
   if (rest) {
     const id = `g:${peek.path}`;
+    const here = id === sel;
+    const bg = here ? theme.surface2 : undefined;
+    const what = below ? 'enter jumps' : `enter shows ${Math.min(MORE_ROWS, left)}`;
+    const label = [seg(`${glyph.gap} ${rest}`, here ? theme.accent : theme.faint, {bg}), seg(`  ${glyph.sep}  ${what}`, theme.faint, {bg})];
+    // The hint is the first thing to go in a narrow pane: the count matters more.
+    const room = wellWidth(cols) - digits - 3;
     out.push(
-      wellRow(cols, [sp(digits + 3), seg(`${glyph.gap} ${rest}`, theme.faint)], [], {
-        ...well, id, pick: true, act: {type: 'read', path: peek.path, line: end + 1},
+      wellRow(cols, [sp(digits + 3, bg), ...(widthOf(label) <= room ? label : [label[0]!])], [], {
+        ...well, bg, id, pick: true, act: {type: 'more', path: peek.path},
       }),
     );
   }
@@ -214,7 +233,7 @@ export function filesLines(input: FilesInput): Line[] {
         bg, id, pick: true, act: fixed ? {type: 'none'} : {type: 'node', path: node.path, dir: node.isDir},
       }),
     );
-    if (peeking && peek) out.push(...peekLines(cols, input.root, peek, id));
+    if (peeking && peek) out.push(...peekLines(cols, input.root, peek, id, sel));
   }
 
   return out;
@@ -235,6 +254,30 @@ export type ReaderInput = {
 
 export const lineId = (n: number): string => `r:${n}`;
 export const mdLineId = (i: number): string => `r:m${i}`;
+
+// Reader rows and source lines, both ways. A raw row is its own line; a
+// formatted row covers a range of them. This is how `r` keeps its place and
+// how `o` lands on a line it was given.
+export function readerLineOf(id: string | null | undefined, formatted: MdLine[] | null): number {
+  if (!id?.startsWith('r:')) return 0;
+  const rest = id.slice(2);
+  if (!rest.startsWith('m')) return Number(rest) || 0;
+  return formatted?.[Number(rest.slice(1))]?.from ?? 0;
+}
+
+export function readerIdAt(line: number, formatted: MdLine[] | null): string | null {
+  if (line <= 0) return null;
+  if (!formatted) return lineId(line);
+  // The row whose source lines hold this one. A fence marker and a table rule
+  // are not written out at all, so anything missed falls to the row before it.
+  const hit = formatted.findIndex(md => md.from <= line && line <= md.to);
+  if (hit >= 0) return mdLineId(hit);
+  let before = -1;
+  formatted.forEach((md, i) => {
+    if (md.from <= line) before = i;
+  });
+  return before >= 0 ? mdLineId(before) : formatted.length ? mdLineId(0) : null;
+}
 
 // The first row of the file itself, so the reader can open on the file rather
 // than on the "changed by" list above it. Null when there is nothing to read.

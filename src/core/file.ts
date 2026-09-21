@@ -16,7 +16,7 @@ export function readFileView(filePath: string): FileView {
   }
 
   if (stat.size > MAX_BYTES) {
-    return {kind: 'notice', message: `Too large to preview (${Math.round(stat.size / 1024)} KB).`};
+    return {kind: 'notice', message: `This file is ${Math.round(stat.size / 1024)} KB, too large to preview.`};
   }
 
   let buffer: Buffer;
@@ -24,6 +24,12 @@ export function readFileView(filePath: string): FileView {
     buffer = fs.readFileSync(filePath);
   } catch {
     return {kind: 'notice', message: 'Could not read this file.'};
+  }
+
+  // Nothing in it at all. Without this the split below hands back one empty
+  // line, and the preview says "1 line" over a blank row.
+  if (buffer.length === 0) {
+    return {kind: 'notice', message: 'This file is empty.'};
   }
 
   // A zero byte in the first chunk is the usual sign of a binary file.
