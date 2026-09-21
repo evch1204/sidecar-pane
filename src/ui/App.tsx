@@ -1,34 +1,28 @@
 import path from 'node:path';
 import {useEffect, useMemo, useRef, useState} from 'react';
-import {Box, Text, useApp, useInput, useStdout} from 'ink';
+import {useApp, useInput, useStdout} from 'ink';
+import {newAgentState, readAgents, type AgentRun} from '../core/agents';
 import {expandGap, loadDiff, type DiffLine, type DiffState} from '../core/diff';
-import {newReadState, readSessions} from '../core/sessions';
-import {openStore, take, type Store} from '../core/snapshot';
-import {byFile, fileInTurn, loadTurns, type TurnChange} from '../core/turns';
-import {readFileView} from '../core/file';
+import {readFileView, type FileView} from '../core/file';
 import {changedLines, loadGit, pathKey, type GitState} from '../core/git';
 import {highlightLines} from '../core/highlight';
+import {formatMarkdown, isMarkdown} from '../core/markdown';
+import {newReadState, readSessions} from '../core/sessions';
+import {openStore, take, type Store} from '../core/snapshot';
 import {visibleNodes} from '../core/tree';
-import {ChangeList} from './ChangeList';
-import {Divider, Footer, Rule, Tabs} from './Chrome';
-import {Diff, viewRows, type DiffGroup} from './Diff';
-import {computeLayout, hitTest, scrollFromThumb, type Half, type View} from './layout';
+import {byFile, fileInTurn, loadTurns, type TurnChange} from '../core/turns';
+import {newUsageState, readLimits, readSpends, type Limits, type Spend} from '../core/usage';
+import {dimmed, overlay, seg, sp, type Act, type Group, type Line, type Seg, type View} from './cells';
+import type {DiffGroup} from './diffrows';
+import {follow, scrollFromThumb, thumb} from './layout';
+import {footer, menuBar, menuBox, menus, tabRow, type Command} from './menu';
 import {DOUBLE_CLICK_MS, MOUSE_OFF, MOUSE_ON, parseMouse, type MouseEvent} from './mouse';
-import {Preview} from './Preview';
-import {theme} from './theme';
-import {TurnList} from './TurnList';
-import {clock, fileRows, targetOf, turnKey, turnRows, type ListRow, type Target} from './turnrows';
-import {width as textWidth} from './util';
-import {Tree} from './Tree';
-import {Why, whyRows} from './Why';
-
-type Group = 'turn' | 'file' | 'flat';
-
-const GROUP_NOTE: Record<Group, string> = {
-  turn: 'by turn',
-  file: 'by file',
-  flat: 'all changes',
-};
+import {Screen} from './Screen';
+import {glyph, theme} from './theme';
+import {agentsLines, runningAgents} from './views/agents';
+import {changesLines, changesSummary, spinner, turnKey, type Open} from './views/changes';
+import {changedPlaces, filesLines, lineId, nodeId, PEEK_ROWS, readerHead, readerLines, type Marks} from './views/files';
+import {usageExtras, usageLines} from './views/usage';
 
 type Props = {
   root: string;
@@ -38,10 +32,25 @@ type Props = {
   mouseDebug?: boolean;
 };
 
+// Each of these keeps its own cursor and scroll position.
+type Slot = View | 'reader';
+
 const NO_MARKS: ReadonlySet<number> = new Set();
 const REFRESH_MS = 3000;
+const SPIN_MS = 250;
 const WHEEL_ROWS = 3;
-const HSCROLL_STEP = 16;
+const GROUPS: Group[] = ['turn', 'file', 'flat'];
+const GROUP_NOTE: Record<Group, string> = {turn: 'by turn', file: 'by file', flat: 'all changes'};
+
+const NONE: ReadonlySet<string> = new Set();
+const CLOSED: Open = {turns: NONE, files: NONE, more: NONE, steps: NONE, says: NONE, agents: NONE, hists: NONE};
+
+function flipped(set: ReadonlySet<string>, key: string): ReadonlySet<string> {
+  const next = new Set(set);
+  if (next.has(key)) next.delete(key);
+  else next.add(key);
+  return next;
+}
 
 function useTerminalSize() {
   const {stdout} = useStdout();
@@ -59,97 +68,20 @@ function useTerminalSize() {
   return size;
 }
 
-// Git state, re-read on a timer. `version` ticks on every read so the tree
-// also notices files that appeared or vanished.
-function useGit(root: string, live: boolean) {
-  const [git, setGit] = useState<GitState | null>(null);
-  const [loaded, setLoaded] = useState(false);
-  const [version, setVersion] = useState(0);
-
-  useEffect(() => {
-    let alive = true;
-    let busy = false;
-    const refresh = async () => {
-      if (busy) return;
-      busy = true;
-      const next = await loadGit(root);
-      busy = false;
-      if (!alive) return;
-      setGit(next);
-      setLoaded(true);
-      setVersion(v => v + 1);
-    };
-
-    void refresh();
-    const timer = live ? setInterval(refresh, REFRESH_MS) : undefined;
-    return () => {
-      alive = false;
-      clearInterval(timer);
-    };
-  }, [root, live]);
-
-  return {git, loaded, version};
-}
-
-// The diff is only read while the Changes view is open: it costs a `git diff`
-// of the whole working tree and nothing else needs it.
-function useDiff(root: string, active: boolean, live: boolean) {
-  const [diff, setDiff] = useState<DiffState | null>(null);
-  const [version, setVersion] = useState(0);
-
+// Run `work` now and then every few seconds, never two at once.
+function usePolling(work: () => Promise<void>, deps: unknown[], active: boolean, live: boolean) {
   useEffect(() => {
     if (!active) return;
     let alive = true;
     let busy = false;
-    const refresh = async () => {
-      if (busy) return;
-      busy = true;
-      const next = await loadDiff(root);
-      busy = false;
-      if (!alive) return;
-      setDiff(next);
-      setVersion(v => v + 1);
-    };
-
-    void refresh();
-    const timer = live ? setInterval(refresh, REFRESH_MS) : undefined;
-    return () => {
-      alive = false;
-      clearInterval(timer);
-    };
-  }, [root, active, live]);
-
-  return {diff, version};
-}
-
-// Chats, their turns, and a snapshot of the project taken every time the
-// session moves. The transcript says which prompt; the snapshots say which
-// lines. Only the Changes view needs either.
-function useHistory(root: string, active: boolean, live: boolean) {
-  const reader = useRef(newReadState());
-  const store = useRef<Store | null>(null);
-  const [changes, setChanges] = useState<TurnChange[]>([]);
-  const [loadedAt, setLoadedAt] = useState(() => Date.now());
-  const [version, setVersion] = useState(0);
-
-  useEffect(() => {
-    if (!active) return;
-    store.current ??= openStore(root);
-    let alive = true;
-    let busy = false;
-
     const tick = async () => {
-      if (busy) return;
+      if (busy || !alive) return;
       busy = true;
-      const now = Date.now();
-      const sessions = readSessions(root, reader.current);
-      if (store.current) await take(store.current, root, now);
-      const next = await loadTurns(root, store.current, sessions, now);
-      busy = false;
-      if (!alive) return;
-      setChanges(next);
-      setLoadedAt(now);
-      setVersion(v => v + 1);
+      try {
+        await work();
+      } finally {
+        busy = false;
+      }
     };
 
     void tick();
@@ -158,58 +90,181 @@ function useHistory(root: string, active: boolean, live: boolean) {
       alive = false;
       clearInterval(timer);
     };
-  }, [root, active, live]);
-
-  return {changes, store: store.current, loadedAt, version};
+  }, [...deps, active, live]);
 }
 
-// Keep `cursor` on screen with as little movement as possible.
-function follow(scroll: number, cursor: number, height: number, total: number): number {
-  const most = Math.max(0, total - height);
-  if (cursor < scroll) return Math.min(most, cursor);
-  if (cursor >= scroll + height) return Math.min(most, cursor - height + 1);
-  return Math.min(most, scroll);
+// Git state. `version` ticks on every read so the tree also notices files
+// that appeared or vanished.
+function useGit(root: string, live: boolean) {
+  const [state, setState] = useState<{git: GitState | null; loaded: boolean; version: number}>({git: null, loaded: false, version: 0});
+  usePolling(async () => {
+    const git = await loadGit(root);
+    setState(s => ({git, loaded: true, version: s.version + 1}));
+  }, [root], true, live);
+  return state;
+}
+
+// The whole working tree against the last commit. Only read while Changes is
+// open: it costs a `git diff` of everything.
+function useDiff(root: string, active: boolean, live: boolean) {
+  const [state, setState] = useState<{diff: DiffState | null; version: number}>({diff: null, version: 0});
+  usePolling(async () => {
+    const diff = await loadDiff(root);
+    setState(s => ({diff, version: s.version + 1}));
+  }, [root], active, live);
+  return state;
+}
+
+// Chats, their turns, their subagents, and a snapshot of the project every
+// time round. The transcript says which prompt; the snapshots say which lines.
+// This runs in every view: a turn that happens while you are looking at Files
+// still has to be measured.
+function useHistory(root: string, live: boolean) {
+  const reader = useRef(newReadState());
+  const agentReader = useRef(newAgentState());
+  const store = useRef<Store | null>(null);
+  const [state, setState] = useState<{changes: TurnChange[]; agents: AgentRun[]; now: number; version: number; loaded: boolean}>({
+    changes: [], agents: [], now: Date.now(), version: 0, loaded: false,
+  });
+
+  usePolling(async () => {
+    store.current ??= openStore(root);
+    const now = Date.now();
+    const sessions = readSessions(root, reader.current);
+    const agents = readAgents(root, agentReader.current);
+    if (store.current) await take(store.current, root, now);
+    const changes = await loadTurns(root, store.current, sessions, now);
+    setState(s => ({changes, agents, now, version: s.version + 1, loaded: true}));
+  }, [root], true, live);
+
+  return {...state, store: store.current};
+}
+
+function useUsage(active: boolean, live: boolean) {
+  const reader = useRef(newUsageState());
+  const [spends, setSpends] = useState<Spend[] | null>(null);
+  const [limits, setLimits] = useState<Limits | null>(null);
+  usePolling(async () => setLimits(readLimits()), [], true, live);
+  usePolling(async () => setSpends([...readSpends(reader.current, Date.now())]), [], active, live);
+  return {spends, limits};
+}
+
+// One file, read, coloured, and marked where it differs from the last commit.
+function useFile(root: string, file: string | null, git: GitState | null, version: number) {
+  const view = useMemo<FileView | null>(() => (file ? readFileView(file) : null), [file, version]);
+  const segments = useMemo(() => (file && view?.kind === 'text' ? highlightLines(file, view.lines) : null), [file, view]);
+  const change = file ? git?.changes.get(pathKey(file)) : undefined;
+  const [marks, setMarks] = useState<Marks>(NO_MARKS);
+
+  useEffect(() => {
+    if (!file || !change) return setMarks(NO_MARKS);
+    let alive = true;
+    void changedLines(root, file, change).then(next => {
+      if (alive) setMarks(next);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [root, file, change]);
+
+  return {view, segments, marks};
 }
 
 export function App({root, interactive, mouseDebug = false}: Props) {
   const {exit} = useApp();
   const {stdout} = useStdout();
   const {cols, rows} = useTerminalSize();
-  const {git, loaded, version} = useGit(root, interactive);
 
-  const [view, setView] = useState<View>('files');
-  const [focus, setFocus] = useState<Half>('list');
-  const [override, setOverride] = useState<number | null>(null);
+  const [view, setView] = useState<View>('changes');
   const [notice, setNotice] = useState('');
   const [mouse, setMouse] = useState(true);
+  const [menu, setMenu] = useState<{open: number; item: number} | null>(null);
+  const [frame, setFrame] = useState(0);
+  const [sel, setSel] = useState<Record<Slot, string | null>>({changes: null, files: null, agents: null, usage: null, reader: null});
+  const [scroll, setScroll] = useState<Record<Slot, number>>({changes: 0, files: 0, agents: 0, usage: 0, reader: 0});
 
-  // Files view.
-  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
-  const [selected, setSelected] = useState<string | null>(null);
-  const [treeScroll, setTreeScroll] = useState(0);
-  const [previewScroll, setPreviewScroll] = useState(0);
-  const [changedOnly, setChangedOnly] = useState(false);
-  const [marks, setMarks] = useState<ReadonlySet<number> | 'all'>(NO_MARKS);
-
-  // Changes view.
-  const {diff, version: diffVersion} = useDiff(root, view === 'changes', interactive);
-  const {changes, store, loadedAt, version: histVersion} = useHistory(root, view === 'changes', interactive);
+  // Changes.
   const [group, setGroup] = useState<Group>('turn');
   const [chat, setChat] = useState<string | null>(null);
-  const [openTurns, setOpenTurns] = useState<ReadonlySet<string>>(new Set());
-  const [showAll, setShowAll] = useState<ReadonlySet<string>>(new Set());
-  const [openFiles, setOpenFiles] = useState<ReadonlySet<string>>(new Set());
-  const [groups, setGroups] = useState<DiffGroup[]>([]);
-  const [fileIndex, setFileIndex] = useState(0);
-  const [listScroll, setListScroll] = useState(0);
-  const [rowCursor, setRowCursor] = useState(0);
-  const [rowScroll, setRowScroll] = useState(0);
-  const [hscroll, setHscroll] = useState(0);
-  const [folded, setFolded] = useState<ReadonlySet<string>>(new Set());
+  const [open, setOpen] = useState<Open>(CLOSED);
+  const [diffs, setDiffs] = useState<ReadonlyMap<string, DiffGroup[]>>(new Map());
+  const [folded, setFolded] = useState<ReadonlySet<string>>(NONE);
   const [opened, setOpened] = useState<ReadonlyMap<string, DiffLine[]>>(new Map());
   const [hideSpace, setHideSpace] = useState(false);
 
-  // Changed files plus every folder above them, for the "changed only" filter.
+  // Files.
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(NONE);
+  const [changedOnly, setChangedOnly] = useState(false);
+  const [peekPath, setPeekPath] = useState<string | null>(null);
+  const [peekFrom, setPeekFrom] = useState(0);
+  const [readerPath, setReaderPath] = useState<string | null>(null);
+  const [raw, setRaw] = useState(false);
+
+  const slot: Slot = view === 'files' && readerPath ? 'reader' : view;
+
+  const {git, loaded, version} = useGit(root, interactive);
+  const {diff, version: diffVersion} = useDiff(root, view === 'changes', interactive);
+  const history = useHistory(root, interactive);
+  const {spends, limits} = useUsage(view === 'usage', interactive);
+  const now = history.now;
+
+  const mine = useMemo(() => (chat ? history.changes.filter(c => c.chatId === chat) : history.changes), [history.changes, chat]);
+  const histories = useMemo(() => byFile(mine), [mine]);
+  const newest = history.changes[history.changes.length - 1];
+  const working = Boolean(newest?.running);
+  const agentsRunning = runningAgents(history.agents, now);
+
+  // The spinner only ticks while there is something spinning.
+  useEffect(() => {
+    if (!interactive || (!working && agentsRunning === 0)) return;
+    const timer = setInterval(() => setFrame(f => f + 1), SPIN_MS);
+    return () => clearInterval(timer);
+  }, [interactive, working, agentsRunning]);
+
+  // ---- diffs for the file rows that are open ---------------------------------
+
+  const settled = useRef(new Set<string>());
+  useEffect(() => {
+    let alive = true;
+    const load = async (key: string): Promise<DiffGroup[]> => {
+      const at = key.indexOf('|');
+      const scope = key.slice(0, at);
+      const rel = key.slice(at + 1);
+      const fromGit = (note?: string): DiffGroup[] => {
+        const found = diff?.files[diff.index.get(pathKey(path.resolve(root, rel))) ?? -1] ?? null;
+        return found
+          ? [{key: 'git', band: null, file: found, note}]
+          : [{key: 'none', band: null, file: null, note: 'Nothing to show: this file matches the last commit.'}];
+      };
+
+      if (scope === 'git') return fromGit();
+      const change = history.changes.find(c => turnKey(c) === scope);
+      if (change?.measured && history.store) {
+        const one = await fileInTurn(root, history.store, change, rel);
+        // A finished turn's diff never changes, so it is only read once.
+        if (!change.running) settled.current.add(key);
+        return one ? [{key: 'turn', band: null, file: one}] : [{key: 'none', band: null, file: null, note: 'That turn left no diff for this file.'}];
+      }
+
+      return fromGit('Not recorded turn by turn. This is everything since the last commit.');
+    };
+
+    void (async () => {
+      for (const key of open.files) {
+        if (settled.current.has(key) && diffs.has(key)) continue;
+        const groups = await load(key);
+        if (!alive) return;
+        setDiffs(prev => new Map(prev).set(key, groups));
+      }
+    })();
+
+    return () => {
+      alive = false;
+    };
+  }, [open.files, history.version, diffVersion]);
+
+  // ---- files ------------------------------------------------------------------
+
   const only = useMemo(() => {
     if (!changedOnly || !git) return undefined;
     const rootKey = pathKey(root);
@@ -223,733 +278,498 @@ export function App({root, interactive, mouseDebug = false}: Props) {
   }, [changedOnly, git, root]);
 
   const nodes = useMemo(() => visibleNodes(root, expanded, only), [root, expanded, only, version]);
-  const found = nodes.findIndex(node => node.path === selected);
-  const treeCursor = found >= 0 ? found : 0;
-  const current = nodes[treeCursor];
-  const openPath = current && !current.isDir ? current.path : null;
-  const change = openPath ? git?.changes.get(pathKey(openPath)) : undefined;
-
-  const preview = useMemo(() => (openPath ? readFileView(openPath) : null), [openPath, version]);
-  const segments = useMemo(
-    () => (openPath && preview?.kind === 'text' ? highlightLines(openPath, preview.lines) : null),
-    [openPath, preview],
+  const peekFile = useFile(root, peekPath, git, version);
+  const readFile = useFile(root, readerPath, git, version);
+  const formatted = useMemo(
+    () => (readerPath && !raw && isMarkdown(readerPath) && readFile.view?.kind === 'text' ? formatMarkdown(readFile.view.lines, Math.min(cols - 6, 78)) : null),
+    [readerPath, raw, readFile.view, cols],
   );
-  const lineCount = preview?.kind === 'text' ? preview.lines.length : 0;
+  const historyOf = (file: string | null) => (file ? (histories.find(h => h.path === file) ?? null) : null);
 
-  const files = diff?.files ?? [];
-  const flatFile = files[Math.min(fileIndex, Math.max(0, files.length - 1))] ?? null;
+  // A peek opens on the first thing that changed.
+  useEffect(() => {
+    const total = peekFile.view?.kind === 'text' ? peekFile.view.lines.length : 0;
+    const first = changedPlaces(peekFile.marks, total)[0];
+    setPeekFrom(first ? Math.max(0, first - 4) : 0);
+  }, [peekPath, peekFile.marks]);
 
-  // One chat at a time, or all of them.
-  const mine = useMemo(() => (chat ? changes.filter(c => c.chatId === chat) : changes), [changes, chat]);
-  const histories = useMemo(() => byFile(mine), [mine]);
-  const listRows: ListRow[] = useMemo(() => {
-    if (group === 'turn') return turnRows(mine, openTurns, showAll, loadedAt);
-    if (group === 'file') return fileRows(histories, openFiles);
-    return [];
-  }, [group, mine, histories, openTurns, showAll, openFiles, loadedAt]);
+  // ---- the lines of the current view -----------------------------------------
 
-  const listLength = group === 'flat' ? files.length : listRows.length;
-  // Section headers are labels, not rows you can act on, so the cursor steps
-  // over them rather than stopping on one.
-  const pickable = (at: number): boolean => group === 'flat' || listRows[at]?.kind !== 'section';
-  const settle = (at: number, dir: 1 | -1): number => {
-    for (let i = at; i >= 0 && i < listLength; i += dir) if (pickable(i)) return i;
-    for (let i = at; i >= 0 && i < listLength; i -= dir) if (pickable(i)) return i;
-    return at;
+  const build = (at: string | null): {head: Line[]; lines: Line[]} => {
+    if (slot === 'changes') {
+      return {
+        head: [],
+        lines: changesLines({
+          cols, now, frame, root, group, changes: mine, histories, flat: diff ? diff.files : null, agents: history.agents,
+          open, diffs, folded, opened, hideSpace, sel: at,
+        }),
+      };
+    }
+
+    if (slot === 'agents') return {head: [], lines: agentsLines({cols, now, frame, root, changes: history.changes, agents: history.agents, open, sel: at})};
+    if (slot === 'usage') {
+      const last = [...history.changes].sort((a, b) => a.turn.endedAt - b.turn.endedAt).pop();
+      return {head: [], lines: usageLines({cols, now, spends, limits, context: last?.turn.context ? {tokens: last.turn.context, model: last.turn.model} : null})};
+    }
+
+    if (slot === 'reader' && readerPath && readFile.view) {
+      const input = {cols, root, path: readerPath, view: readFile.view, segments: readFile.segments, marks: readFile.marks, history: historyOf(readerPath), sel: at, formatted};
+      return {head: readerHead(input), lines: readerLines(input)};
+    }
+
+    return {
+      head: [],
+      lines: filesLines({
+        cols, root, nodes, changes: git?.changes ?? null, changedOnly, sel: at,
+        peek: peekPath && peekFile.view ? {path: peekPath, view: peekFile.view, segments: peekFile.segments, marks: peekFile.marks, from: peekFrom, history: historyOf(peekPath)} : null,
+      }),
+    };
   };
 
-  const listCursor = settle(Math.min(fileIndex, Math.max(0, listLength - 1)), 1);
-  const target: Target = group === 'flat' ? {kind: 'none'} : targetOf(listRows[listCursor]);
+  // The cursor is remembered by id, so it stays on the same thing through a
+  // refresh. When that thing is gone it falls to the nearest line that is left.
+  const lastIndex = useRef<Record<Slot, number>>({changes: 0, files: 0, agents: 0, usage: 0, reader: 0});
+  const built = useMemo(() => {
+    let made = build(sel[slot]);
+    let index = made.lines.findIndex(line => line.pick && line.id === sel[slot]);
+    if (index < 0) {
+      const picks = made.lines.map((line, i) => (line.pick ? i : -1)).filter(i => i >= 0);
+      if (picks.length) {
+        index = picks.reduce((best, i) => (Math.abs(i - lastIndex.current[slot]) < Math.abs(best - lastIndex.current[slot]) ? i : best), picks[0]!);
+        made = build(made.lines[index]!.id ?? null);
+      }
+    }
 
-  // What the body is showing, as one string, so it only reloads when it moves.
-  const targetKey =
-    group === 'flat'
-      ? `flat:${flatFile?.rel ?? ''}`
-      : target.kind === 'file'
-        ? `file:${target.change ? turnKey(target.change) : 'git'}:${target.rel}`
-        : target.kind === 'history'
-          ? `hist:${target.history.rel}:${target.history.touches.length}`
-          : target.kind === 'why'
-            ? `why:${turnKey(target.change)}`
-            : 'none';
+    return {...made, index};
+  }, [
+    slot, sel, cols, now, frame, group, mine, histories, diff, history.agents, open, diffs, folded, opened, hideSpace,
+    nodes, git, changedOnly, peekPath, peekFile.view, peekFile.segments, peekFile.marks, peekFrom,
+    readerPath, readFile.view, readFile.segments, readFile.marks, formatted, spends, limits, root,
+  ]);
 
+  const {lines, head} = built;
+  const cursor = built.index;
+  const current: Line | undefined = lines[cursor];
   useEffect(() => {
-    let alive = true;
-    const build = async () => {
-      if (group === 'flat') {
-        return alive && setGroups(flatFile ? [{key: 'flat', band: null, file: flatFile}] : []);
-      }
+    if (cursor >= 0) lastIndex.current[slot] = cursor;
+    const id = current?.id ?? null;
+    if (id !== sel[slot]) setSel(s => ({...s, [slot]: id}));
+  }, [cursor, current?.id, slot]);
 
-      if (target.kind === 'file') {
-        if (target.change?.measured && store) {
-          const one = await fileInTurn(root, store, target.change, target.rel);
-          if (alive) {
-            setGroups(
-              one
-                ? [{key: 'turn', band: null, file: one}]
-                : [{key: 'none', band: null, file: null, note: 'That turn left no diff for this file.'}],
-            );
-          }
+  // ---- layout -----------------------------------------------------------------
 
-          return;
-        }
+  const roomy = rows >= 28;
+  const project = path.basename(root);
+  const list = menus({view, group, hideSpace, changedOnly, mouse, agents: agentsRunning});
+  const status: Seg[] = working
+    ? [seg(spinner(frame), theme.accent), seg(' working', theme.ink)]
+    : agentsRunning
+      ? [seg(spinner(frame), theme.accent), seg(` ${agentsRunning} agent${agentsRunning === 1 ? '' : 's'}`, theme.ink)]
+      : [seg(glyph.dot, theme.faint), seg(' idle', theme.dim)];
+  const extras = usageExtras(limits, now);
+  const bar = menuBar(cols, list, menu?.open ?? null, [...extras, ...(extras.length ? [sp(3)] : []), ...status]);
 
-        const found = diff?.files[diff.index.get(pathKey(target.path)) ?? -1] ?? null;
-        if (alive) {
-          setGroups(
-            found
-              ? [{key: 'git', band: null, file: found}]
-              : [{key: 'none', band: null, file: null, note: 'Nothing to show: this file matches the last commit.'}],
-          );
-        }
-
-        return;
-      }
-
-      if (target.kind === 'history') {
-        // One band per turn that touched the file, newest first.
-        const out: DiffGroup[] = [];
-        for (const touch of [...target.history.touches].reverse()) {
-          if (!touch.change.measured || !store) continue;
-          const one = await fileInTurn(root, store, touch.change, target.history.rel);
-          if (!one) continue;
-          out.push({
-            key: turnKey(touch.change),
-            band: {
-              time: clock(touch.change.turn.at),
-              prompt: touch.change.turn.prompt,
-              added: touch.added,
-              removed: touch.removed,
-              measured: true,
-            },
-            file: one,
-          });
-        }
-
-        if (out.length === 0) {
-          const found = diff?.files[diff.index.get(pathKey(target.history.path)) ?? -1] ?? null;
-          if (found) {
-            out.push({
-              key: 'git',
-              band: null,
-              file: found,
-              note: 'Not recorded turn by turn. This is everything since the last commit.',
-            });
-          }
-        }
-
-        if (alive) setGroups(out);
-        return;
-      }
-
-      if (alive) setGroups([]);
-    };
-
-    void build();
-    return () => {
-      alive = false;
-    };
-  }, [targetKey, histVersion, diffVersion, group]);
-
-  const rowsOfDiff = useMemo(
-    () => viewRows(groups, folded, opened, hideSpace),
-    [groups, folded, opened, hideSpace],
-  );
-  const why = useMemo(
-    () => (target.kind === 'why' ? whyRows(target.change, cols) : []),
-    [targetKey, cols, histVersion],
-  );
-  const bodyCount = target.kind === 'why' ? why.length : rowsOfDiff.length;
-
-  const listCount = view === 'files' ? nodes.length : listLength;
-  const layout = computeLayout(cols, rows, listCount, focus, override);
   const changedCount = git ? [...git.changes.values()].filter(c => c.status !== 'D').length : 0;
+  const tabNote: Seg[] =
+    view === 'changes'
+      ? [seg(GROUP_NOTE[group], theme.dim), ...(chat ? [seg('  one chat', theme.warn)] : []), ...(group === 'turn' && changesSummary(mine).length ? [seg('  ·  ', theme.faint), ...changesSummary(mine)] : [])]
+      : view === 'files'
+        ? changedOnly ? [seg('changed only', theme.warn)] : []
+        : [];
+  const tabs = tabRow(cols, view, {changes: changedCount, agents: agentsRunning}, tabNote);
+  const blank: Line = {segs: [sp(cols)]};
+  const top: Line[] = roomy ? [bar.line, blank, tabs, blank, ...head, ...(head.length ? [blank] : [])] : [bar.line, tabs, ...head];
+  const bottomRows = roomy ? 2 : 1;
+  const height = Math.max(3, rows - top.length - bottomRows);
+  const most = Math.max(0, lines.length - height);
+  const at = Math.min(most, scroll[slot]);
 
-  // A new file always starts at its first line.
-  useEffect(() => setPreviewScroll(0), [openPath]);
-
-  // Which lines of the open file differ from the last commit.
   useEffect(() => {
-    if (!openPath || !change) return setMarks(NO_MARKS);
-    let alive = true;
-    void changedLines(root, openPath, change).then(next => {
-      if (alive) setMarks(next);
+    if (cursor < 0) return;
+    // Leave room above the cursor for the rows pinned over it.
+    const pinned = current?.pins?.length ?? 0;
+    setScroll(s => {
+      const next = follow(s[slot], cursor, height, lines.length);
+      const lifted = cursor - next < pinned ? Math.max(0, cursor - pinned) : next;
+      return lifted === s[slot] ? s : {...s, [slot]: lifted};
     });
-    return () => {
-      alive = false;
-    };
-  }, [root, openPath, change]);
+  }, [cursor, height, lines.length, slot]);
 
-  // Folds and opened gaps belong to one file's diff. They survive a re-read
-  // that found the same diff, and go when the diff itself changes: otherwise
-  // the three-second refresh would throw away what you were reading.
-  const shape = groups.map(g => `${g.key}:${g.file?.hunks.length ?? 0}:${g.file?.added ?? 0}`).join('|');
-  useEffect(() => {
-    setFolded(new Set());
-    setOpened(new Map());
-    setRowCursor(0);
-    setRowScroll(0);
-    setHscroll(0);
-  }, [shape]);
+  // Rows that stay in view: the turn and the file a long diff belongs to.
+  const visible = useMemo(() => {
+    let pinned: Line[] = [];
+    for (let pass = 0; pass < 3; pass++) {
+      const first = lines[at + pinned.length];
+      const ids = first?.pins ?? [];
+      const next = ids.map(id => lines.findIndex(line => line.id === id)).filter(i => i >= 0 && i < at + pinned.length).map(i => lines[i]!);
+      if (next.length === pinned.length) break;
+      pinned = next;
+    }
 
-  // Keep every cursor on screen.
-  useEffect(() => {
-    setTreeScroll(s => follow(s, treeCursor, layout.listHeight, nodes.length));
-  }, [treeCursor, layout.listHeight, nodes.length]);
-  useEffect(() => {
-    setListScroll(s => follow(s, listCursor, layout.listHeight, listLength));
-  }, [listCursor, layout.listHeight, listLength]);
-  useEffect(() => {
-    setRowCursor(c => Math.max(0, Math.min(c, bodyCount - 1)));
-    setRowScroll(s => follow(s, rowCursor, layout.bodyHeight, bodyCount));
-  }, [rowCursor, layout.bodyHeight, bodyCount]);
+    return [...pinned, ...lines.slice(at + pinned.length, at + height)];
+  }, [lines, at, height]);
 
-  // --snapshot and non-terminal runs wait for git, draw one frame and leave.
-  useEffect(() => {
-    if (interactive || !loaded) return;
-    const timer = setTimeout(exit, 300);
-    return () => clearTimeout(timer);
-  }, [interactive, loaded, exit]);
+  // ---- doing things -------------------------------------------------------------
 
-  const toggleDir = (dir: string, open: boolean) => {
-    const next = new Set(expanded);
-    if (open) next.add(dir);
-    else next.delete(dir);
-    setExpanded(next);
+  const moveTo = (id: string | null | undefined) => {
+    if (id) setSel(s => ({...s, [slot]: id}));
   };
 
-  // Show a file in the Files view, opening every folder above it.
-  const reveal = (target: string, line = 0) => {
-    const next = new Set(expanded);
-    for (let p = path.dirname(target); p.startsWith(root) && p !== root; p = path.dirname(p)) next.add(p);
-    setExpanded(next);
-    setSelected(target);
+  const openReader = (file: string, line = 0) => {
     setView('files');
-    setFocus(line > 0 ? 'body' : 'list');
-    setPreviewScroll(Math.max(0, line - 3));
+    setReaderPath(file);
+    // Asked for a line: show the file as written, where line numbers mean something.
+    setRaw(line > 0);
+    setSel(s => ({...s, reader: line > 0 ? lineId(line) : null}));
+    setScroll(s => ({...s, reader: Math.max(0, line - 4)}));
   };
 
-  const maxPreviewScroll = Math.max(0, lineCount - layout.bodyHeight);
-  const maxRowScroll = Math.max(0, bodyCount - layout.bodyHeight);
-
-  const hunkAt = (index: number): number => {
-    let at = -1;
-    for (let i = 0; i <= index && i < rowsOfDiff.length; i++) if (rowsOfDiff[i]!.kind === 'hunk') at++;
-    return at;
+  const reveal = (file: string) => {
+    const next = new Set(expanded);
+    for (let p = path.dirname(file); p.startsWith(root) && p !== root; p = path.dirname(p)) next.add(p);
+    setExpanded(next);
   };
 
-  const jumpHunk = (direction: 1 | -1) => {
-    setFocus('body');
-    for (let i = rowCursor + direction; i >= 0 && i < rowsOfDiff.length; i += direction) {
-      if (rowsOfDiff[i]!.kind === 'hunk') return setRowCursor(i);
-    }
+  const run = (command: Command) => {
+    setMenu(null);
+    switch (command.do) {
+      case 'view':
+        setReaderPath(null);
+        return setView(command.view);
+      case 'group':
+        setView('changes');
+        setGroup(command.group);
+        return setNotice(command.group === 'flat' ? 'Showing every change since the last commit.' : `Grouped ${GROUP_NOTE[command.group]}.`);
+      case 'chat': {
+        const ids = [...new Set(history.changes.map(c => c.chatId))];
+        if (ids.length < 2) return setNotice('Only one chat has touched this project.');
+        const next = ids[(chat ? ids.indexOf(chat) : -1) + 1] ?? null;
+        setChat(next);
+        return setNotice(next ? `Showing "${history.changes.find(c => c.chatId === next)?.chat}".` : 'Showing every chat.');
+      }
 
-    // Past the last hunk, carry on to the next row of the list: this is the
-    // review flow, so holding `n` should walk the whole change set.
-    const next = listCursor + direction;
-    if (next >= 0 && next < listLength) {
-      setFileIndex(next);
-      setNotice('');
-    }
-  };
-
-  const activate = (index: number) => {
-    const row = rowsOfDiff[index];
-    if (!row) return;
-    if (row.kind === 'hunk' || row.kind === 'gap') {
-      const owner = groups[row.group];
-      if (!owner?.file) return;
-      const key = `${owner.key}:${row.hunk}`;
-      if (row.kind === 'hunk') {
+      case 'whitespace':
+        setHideSpace(!hideSpace);
+        return setNotice(hideSpace ? 'Showing whitespace changes.' : 'Hiding whitespace-only changes.');
+      case 'changedOnly':
+        if (!git) return setNotice('Not a git repo, so there are no changes to filter by.');
+        setView('files');
+        return setChangedOnly(!changedOnly);
+      case 'foldAll': {
+        const owner = [current?.id, ...(current?.pins ?? [])].find(id => id?.startsWith('f:'))?.slice(2);
+        const groups = owner ? diffs.get(owner) : undefined;
+        if (!owner || !groups) return setNotice('Move into an open diff first.');
+        const all = groups.flatMap(g => (g.file?.hunks ?? []).map((_, i) => `${owner}#${g.key}:${i}`));
+        const every = all.every(key => folded.has(key));
         const next = new Set(folded);
-        if (next.has(key)) next.delete(key);
-        else next.add(key);
+        for (const key of all) if (every) next.delete(key); else next.add(key);
         return setFolded(next);
       }
 
-      const lines = expandGap(owner.file, row.hunk);
-      if (lines.length === 0) return;
-      return setOpened(new Map(opened).set(key, lines));
+      case 'mouse':
+        stdout.write(mouse ? MOUSE_OFF : MOUSE_ON);
+        setMouse(!mouse);
+        return setNotice(mouse ? 'Mouse off. Select and copy freely. Press M to turn it back on.' : 'Mouse on.');
+      case 'quit':
+        return exit();
     }
   };
 
-  // Enter on a row of the list: open a turn, show every file, or go to the diff.
-  const openRow = (at: number = listCursor) => {
-    const row = listRows[at];
-    if (!row) return setFocus('body');
-    if (row.kind === 'turn') {
-      const key = turnKey(row.change);
-      const next = new Set(openTurns);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return setOpenTurns(next);
-    }
+  const perform = (act: Act | undefined, how: 'key' | 'click' = 'key') => {
+    if (!act) return;
+    switch (act.type) {
+      case 'view':
+        return run({do: 'view', view: act.view});
+      case 'menu':
+        return setMenu(menu?.open === act.menu ? null : {open: act.menu, item: firstItem(act.menu)});
+      case 'item': {
+        const item = list[act.menu]?.items[act.item];
+        return item && item !== 'rule' ? run(item.command) : undefined;
+      }
 
-    if (row.kind === 'fileHead') {
-      const next = new Set(openFiles);
-      if (next.has(row.history.rel)) next.delete(row.history.rel);
-      else next.add(row.history.rel);
-      return setOpenFiles(next);
-    }
+      case 'turn':
+        return setOpen(o => ({...o, turns: flipped(o.turns, act.key)}));
+      case 'file':
+        return setOpen(o => ({...o, files: flipped(o.files, act.key)}));
+      case 'toggle':
+        return setOpen(o => ({...o, [act.set]: flipped(o[act.set], act.key)}));
+      case 'hunk':
+        return setFolded(flipped(folded, act.key));
+      case 'gap': {
+        const owner = diffs.get(act.file)?.[act.group];
+        if (!owner?.file) return;
+        const gap = expandGap(owner.file, act.hunk);
+        if (gap.length) setOpened(new Map(opened).set(`${act.file}#${owner.key}:${act.hunk}`, gap));
+        return;
+      }
 
-    if (row.kind === 'more') {
-      const next = new Set(showAll);
-      next.add(row.owner);
-      return setShowAll(next);
-    }
+      case 'node':
+        if (act.dir) return changedOnly ? undefined : setExpanded(flipped(expanded, act.path));
+        // Enter walks forward: closed, peek, the whole file. A click toggles.
+        if (peekPath === act.path) return how === 'key' ? openReader(act.path) : setPeekPath(null);
+        return setPeekPath(act.path);
+      case 'read':
+        return openReader(act.path, act.line);
+      case 'goTurn': {
+        const isNewest = newest ? turnKey(newest) === act.key : false;
+        setReaderPath(null);
+        setView('changes');
+        setGroup('turn');
+        setChat(null);
+        setOpen(o => {
+          const turns = new Set(o.turns);
+          if (isNewest) turns.delete(act.key);
+          else turns.add(act.key);
+          return {...o, turns};
+        });
+        return setSel(s => ({...s, changes: `t:${act.key}`}));
+      }
 
-    return setFocus('body');
+      case 'back':
+        return setReaderPath(null);
+      case 'none':
+        return;
+    }
   };
 
-  const bodyFile = (): {path: string; deleted: boolean} | null => {
-    if (group === 'flat') return flatFile ? {path: flatFile.path, deleted: flatFile.status === 'deleted'} : null;
-    if (target.kind === 'file') return {path: target.path, deleted: false};
-    if (target.kind === 'history') return {path: target.history.path, deleted: target.history.status === 'deleted'};
-    return null;
+  const firstItem = (index: number): number => Math.max(0, (list[index]?.items ?? []).findIndex(item => item !== 'rule'));
+
+  const step = (dir: 1 | -1, by = 1) => {
+    let index = cursor;
+    for (let n = 0; n < by; n++) {
+      let next = index + dir;
+      while (next >= 0 && next < lines.length && !lines[next]!.pick) next += dir;
+      if (next < 0 || next >= lines.length) break;
+      index = next;
+    }
+
+    // Nothing to land on, as in Usage: the keys scroll instead.
+    if (index === cursor) return setScroll(s => ({...s, [slot]: Math.max(0, Math.min(most, s[slot] + dir * by))}));
+    moveTo(lines[index]?.id);
   };
 
-  const openInFiles = () => {
-    const where = bodyFile();
-    if (!where) return setNotice('Move onto a file first.');
-    const row = rowsOfDiff[rowCursor];
-    const line = row?.kind === 'line' ? (row.line.newNo ?? 0) : 0;
-    if (where.deleted) return setNotice('That file was deleted, so there is nothing to open.');
-    reveal(where.path, line);
+  const jump = (dir: 1 | -1, test: (line: Line) => boolean) => {
+    for (let i = cursor + dir; i >= 0 && i < lines.length; i += dir) {
+      if (lines[i]!.pick && test(lines[i]!)) return moveTo(lines[i]!.id);
+    }
   };
 
-  // ---- mouse ----------------------------------------------------------------
+  const nextChange = (dir: 1 | -1) => {
+    if (slot === 'reader') {
+      // The first line of the next run of marked lines, formatted or not.
+      for (let i = cursor + dir; i > 0 && i < lines.length; i += dir) {
+        if (lines[i]!.rail && !lines[i - 1]!.rail && lines[i]!.pick) return moveTo(lines[i]!.id);
+      }
 
-  const drag = useRef<{what: 'divider' | 'list' | 'body'} | null>(null);
+      return setNotice('No more changes in this file.');
+    }
+
+    if (slot === 'files' && peekPath && peekFile.view?.kind === 'text') {
+      const places = changedPlaces(peekFile.marks, peekFile.view.lines.length);
+      if (places.length === 0) return;
+      const to = places.find(n => n > peekFrom + PEEK_ROWS) ?? places[0]!;
+      return setPeekFrom(Math.max(0, to - 4));
+    }
+  };
+
+  // ---- mouse ------------------------------------------------------------------
+
+  const dragging = useRef(false);
   const lastClick = useRef({x: -1, y: -1, at: 0});
-
-  const scrollHalf = (half: Half, by: number) => {
-    if (half === 'list') {
-      if (view === 'files') setTreeScroll(s => Math.max(0, Math.min(Math.max(0, nodes.length - layout.listHeight), s + by)));
-      else setListScroll(s => Math.max(0, Math.min(Math.max(0, files.length - layout.listHeight), s + by)));
-      return;
-    }
-
-    if (view === 'files') setPreviewScroll(s => Math.max(0, Math.min(maxPreviewScroll, s + by)));
-    else setRowScroll(s => Math.max(0, Math.min(maxRowScroll, s + by)));
-  };
-
-  const rowsIn = (half: Half) =>
-    half === 'list'
-      ? view === 'files'
-        ? nodes.length
-        : files.length
-      : view === 'files'
-        ? lineCount
-        : rowsOfDiff.length;
+  const menuLines = menu ? menuBox(list[menu.open]!, menu.open, menu.item) : [];
+  const menuLeft = menu ? Math.min(bar.starts[menu.open] ?? 0, Math.max(0, cols - 30)) : 0;
 
   const onMouse = (event: MouseEvent) => {
-    let spot = hitTest(layout, event.x, event.y, changedCount);
-    // The last column is only a scrollbar when there is something to scroll.
-    if (spot.region === 'scrollbar') {
-      const height = spot.half === 'list' ? layout.listHeight : layout.bodyHeight;
-      if (rowsIn(spot.half) <= height) {
-        spot = spot.half === 'list' ? {region: 'list', index: spot.index} : {region: 'body', index: spot.index};
-      }
-    }
-    if (mouseDebug) setNotice(`${event.kind} ${event.button} col ${event.x} row ${event.y} -> ${spot.region}`);
+    if (mouseDebug) setNotice(`${event.kind} ${event.button} col ${event.x} row ${event.y}`);
+    const inStream = event.y >= top.length && event.y < top.length + height;
 
     if (event.kind === 'wheel') {
-      const by = event.wheel * WHEEL_ROWS;
-      if (spot.region === 'list' || (spot.region === 'scrollbar' && spot.half === 'list')) return scrollHalf('list', by);
-      if (spot.region === 'divider') return scrollHalf('body', by);
-      return scrollHalf('body', by);
+      return setScroll(s => ({...s, [slot]: Math.max(0, Math.min(most, s[slot] + event.wheel * WHEEL_ROWS))}));
     }
 
     if (event.kind === 'up') {
-      drag.current = null;
+      dragging.current = false;
       return;
     }
 
     if (event.kind === 'drag') {
-      if (drag.current?.what === 'divider') {
-        return setOverride(Math.max(2, Math.min(rows - 8, event.y - layout.listTop)));
-      }
-
-      if (drag.current?.what === 'list') {
-        const to = scrollFromThumb(rowsIn('list'), layout.listHeight, event.y - layout.listTop);
-        return view === 'files' ? setTreeScroll(to) : setListScroll(to);
-      }
-
-      if (drag.current?.what === 'body') {
-        const to = scrollFromThumb(rowsIn('body'), layout.bodyHeight, event.y - layout.bodyTop);
-        return view === 'files' ? setPreviewScroll(to) : setRowScroll(to);
-      }
-
+      if (dragging.current) setScroll(s => ({...s, [slot]: scrollFromThumb(lines.length, height, event.y - top.length)}));
       return;
     }
 
     if (event.kind !== 'down' || event.button !== 'left') return;
-
-    const now = Date.now();
-    const twice =
-      now - lastClick.current.at < DOUBLE_CLICK_MS &&
-      lastClick.current.x === event.x &&
-      lastClick.current.y === event.y;
-    lastClick.current = {x: event.x, y: event.y, at: now};
+    const clickedAt = Date.now();
+    const twice = clickedAt - lastClick.current.at < DOUBLE_CLICK_MS && lastClick.current.x === event.x && lastClick.current.y === event.y;
+    lastClick.current = {x: event.x, y: event.y, at: clickedAt};
     if (notice && !mouseDebug) setNotice('');
 
-    switch (spot.region) {
-      case 'tabs':
-        if (spot.tab) setView(spot.tab);
-        return;
+    const zoneOf = (line: Line | undefined): Act | undefined => line?.zones?.find(z => event.x >= z.from && event.x < z.to)?.act;
 
-      case 'divider':
-        if (twice) return setOverride(null);
-        drag.current = {what: 'divider'};
-        return;
-
-      case 'scrollbar': {
-        drag.current = {what: spot.half};
-        const total = rowsIn(spot.half);
-        const height = spot.half === 'list' ? layout.listHeight : layout.bodyHeight;
-        const to = scrollFromThumb(total, height, spot.index);
-        if (spot.half === 'list') return view === 'files' ? setTreeScroll(to) : setListScroll(to);
-        return view === 'files' ? setPreviewScroll(to) : setRowScroll(to);
-      }
-
-      case 'list': {
-        setFocus('list');
-        if (view === 'files') {
-          const node = nodes[treeScroll + spot.index];
-          if (!node) return;
-          setSelected(node.path);
-          if (node.isDir && !changedOnly) toggleDir(node.path, !node.open);
-          else if (twice && !node.isDir) setFocus('body');
-          return;
-        }
-
-        const at = listScroll + spot.index;
-        if (at >= listLength) return;
-        setFileIndex(at);
-        if (group === 'flat') return;
-        const row = listRows[at];
-        if (row?.kind === 'section') return;
-        // A turn, a file group and a "… more" row are buttons.
-        if (row && (row.kind === 'turn' || row.kind === 'fileHead' || row.kind === 'more')) openRow(at);
-        else if (twice) setFocus('body');
-        return;
-      }
-
-      case 'body': {
-        setFocus('body');
-        if (view === 'files' || target.kind === 'why') return;
-        const at = rowScroll + spot.index;
-        if (at >= rowsOfDiff.length) return;
-        setRowCursor(at);
-        const row = rowsOfDiff[at]!;
-        // Headers and gaps are buttons: one click does the obvious thing.
-        if (row.kind === 'hunk' || row.kind === 'gap') activate(at);
-        else if (twice) openInFiles();
-        return;
-      }
-
-      default:
-        return;
+    if (menu) {
+      const row = menuLines[event.y - 1];
+      const inside = row && event.x >= menuLeft && event.x < menuLeft + 28;
+      if (inside) return perform(row.act, 'click');
+      if (event.y === 0 && zoneOf(bar.line)?.type === 'menu') return perform(zoneOf(bar.line), 'click');
+      return setMenu(null);
     }
+
+    if (event.y < top.length) return perform(zoneOf(top[event.y]), 'click');
+    if (!inStream) return;
+
+    if (event.x >= cols - 1 && lines.length > height) {
+      dragging.current = true;
+      return setScroll(s => ({...s, [slot]: scrollFromThumb(lines.length, height, event.y - top.length)}));
+    }
+
+    const line = visible[event.y - top.length];
+    if (!line) return;
+    if (line.pick) moveTo(line.id);
+    if (twice && line.at) return openReader(line.at.path, line.at.line);
+    perform(zoneOf(line) ?? line.act, 'click');
   };
 
-  // ---- keys -----------------------------------------------------------------
+  // ---- keys ---------------------------------------------------------------------
 
   useInput(
     (input, key) => {
       const event = parseMouse(input);
       if (event) return mouse ? onMouse(event) : undefined;
-
       if (notice) setNotice('');
+
+      if (menu) {
+        const items = list[menu.open]!.items;
+        const move = (dir: 1 | -1) => {
+          let next = menu.item;
+          do next = (next + dir + items.length) % items.length;
+          while (items[next] === 'rule');
+          setMenu({...menu, item: next});
+        };
+
+        if (key.escape || input === 'm') return setMenu(null);
+        if (key.upArrow || input === 'k') return move(-1);
+        if (key.downArrow || input === 'j') return move(1);
+        if (key.leftArrow || key.rightArrow) {
+          const to = (menu.open + (key.rightArrow ? 1 : -1) + list.length) % list.length;
+          return setMenu({open: to, item: firstItem(to)});
+        }
+
+        if (key.return) return perform({type: 'item', menu: menu.open, item: menu.item});
+        // Any other key falls through, so a shortcut still works with a menu open.
+        setMenu(null);
+      }
+
       if (input === 'q') return exit();
-      if (input === '1') return setView('files');
-      if (input === '2') return setView('changes');
-      if (input === 'm') {
-        stdout.write(mouse ? MOUSE_OFF : MOUSE_ON);
-        setMouse(!mouse);
-        return setNotice(
-          mouse ? 'Mouse off. Select and copy freely. Press m to turn it back on.' : 'Mouse on.',
-        );
-      }
+      if (input === 'm') return setMenu({open: 1, item: firstItem(1)});
+      if (input === 'M') return run({do: 'mouse'});
+      if (input === '1') return run({do: 'view', view: 'changes'});
+      if (input === '2') return run({do: 'view', view: 'files'});
+      if (input === '3') return run({do: 'view', view: 'agents'});
+      if (input === '4') return run({do: 'view', view: 'usage'});
 
-      if (key.tab) return setFocus(focus === 'list' ? 'body' : 'list');
+      const page = Math.max(1, height - 2);
+      if (key.upArrow || input === 'k') return step(-1);
+      if (key.downArrow || input === 'j') return step(1);
+      if (key.pageUp || input === 'b') return step(-1, page);
+      if (key.pageDown || input === ' ') return step(1, page);
+      if (input === 'g') return step(-1, lines.length);
+      if (input === 'G') return step(1, lines.length);
+      if (key.return || key.rightArrow) return perform(current?.act);
 
-      const up = key.upArrow || input === 'k';
-      const down = key.downArrow || input === 'j';
-      const page = Math.max(1, layout.bodyHeight - 2);
-
-      if (view === 'files') {
-        if (focus === 'body') {
-          if (up) setPreviewScroll(Math.max(0, previewScroll - 1));
-          else if (down) setPreviewScroll(Math.min(maxPreviewScroll, previewScroll + 1));
-          else if (key.pageUp || input === 'b') setPreviewScroll(Math.max(0, previewScroll - page));
-          else if (key.pageDown || input === ' ') setPreviewScroll(Math.min(maxPreviewScroll, previewScroll + page));
-          else if (input === 'g') setPreviewScroll(0);
-          else if (input === 'G') setPreviewScroll(maxPreviewScroll);
-          else if (key.leftArrow || key.escape) setFocus('list');
-          return;
+      if (key.escape || key.leftArrow) {
+        if (slot === 'reader') return setReaderPath(null);
+        // Inside something that is open: go back up to the row that owns it.
+        const owner = current?.pins?.[current.pins.length - 1];
+        if (owner) return moveTo(owner);
+        if (slot === 'files') {
+          if (peekPath) return setPeekPath(null);
+          const node = nodes.find(n => nodeId(n.path) === current?.id);
+          if (node?.isDir && node.open && !changedOnly) return setExpanded(flipped(expanded, node.path));
+          const parent = node ? nodes.slice(0, nodes.indexOf(node)).reverse().find(n => n.depth < node.depth) : undefined;
+          return moveTo(parent ? nodeId(parent.path) : null);
         }
 
-        if (input === 'c') {
-          if (!git) return setNotice('Not a git repo, so there are no changes to filter by.');
-          return setChangedOnly(!changedOnly);
+        // On a row that is open: close it.
+        const id = current?.id ?? '';
+        const act = current?.act;
+        const isOpen =
+          (act?.type === 'file' && open.files.has(act.key)) ||
+          (act?.type === 'toggle' && open[act.set].has(act.key)) ||
+          (act?.type === 'turn' && id.startsWith('t:') && lines[cursor + 1]?.pins?.includes(id) === true);
+        return isOpen ? perform(act) : undefined;
+      }
+
+      if (input === ']' || input === '[') {
+        const dir = input === ']' ? 1 : -1;
+        if (slot === 'changes') return jump(dir, line => Boolean(line.id?.startsWith('f:') || line.id?.startsWith('t:') || line.id?.startsWith('h:')));
+        return nextChange(dir);
+      }
+
+      if (slot === 'changes') {
+        if (input === 'v') return run({do: 'group', group: GROUPS[(GROUPS.indexOf(group) + 1) % GROUPS.length]!});
+        if (input === 's') return run({do: 'chat'});
+        if (input === 'w') return run({do: 'whitespace'});
+        if (input === 'z') return run({do: 'foldAll'});
+        if (input === 'n') return jump(1, line => line.act?.type === 'hunk');
+        if (input === 'N') return jump(-1, line => line.act?.type === 'hunk');
+        if (input === 'o') {
+          if (!current?.at) return setNotice('Move onto a line of a diff first.');
+          reveal(current.at.path);
+          return openReader(current.at.path, current.at.line);
         }
-
-        if (up) setSelected(nodes[Math.max(0, treeCursor - 1)]?.path ?? null);
-        else if (down) setSelected(nodes[Math.min(nodes.length - 1, treeCursor + 1)]?.path ?? null);
-        else if (!current) return;
-        else if (key.rightArrow || key.return) {
-          if (!current.isDir) setFocus('body');
-          else if (!changedOnly) toggleDir(current.path, !current.open);
-        } else if (key.leftArrow) {
-          if (current.isDir && current.open && !changedOnly) return toggleDir(current.path, false);
-          for (let i = treeCursor - 1; i >= 0; i--) {
-            if (nodes[i]!.depth < current.depth) return setSelected(nodes[i]!.path);
-          }
-        }
-
-        return;
       }
 
-      // Changes view.
-      if (input === 'v') {
-        const next: Group = group === 'turn' ? 'file' : group === 'file' ? 'flat' : 'turn';
-        setGroup(next);
-        setFileIndex(0);
-        return setNotice(next === 'flat' ? 'Showing every change since the last commit.' : `Grouped ${GROUP_NOTE[next]}.`);
-      }
-
-      if (input === 's') {
-        const ids = [...new Set(changes.map(c => c.chatId))];
-        if (ids.length < 2) return setNotice('Only one chat has touched this project.');
-        const at = chat ? ids.indexOf(chat) : -1;
-        const next = at + 1 >= ids.length ? null : ids[at + 1]!;
-        setChat(next);
-        setFileIndex(0);
-        const title = changes.find(c => c.chatId === next)?.chat;
-        return setNotice(next ? `Showing "${title}".` : 'Showing every chat.');
-      }
-
-      if (input === 'n') return jumpHunk(1);
-      if (input === 'N') return jumpHunk(-1);
-      if (input === ']') return setFileIndex(settle(Math.min(listLength - 1, listCursor + 1), 1));
-      if (input === '[') return setFileIndex(settle(Math.max(0, listCursor - 1), -1));
-      if (input === 'w') {
-        setHideSpace(!hideSpace);
-        return setNotice(hideSpace ? 'Showing whitespace changes.' : 'Hiding whitespace-only changes.');
-      }
-
-      if (focus === 'list') {
-        if (up) setFileIndex(settle(Math.max(0, listCursor - 1), -1));
-        else if (down) setFileIndex(settle(Math.min(listLength - 1, listCursor + 1), 1));
-        else if (input === 'g') setFileIndex(settle(0, 1));
-        else if (input === 'G') setFileIndex(settle(Math.max(0, listLength - 1), -1));
-        else if (key.return) openRow();
-        else if (key.rightArrow) setFocus('body');
-        return;
-      }
-
-      if (up) setRowCursor(Math.max(0, rowCursor - 1));
-      else if (down) setRowCursor(Math.min(bodyCount - 1, rowCursor + 1));
-      else if (key.pageUp || input === 'b') setRowCursor(Math.max(0, rowCursor - page));
-      else if (key.pageDown || input === ' ') setRowCursor(Math.min(bodyCount - 1, rowCursor + page));
-      else if (input === 'g') setRowCursor(0);
-      else if (input === 'G') setRowCursor(Math.max(0, bodyCount - 1));
-      else if (input === 'h') setHscroll(Math.max(0, hscroll - HSCROLL_STEP));
-      else if (input === 'l') setHscroll(hscroll + HSCROLL_STEP);
-      else if (input === '0') setHscroll(0);
-      else if (input === 'z') {
-        const all = groups.flatMap(g => (g.file?.hunks ?? []).map((_, i) => `${g.key}:${i}`));
-        setFolded(folded.size === all.length ? new Set() : new Set(all));
-      } else if (input === 'o') openInFiles();
-      else if (key.return) activate(rowCursor);
-      else if (key.leftArrow || key.escape) setFocus('list');
+      if (slot === 'reader' && input === 'r' && readerPath && isMarkdown(readerPath)) return setRaw(!raw);
+      if (view === 'files' && input === 'c') return run({do: 'changedOnly'});
     },
     {isActive: interactive},
   );
 
-  // ---- render ---------------------------------------------------------------
+  // --snapshot and non-terminal runs wait for the first read, draw and leave.
+  useEffect(() => {
+    if (interactive || !loaded || !history.loaded) return;
+    const timer = setTimeout(exit, 300);
+    return () => clearTimeout(timer);
+  }, [interactive, loaded, history.loaded, exit]);
 
-  const project = path.basename(root);
-  const filesFooter =
-    focus === 'list'
-      ? '↑↓ move  enter open  c changed  2 changes  q quit'
-      : '↑↓ scroll  space page  g/G ends  esc back  q quit';
-  const changesFooter =
-    focus === 'list'
-      ? '↑↓ move  enter open  → diff  v group  s chat  q quit'
-      : '↑↓ line  n/N hunk  enter fold  o open  esc back  q quit';
-  // Hints are added while they fit, so a narrow pane keeps the ones that matter.
-  const extras =
-    view === 'changes' && focus === 'body'
-      ? ['z fold all', 'w whitespace', 'm mouse', 'shift-drag selects']
-      : ['m mouse', 'shift-drag selects'];
-  let hints = view === 'files' ? filesFooter : changesFooter;
-  for (const hint of extras) {
-    if (textWidth(hints) + 2 + textWidth(hint) > cols - 2) break;
-    hints += `  ${hint}`;
+  // ---- draw ---------------------------------------------------------------------
+
+  const hints: [string, string][] =
+    slot === 'changes'
+      ? current?.pins?.some(id => id.startsWith('f:'))
+        ? [['↑↓', 'line'], ['n', 'hunk'], ['enter', 'fold'], ['o', 'open'], ['esc', 'back'], ['z', 'fold all'], ['m', 'menu']]
+        : [['↑↓', 'move'], ['enter', 'open'], ['v', 'group'], [']', 'next'], ['m', 'menu'], ['q', 'quit']]
+      : slot === 'files'
+        ? peekPath
+          ? [['enter', 'read all'], [']', 'next change'], ['esc', 'close'], ['m', 'menu']]
+          : [['↑↓', 'move'], ['enter', 'peek'], ['c', 'changed'], ['m', 'menu'], ['q', 'quit']]
+        : slot === 'reader'
+          ? [['↑↓', 'line'], [']', 'change'], ['space', 'page'], ...(readerPath && isMarkdown(readerPath) ? [['r', raw ? 'formatted' : 'raw'] as [string, string]] : []), ['esc', 'back']]
+          : slot === 'agents'
+            ? [['↑↓', 'move'], ['enter', 'open'], ['m', 'menu'], ['q', 'quit']]
+            : [['↑↓', 'scroll'], ['m', 'menu'], ['q', 'quit']];
+
+  const where = git?.branch ? `${project} ${glyph.bullet} ${git.branch}` : project;
+  const track = thumb(lines.length, height, at);
+  const stream: Line[] = Array.from({length: height}, (_, i) => {
+    const line = visible[i];
+    const mark = line?.rail ? seg(glyph.rail, line.rail) : track && i >= track.from && i < track.to ? seg(glyph.rail, theme.thumb) : sp(1);
+    return {segs: [...(line?.segs ?? [sp(cols - 1)]), mark]};
+  });
+
+  let screen: Line[] = [...top, ...stream, ...(roomy ? [blank] : []), footer(cols, hints, notice, where)];
+  if (menu) {
+    screen = screen.map((line, y) => {
+      const under = y === 0 ? line : dimmed(line);
+      const row = menuLines[y - 1];
+      return row ? {...under, segs: overlay(under.segs, menuLeft, row.segs, cols)} : under;
+    });
   }
 
-  const previewPosition =
-    lineCount > 0
-      ? `${previewScroll + 1}-${Math.min(lineCount, previewScroll + layout.bodyHeight)} of ${lineCount}`
-      : '';
+  // `loaded` keeps the first frame from flashing an empty state.
+  if (!history.loaded && slot !== 'files') {
+    screen = [...top, {segs: [sp(1), seg('Reading your chats…', theme.dim)]}];
+  }
 
-  // What the divider over the body says.
-  const head = (): {label: string; note?: string; noteColor?: string} => {
-    if (group === 'flat') {
-      if (!flatFile) return {label: 'No file'};
-      if (flatFile.binary) return {label: flatFile.rel, note: 'binary'};
-      if (flatFile.status === 'added') return {label: flatFile.rel, note: 'new file', noteColor: theme.add};
-      if (flatFile.status === 'deleted') return {label: flatFile.rel, note: 'deleted', noteColor: theme.del};
-      if (flatFile.status === 'renamed' && flatFile.fromRel) {
-        return {label: flatFile.rel, note: `from ${flatFile.fromRel}`, noteColor: theme.link};
-      }
-
-      if (flatFile.spaceOnly) return {label: flatFile.rel, note: 'whitespace only', noteColor: theme.warn};
-      return {label: flatFile.rel};
-    }
-
-    if (target.kind === 'why') {
-      return {
-        label: `${clock(target.change.turn.at)}  ${target.change.turn.prompt}`,
-        note: target.change.running ? 'running' : 'why',
-        noteColor: target.change.running ? theme.warn : theme.dim,
-      };
-    }
-
-    if (target.kind === 'file') {
-      return {
-        label: target.rel,
-        note: target.change?.measured ? clock(target.change.turn.at) : 'since the last commit',
-        noteColor: target.change?.measured ? theme.accent : theme.dim,
-      };
-    }
-
-    if (target.kind === 'history') {
-      const n = target.history.touches.length;
-      return {label: target.history.rel, note: `${n} turn${n === 1 ? '' : 's'}`, noteColor: theme.link};
-    }
-
-    return {label: listRows.length === 0 ? 'Nothing yet' : 'No file'};
-  };
-
-  const hunkCount = groups.reduce((n, g) => n + (g.file?.hunks.length ?? 0), 0);
-  const diffPosition =
-    bodyCount === 0
-      ? ''
-      : `${target.kind !== 'why' && hunkCount > 1 ? `hunk ${Math.max(1, hunkAt(rowCursor) + 1)}/${hunkCount}  ` : ''}${
-          rowScroll + 1
-        }-${Math.min(bodyCount, rowScroll + layout.bodyHeight)} of ${bodyCount}`;
-
-  return (
-    <Box flexDirection="column" width={cols} height={rows}>
-      <Tabs
-        view={view}
-        changedCount={changedCount}
-        project={project}
-        branch={git ? git.branch : loaded ? 'no git' : ''}
-        cols={cols}
-        filtered={view === 'files' && changedOnly}
-        note={view === 'changes' ? GROUP_NOTE[group] : undefined}
-      />
-      <Rule cols={cols} />
-
-      {view === 'files' ? (
-        <>
-          <Tree
-            nodes={nodes}
-            cursor={treeCursor}
-            scroll={treeScroll}
-            changes={git?.changes ?? null}
-            height={layout.listHeight}
-            width={cols}
-            focused={focus === 'list'}
-            emptyMessage={changedOnly ? 'Nothing has changed since the last commit.' : 'This folder is empty.'}
-          />
-          <Divider
-            cols={cols}
-            label={current ? path.relative(root, current.path).split(path.sep).join('/') : 'Nothing selected'}
-            right={previewPosition}
-            focused={focus === 'body'}
-          />
-          <Preview
-            view={preview}
-            message={
-              current?.isDir
-                ? changedOnly
-                  ? 'A folder.'
-                  : `A folder. Press Enter to ${current.open ? 'close' : 'open'} it.`
-                : 'Move onto a file to preview it here.'
-            }
-            segments={segments}
-            marks={marks}
-            scroll={previewScroll}
-            height={layout.bodyHeight}
-            cols={cols}
-          />
-        </>
-      ) : (
-        <>
-          {group === 'flat' ? (
-            <ChangeList
-              files={files}
-              cursor={listCursor}
-              scroll={listScroll}
-              cols={cols}
-              height={layout.listHeight}
-              focused={focus === 'list'}
-              empty={
-                diff === null
-                  ? 'This folder is not a git repo.'
-                  : `Nothing has changed since the last commit${git?.branch ? ` on ${git.branch}` : ''}.`
-              }
-            />
-          ) : (
-            <TurnList
-              rows={listRows}
-              cursor={listCursor}
-              scroll={listScroll}
-              cols={cols}
-              height={layout.listHeight}
-              focused={focus === 'list'}
-              empty={
-                changes.length === 0
-                  ? 'No Claude chats have touched this project yet.'
-                  : 'Nothing changed in these turns.'
-              }
-            />
-          )}
-          <Divider cols={cols} right={diffPosition} focused={focus === 'body'} {...head()} />
-          {target.kind === 'why' ? (
-            <Why rows={why} scroll={rowScroll} cols={cols} height={layout.bodyHeight} />
-          ) : (
-            <Diff
-              rows={rowsOfDiff}
-              scroll={rowScroll}
-              cursor={rowCursor}
-              hscroll={hscroll}
-              cols={cols}
-              height={layout.bodyHeight}
-              focused={focus === 'body'}
-              message={
-                diff === null
-                  ? 'Sidecar compares files with the last commit, so there is\nnothing to compare yet.'
-                  : group === 'flat'
-                    ? 'When Claude edits a file it shows up here.'
-                    : 'Move onto a turn to see why, or a file to see the diff.'
-              }
-            />
-          )}
-        </>
-      )}
-
-      <Rule cols={cols} />
-      <Footer
-        cols={cols}
-        text={hints}
-        notice={notice}
-      />
-    </Box>
-  );
+  return <Screen lines={screen} cols={cols} rows={rows} />;
 }
+
