@@ -2,11 +2,14 @@ import type {Kind} from '../core/highlight';
 
 // One place for every colour and glyph, so the pane keeps one look.
 //
-// The pane never paints its own background. A block of rows is held together
+// Almost nothing paints its own background. A block of rows is held together
 // by a left line, not by a box, and a well's top and bottom are half blocks
 // that only set a foreground colour, so the pane floats on whatever terminal
-// theme is underneath. Accent belongs to the cursor, to something live and to
-// the brand mark; everything else is one of the four greys.
+// theme is underneath. The Usage view is the one exception: it paints a panel
+// under each section, because a meter is only honest when the part that is
+// still free stays quiet, and a quiet track needs ground it can be measured
+// against. Accent belongs to the cursor, to something live and to the brand
+// mark; everything else is one of the four greys.
 export const theme = {
   accent: '#E58C64',
   ink: '#ECEAE6',
@@ -23,6 +26,10 @@ export const theme = {
   // The left line that runs under an open turn. Quiet enough to be structure
   // rather than content; the line of a running turn is drawn in `accent`.
   spine: '#3A3835',
+
+  // The part of a meter that is still free. Just off the surface it sits on,
+  // so a bar reads as "this much of that", not as a solid band.
+  track: '#3A3835',
 
   // Surfaces, from the ground up: a card, the row under the cursor, the well a
   // diff sits in, and the strip a hunk header sits on.
@@ -47,26 +54,31 @@ export const theme = {
 // Subagents are told apart by a label first and a colour second.
 export const agentColours = [theme.link, theme.string, theme.warn, theme.keyword] as const;
 
-// One big number, as a 3 × 5 pixel font: three screen rows of half blocks, two
-// columns per pixel. Each string is five rows of three pixels, top to bottom.
-const digits: Record<string, string> = {
-  '0': '111101101101111',
-  '1': '010110010010111',
-  '2': '111001111100111',
-  '3': '111001111001111',
-  '4': '101101111001001',
-  '5': '111100111001111',
-  '6': '111100111101111',
-  '7': '111001001001001',
-  '8': '111101111101111',
-  '9': '111101111001111',
-  '%': '101001010100101',
-  k: '100101110101101',
-  M: '101111111101101',
-  '.': '000000000000010',
-  // A wave across the middle band: the outer pixels low, the middle one high.
-  '~': '000000010101000',
-  ' ': '000000000000000',
+// One big number, as a proportional pixel font: five pixel rows a glyph, `#`
+// lit, drawn on three screen rows of half blocks. A glyph is exactly as wide
+// as its rows are long, so `.` costs one pixel and `%` gets the five it needs
+// to read as two zeros and a slash rather than as scattered blocks.
+const digits: Record<string, string[]> = {
+  '0': ['###', '#.#', '#.#', '#.#', '###'],
+  '1': ['.#.', '##.', '.#.', '.#.', '###'],
+  '2': ['###', '..#', '###', '#..', '###'],
+  '3': ['###', '..#', '###', '..#', '###'],
+  '4': ['#.#', '#.#', '###', '..#', '..#'],
+  '5': ['###', '#..', '###', '..#', '###'],
+  '6': ['###', '#..', '###', '#.#', '###'],
+  '7': ['###', '..#', '..#', '..#', '..#'],
+  '8': ['###', '#.#', '###', '#.#', '###'],
+  '9': ['###', '#.#', '###', '..#', '###'],
+  k: ['#..', '#.#', '##.', '#.#', '#.#'],
+  // Two small zeros with the slash between them, drawn corner to corner.
+  '%': ['##..#', '##.#.', '..#..', '.#.##', '#..##'],
+  // Both stems, and the middle folded down to a point, so it is not an H.
+  M: ['#...#', '##.##', '#.#.#', '#...#', '#...#'],
+  // On the baseline, one pixel wide: `1.7` closes up instead of holding a gap.
+  '.': ['.', '.', '.', '.', '#'],
+  // A wave across the middle band, so `~` reads as "about" next to a figure.
+  '~': ['....', '....', '.#.#', '#.#.', '....'],
+  ' ': ['.', '.', '.', '.', '.'],
 };
 
 export const glyph = {

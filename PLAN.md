@@ -266,6 +266,32 @@ Decisions, and why:
 
 ## Usage
 
+Four sections in one order — **Session, Last 7 days, This chat, Pace** — each
+answering one question, and each on its own panel.
+
+- **A panel, not a card.** This is the one view in the pane that paints a
+  background: a title strip on `surface2`, the body on `surface`, covering
+  columns 1 to `cols - 2` on every row, with the text two columns in from each
+  side. Full cells only — no half-block edges and no corners, which is what the
+  owner disliked about the old cards. The panel earns its keep twice: it gives
+  the section a right edge, so a value can be right-aligned against something
+  instead of against air, and it gives a meter ground, so the part that is still
+  free can go quiet (`theme.track`) instead of reading as a second solid bar.
+  One row with no background separates panels.
+- **One meter grammar, one meter a panel.** Heading with the value in bold on
+  the right, the bar, one dim note. Session's heading is its big number instead.
+  One style (`▄`), one length (the inner width), one fill colour (`meterTone`,
+  Context included), so two identical full-width bars never stack the way the
+  weekly limit and "By model" used to.
+- **The big number is proportional.** Three screen rows of half blocks; a glyph
+  is as wide as it needs to be, so `.` costs one pixel and `%` gets five.
+  Rather than being cut off it gives way in steps: full size, then the `~` as
+  ordinary text so the digits keep their size, then half size. `used` follows it
+  when there is room, so `58%` says which way it is counting.
+- **Pace is its own panel, and the last one,** so it is the first thing a short
+  pane drops. One column a half hour, three rows tall, a `▁` floor under an idle
+  one, and `accent` on the half hour we are in and nowhere else.
+
 Two sources, and the view keeps them apart.
 
 - **Tokens** are counted from the transcripts: every reply carries its own
@@ -288,11 +314,16 @@ Two sources, and the view keeps them apart.
   window's own new tokens, estimated from the transcripts and written `~209k`,
   and the same estimate is what the menu bar shows.
 - **There is no per-model limit** in what Claude Code exposes. "By model" is a
-  share of the seven days' tokens, and says so. A share that rounds to nothing
-  reads `<1%`, never `0%`.
-- **No per-agent breakdown.** One line — `Subagents 66% · 3.5M of 5.4M · main
-  thread 1.8M` — is the whole story, and a list of agents belongs to the
-  Agents view.
+  share of the seven days' tokens, and says so. So it is **one row a model** —
+  name in a 12 column column, a dim bar with no track, the share in the same
+  right-hand column as every other value — not a stacked bar with a legend: a
+  track would claim a limit, and five hues would each mean something else in
+  this theme. A share that rounds to nothing reads `<1%`, never `0%`; a model
+  that spent nothing is dropped.
+- **No per-agent breakdown.** One line on the same grid — `Subagents  879k of
+  5.1M · main thread 4.2M   17%` — is the whole story, and a list of agents
+  belongs to the Agents view. The `· main thread` half goes when it will not
+  fit; the share never does.
 
 ## Where the history comes from
 

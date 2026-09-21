@@ -1,16 +1,21 @@
 import {
   cacheHitOf, modelName, paceOf, shareByModel, splitBySub, windowOf,
-  type Limits, type SessionWindow, type Spend, type Window,
+  type Limits, type SessionWindow, type Spend, type SubSplit, type Window,
 } from '../../core/usage';
 import {
-  bigDigits, INDENT, lowerMeter, meterTone, pageRow, RIGHT_PAD, seg, sp, span, tokens,
-  type Line, type Seg,
+  bigDigits, bigWidth, lowerMeter, meterTone, pageRow, panelInner, panelRow, panelTitle,
+  seg, sp, span, tokens, width, type Line, type Seg,
 } from '../cells';
 import {glyph, theme} from '../theme';
-import {wrap} from '../util';
+import {fit as fitText, wrap} from '../util';
 
-// Three sections, each answering one question: what is left of this session,
-// where the last seven days went, and what this chat is carrying.
+// Four sections, each answering one question: what is left of this session,
+// where the last seven days went, what this chat is carrying, and how hard the
+// last five hours were worked. Each one gets a panel: a run of rows on one
+// background. The panel is what makes the rest honest — it gives the section a
+// left and a right edge, so a value can be right-aligned against something,
+// and it gives a meter ground, so the part that is still free can go quiet
+// instead of reading as a second solid bar.
 //
 // Two kinds of number live here and the view keeps them apart. Tokens are
 // counted from the transcripts, so they are always there. The plan limits only
@@ -27,10 +32,25 @@ export type UsageInput = {
 };
 
 const STALE_MS = 15 * 60_000;
-const SHARE_COLOURS = [theme.accent, theme.link, theme.string, theme.keyword, theme.warn];
+
+// One grid for every body row in every panel: a name column, then whatever the
+// row has to show, then the value hard against the right edge. Because the
+// columns never move, a column of percentages reads as a column.
+const NAME_W = 12;
+const VALUE_W = 3;
 
 // The one separator between facts on a row.
 const sep = (): Seg => seg(`  ${glyph.sep}  `, theme.faint);
+
+// The right-hand value: the one thing on a body row that is allowed weight.
+const value = (text: string): Seg[] => [seg(text.padStart(VALUE_W), theme.ink, {bold: true})];
+
+// A heading inside a panel's body. Like a title strip, it would rather lose
+// what it is counting than be cut off mid-word.
+function heading(cols: number, name: string, note: string): Line {
+  const room = panelInner(cols) - width(name);
+  return panelRow(cols, [seg(name, theme.ink), ...(width(note) + 2 <= room ? [seg(`  ${note}`, theme.dim)] : [])]);
+}
 
 // A reading describes a window, so it is good until that window resets. Once
 // the script has been quiet for a while it is drawn dim, not dropped.
@@ -42,13 +62,6 @@ export function feedOf(limits: Limits | null, now: number): Feed | null {
   if (!limits || (!live(limits.fiveHour, now) && !live(limits.sevenDay, now))) return null;
   return {limits, stale: now - limits.at >= STALE_MS};
 }
-
-// Everything inside a section is indented to the content column.
-const bodyWidth = (cols: number): number => cols - 2 - RIGHT_PAD - INDENT;
-const row = (cols: number, left: Seg[] = [], right: Seg[] = []): Line => pageRow(cols, [sp(INDENT), ...left], right);
-
-const section = (cols: number, name: string, note: string, right: Seg[] = []): Line =>
-  pageRow(cols, [seg(name, theme.ink, {bold: true}), seg(`   ${note}`, theme.dim)], right);
 
 function when(at: number, now: number): string {
   const date = new Date(at);
@@ -62,161 +75,206 @@ const pct = (part: number): string => `${Math.round(part * 100)}%`;
 // A share that rounds to nothing is not nothing: it had some of the tokens.
 const sharePct = (part: number): string => (part > 0 && part < 0.005 ? '<1%' : pct(part));
 
-// Tokens per half hour over the last five hours: two columns a bucket, the
-// half hour we are in now in accent, the ones before it dim.
-function paceRows(cols: number, spends: Spend[], reading: boolean, now: number): Line[] {
-  const pace = paceOf(spends, now);
-  const tallest = Math.max(0, ...pace.buckets);
-  const peak = Math.max(1, tallest);
-  const ROWS = 3;
-  const grid = pace.buckets.length * 3 - 1;
-  const note = reading ? 'reading…' : tallest ? `peak ${tokens(tallest)}` : 'idle';
-  const out: Line[] = [
-    row(cols, [seg('Pace', theme.ink), seg('   new tokens per half hour', theme.dim)], [seg(note, theme.faint)]),
+// A title strip, one blank row of ground either side of the body, and nothing
+// between panels but a row with no background at all.
+const panel = (cols: number, title: Line, body: Line[]): Line[] =>
+  body.length ? [title, panelRow(cols), ...body, panelRow(cols)] : [];
+
+// The one meter grammar in this view: a heading with its value on the right,
+// the bar, one dim note. Every limit in the pane is drawn this way, and there
+// is at most one of them a panel, so two identical bars never stack.
+function limitBlock(cols: number, name: string, part: number, note: string, stale: boolean): Line[] {
+  return [
+    panelRow(cols, [seg(name, theme.ink)], value(pct(part))),
+    panelRow(cols, lowerMeter(panelInner(cols), part, stale ? theme.dim : meterTone(part), theme.track)),
+    ...(note ? [panelRow(cols, [seg(note, theme.dim)])] : []),
   ];
-
-  for (let level = ROWS - 1; level >= 0; level--) {
-    const segs: Seg[] = [];
-    pace.buckets.forEach((value, i) => {
-      const eighths = Math.round((value / peak) * ROWS * 8);
-      const here = Math.max(0, Math.min(8, eighths - level * 8));
-      // Even an idle half hour keeps a floor, so the time axis stays readable.
-      const char = level === 0 && here === 0 ? glyph.columns[1]! : glyph.columns[here]!;
-      const colour = i === pace.buckets.length - 1 ? theme.accent : value ? theme.dim : theme.faint;
-      segs.push(seg(char.repeat(2), colour), sp(1));
-    });
-    out.push(row(cols, segs));
-  }
-
-  const from = new Date(pace.from).toLocaleTimeString(undefined, {hour: '2-digit', minute: '2-digit', hour12: false});
-  out.push(row(cols, [seg(from, theme.faint), sp(grid - from.length - 3), seg('now', theme.faint)]));
-  return out;
 }
 
-// Section one. With a feed this is the share of the allowance that is gone;
+// Digits shout louder than a bar, so they only change colour when there is
+// something to say: plain ink until three quarters are gone.
+const heroTone = (part: number): string => (part >= 0.9 ? theme.del : part >= 0.75 ? theme.warn : theme.ink);
+
+// The big number, which is the Session panel's heading. Nothing shares its
+// rows but the one word that says what it counts.
+//
+// When it will not fit, it gives way in steps rather than being cut: full size
+// first; then the `~` as ordinary text on the middle row, which buys back the
+// widest glyph in the font and keeps the digits their size; then half size.
+function heroRows(cols: number, text: string, label: string, color: string): Line[] {
+  const inner = panelInner(cols);
+  const bare = text.startsWith('~') ? text.slice(1) : text;
+  const tries = [
+    {text, scale: 2, tilde: false},
+    {text: bare, scale: 2, tilde: bare !== text},
+    {text, scale: 1, tilde: false},
+    {text: bare, scale: 1, tilde: bare !== text},
+  ];
+  const lead = (t: {tilde: boolean}): number => (t.tilde ? 2 : 0);
+  const pick = tries.find(t => bigWidth(t.text, t.scale) + lead(t) <= inner) ?? tries[tries.length - 1]!;
+  const took = bigWidth(pick.text, pick.scale) + lead(pick);
+  const rows = bigDigits(pick.text, color, {bg: theme.surface, scale: pick.scale});
+  const tail = label && took + 2 + width(label) <= inner ? [sp(2, theme.surface), seg(label, theme.dim)] : [];
+  return rows.map((segs, i) => {
+    const front = pick.tilde ? (i === 1 ? [seg('~', theme.dim), sp(1, theme.surface)] : [sp(2, theme.surface)]) : [];
+    return panelRow(cols, [...front, ...segs, ...(i === 2 ? tail : [])]);
+  });
+}
+
+// Panel one. With a feed this is the share of the allowance that is gone;
 // without one it is what the window has cost, counted from the transcripts.
 function sessionRows(cols: number, spends: Spend[], reading: boolean, feed: Feed | null, now: number): Line[] {
-  const wide = bodyWidth(cols);
+  const inner = panelInner(cols);
+  const strip = (right: string, faint = false): Line =>
+    panelTitle(cols, 'Session', '5 hour window', right ? [seg(right, faint ? theme.faint : theme.dim)] : []);
+
   const five = feed ? live(feed.limits.fiveHour, now) : null;
   if (feed && five) {
     const part = five.usedPercentage / 100;
-    const ink = feed.stale ? theme.dim : theme.ink;
-    return [
-      section(cols, 'Session', feed.stale ? '5 hour window, feed quiet' : '5 hour window', [
-        seg('resets in ', theme.dim),
-        seg(span(five.resetsAt - now), ink, {bold: true}),
-      ]),
-      pageRow(cols, [], [seg(when(five.resetsAt, now), theme.dim)]),
-      ...bigDigits(pct(part), ink).map(segs => row(cols, segs)),
-      row(cols, lowerMeter(wide, part, feed.stale ? theme.dim : meterTone(part))),
-    ];
+    return panel(cols, strip(feed.stale ? 'feed quiet' : ''), [
+      ...heroRows(cols, pct(part), 'used', feed.stale ? theme.dim : heroTone(part)),
+      panelRow(cols, lowerMeter(inner, part, feed.stale ? theme.dim : meterTone(part), theme.track)),
+      panelRow(cols, [seg(`resets in ${span(five.resetsAt - now)}, ${when(five.resetsAt, now)}`, theme.dim)]),
+    ]);
+  }
+
+  if (feed) {
+    return panel(cols, strip('feed quiet'), [panelRow(cols, [seg('Feed quiet: no session reading.', theme.dim)])]);
   }
 
   // No feed. Claude Code hands the allowance to a status line script and
-  // nowhere else, so the only honest number here is the one we counted.
+  // nowhere else, so the only honest number here is the one we counted. There
+  // is one status line slot and it may already be taken, so the instruction is
+  // to chain: the script passes the old one's output through.
+  const hint = wrap('For a percentage, chain hooks/statusline.mjs', inner).map(text =>
+    panelRow(cols, [seg(text, theme.faint)]),
+  );
   const win: SessionWindow | null = reading ? null : windowOf(spends, now);
-  // There is one status line slot and it may already be taken, so the honest
-  // instruction is to chain: the script passes the old one's output through.
-  const hint = feed ? 'The limits feed has gone quiet.' : 'Limits: chain hooks/statusline.mjs into your status line.';
-  const hintRows = wrap(hint, bodyWidth(cols)).map(text => row(cols, [seg(text, theme.dim)]));
   if (!win) {
-    return [
-      section(cols, 'Session', reading ? 'reading…' : '5 hour window', []),
-      row(cols, [seg(reading ? 'Reading your transcripts…' : 'No replies in the last five hours.', theme.dim)]),
-      ...hintRows,
-    ];
+    return panel(cols, strip(reading ? 'reading…' : 'new tokens, estimated', reading), [
+      panelRow(cols, [seg(reading ? 'Reading your transcripts…' : 'Nothing in the last 5 hours.', theme.dim)]),
+      ...(reading ? [] : hint),
+    ]);
   }
 
-  return [
-    section(cols, 'Session', 'estimated from your transcripts', [
-      seg('resets in ', theme.dim),
-      seg('~', theme.faint),
-      seg(span(win.resetsAt - now), theme.ink, {bold: true}),
-    ]),
-    ...bigDigits(`~${tokens(win.tokens)}`).map(segs => row(cols, segs)),
-    ...hintRows,
-  ];
+  return panel(cols, strip('new tokens, estimated'), [
+    ...heroRows(cols, `~${tokens(win.tokens)}`, '', theme.ink),
+    panelRow(cols, [seg(`resets in about ${span(win.resetsAt - now)}, ${when(win.resetsAt, now)}`, theme.dim)]),
+    ...hint,
+  ]);
 }
 
-// Section two. The count is a rolling seven days from the transcripts; only a
+// One model, one row. The bar has no track, because a track means "this has a
+// limit" and a share has none, and the share lands in the same column as every
+// other value in the pane.
+function modelRow(cols: number, name: string, part: number): Line {
+  const bar = panelInner(cols) - NAME_W - VALUE_W - 3;
+  const used = Math.max(1, Math.round(part * bar));
+  return panelRow(
+    cols,
+    [seg(fitText(name, NAME_W).padEnd(NAME_W), theme.text), seg(glyph.lower.repeat(used), theme.dim)],
+    value(sharePct(part)),
+  );
+}
+
+// The whole subagent story in one line, on the same grid. No per-agent list
+// lives here: that belongs to the Agents view.
+function subRow(cols: number, split: SubSplit): Line {
+  const room = panelInner(cols) - NAME_W - VALUE_W - 1;
+  const short = `${tokens(split.sub)} of ${tokens(split.total)}`;
+  const main = `main thread ${tokens(split.main)}`;
+  const facts: Seg[] = width(short) <= room ? [seg(short, theme.dim)] : [];
+  if (width(short) + 5 + width(main) <= room) facts.push(sep(), seg(main, theme.dim));
+  return panelRow(cols, [seg('Subagents'.padEnd(NAME_W), theme.text), ...facts], value(pct(split.part)));
+}
+
+// Panel two. The count is a rolling seven days from the transcripts; only a
 // feed knows about a real weekly allowance and when it resets.
 function weekRows(cols: number, spends: Spend[], reading: boolean, feed: Feed | null, now: number): Line[] {
-  const wide = bodyWidth(cols);
   const total = spends.reduce((n, s) => n + s.tokens, 0);
-  const out: Line[] = [
-    section(cols, 'Last 7 days', 'all projects', [seg(reading ? 'reading…' : `${tokens(total)} new tokens`, reading ? theme.faint : theme.dim)]),
-  ];
+  const title = panelTitle(cols, 'Last 7 days', 'all projects', [
+    reading ? seg('reading…', theme.faint) : seg(`${tokens(total)} new tokens`, theme.dim),
+  ]);
 
+  const body: Line[] = [];
   const week = feed ? live(feed.limits.sevenDay, now) : null;
   if (feed && week) {
     const part = week.usedPercentage / 100;
-    out.push(row(cols, lowerMeter(wide, part, feed.stale ? theme.dim : meterTone(part))));
-    out.push(row(cols, [seg(`${pct(part)} of the weekly limit`, theme.dim), sep(), seg(`resets ${when(week.resetsAt, now)}`, theme.dim)]));
+    body.push(...limitBlock(cols, 'Weekly limit', part, `resets ${when(week.resetsAt, now)}`, feed.stale));
+    body.push(panelRow(cols));
   }
 
-  const shares = shareByModel(spends).slice(0, SHARE_COLOURS.length);
-  out.push(row(cols, [seg('By model', theme.ink), seg('   share of new tokens, cache reads excluded', theme.dim)]));
+  body.push(heading(cols, 'By model', 'share of new tokens'));
+  const shares = shareByModel(spends).slice(0, 5);
   if (!shares.length) {
-    out.push(row(cols, [seg(reading ? 'Reading transcripts…' : 'No replies in the last 7 days.', theme.dim)]));
-    return out;
+    body.push(panelRow(cols, [seg(reading ? 'Reading your transcripts…' : 'Nothing in the last 7 days.', theme.dim)]));
+    return panel(cols, title, body);
   }
 
-  // One stacked bar: a colour a model, widest first, nothing rounded away.
-  const cells = shares.map(s => Math.max(1, Math.round(s.part * wide)));
-  cells[0] = Math.max(1, wide - cells.slice(1).reduce((a, n) => a + n, 0));
-  out.push(row(cols, shares.map((_, i) => seg(glyph.lower.repeat(cells[i]!), SHARE_COLOURS[i]))));
-  const half = Math.floor(wide / 2);
-  for (let i = 0; i < shares.length; i += 2) {
-    const cell = (n: number): Seg[] => {
-      const share = shares[n];
-      if (!share) return [];
-      const made = [seg(glyph.square, SHARE_COLOURS[n]), seg(` ${modelName(share.model)} `, theme.text), seg(sharePct(share.part), theme.dim)];
-      return [...made, sp(half - made.reduce((w, s) => w + s.text.length, 0))];
-    };
-
-    out.push(row(cols, [...cell(i), ...cell(i + 1)]));
-  }
-
-  // The whole subagent story in one line: no per-agent list lives here.
+  body.push(...shares.map(share => modelRow(cols, modelName(share.model), share.part)));
   const split = splitBySub(spends);
-  if (split.sub) {
-    out.push(row(cols, [
-      seg('Subagents ', theme.text),
-      seg(pct(split.part), theme.ink),
-      sep(),
-      seg(`${tokens(split.sub)} of ${tokens(split.total)}`, theme.dim),
-      sep(),
-      seg(`main thread ${tokens(split.main)}`, theme.dim),
-    ]));
-  }
-
-  return out;
+  if (split.sub) body.push(panelRow(cols), subRow(cols, split));
+  return panel(cols, title, body);
 }
 
-// Section three. How full this chat's context window is, and how much of what
-// it sends comes back out of the cache.
+// Panel three. How full this chat's context window is, and how much of what it
+// sends comes back out of the cache.
 function chatRows(cols: number, input: UsageInput, spends: Spend[], feed: Feed | null): Line[] {
   const chat = input.context;
   if (!chat) return [];
-  const wide = bodyWidth(cols);
+  const title = panelTitle(cols, 'This chat', modelName(chat.model), []);
+  const hit = cacheHitOf(spends, chat.chat);
+  const note = hit === null ? '' : `cache hit ${pct(hit)}`;
   // Only the feed knows how big the window is; without it we have the tokens.
   const size = feed ? feed.limits.contextSize : null;
-  const part = size ? Math.min(1, chat.tokens / size) : null;
-  const out: Line[] = [section(cols, 'This chat', modelName(chat.model))];
-  const label = 'Context  ';
-  if (part !== null) {
-    out.push(row(
-      cols,
-      [seg(label, theme.dim), ...lowerMeter(wide - label.length - 6, part, part >= 0.8 ? theme.warn : theme.link)],
-      [seg(pct(part), theme.ink, {bold: true})],
-    ));
+  if (size) {
+    const part = Math.min(1, chat.tokens / size);
+    const facts: Seg[] = [seg(`${tokens(chat.tokens)} of ${tokens(size)}`, theme.dim)];
+    if (note) facts.push(sep(), seg(note, theme.dim));
+    return panel(cols, title, [...limitBlock(cols, 'Context', part, '', false), panelRow(cols, facts)]);
   }
 
-  const facts: Seg[] = [seg(size ? `${tokens(chat.tokens)} of ${tokens(size)} tokens` : `${tokens(chat.tokens)} tokens in context`, theme.dim)];
-  const hit = cacheHitOf(spends, chat.chat);
-  if (hit !== null) facts.push(sep(), seg(`cache hit ${pct(hit)}`, theme.dim));
-  out.push(row(cols, facts));
-  return out;
+  return panel(cols, title, [
+    panelRow(cols, [seg('Context', theme.ink)], [seg(`${tokens(chat.tokens)} tokens`, theme.ink, {bold: true})]),
+    ...(note ? [panelRow(cols, [seg(note, theme.dim)])] : []),
+  ]);
+}
+
+// Panel four, and the first to fall off a short pane. Tokens per half hour
+// over the last five hours: one column a bucket, the half hour we are in now
+// in accent, and a floor under an idle one so the time axis stays readable.
+function paceRows(cols: number, spends: Spend[], reading: boolean, now: number): Line[] {
+  const inner = panelInner(cols);
+  const pace = paceOf(spends, now);
+  const count = pace.buckets.length;
+  // Two columns of air between bars when there is room for it, otherwise one.
+  const gap = inner >= 58 ? 2 : 1;
+  const bar = Math.floor((inner - (count - 1) * gap) / count);
+  const chart = bar * count + (count - 1) * gap;
+  const tallest = Math.max(0, ...pace.buckets);
+  const peak = Math.max(1, tallest);
+  const ROWS = 3;
+  const note = reading
+    ? seg('reading…', theme.faint)
+    : seg(tallest ? `peak ${tokens(tallest)}` : 'idle', theme.dim);
+
+  const body: Line[] = [];
+  for (let level = ROWS - 1; level >= 0; level--) {
+    const segs: Seg[] = [];
+    pace.buckets.forEach((amount, i) => {
+      const eighths = Math.round((amount / peak) * ROWS * 8);
+      const here = Math.max(0, Math.min(8, eighths - level * 8));
+      const char = level === 0 && here === 0 ? glyph.columns[1]! : glyph.columns[here]!;
+      const colour = i === count - 1 ? theme.accent : amount ? theme.dim : theme.faint;
+      if (i) segs.push(sp(gap, theme.surface));
+      segs.push(seg(char.repeat(bar), colour));
+    });
+    body.push(panelRow(cols, segs));
+  }
+
+  const from = new Date(pace.from).toLocaleTimeString(undefined, {hour: '2-digit', minute: '2-digit', hour12: false});
+  body.push(panelRow(cols, [seg(from, theme.faint), sp(chart - width(from) - 3), seg('now', theme.faint)]));
+  return panel(cols, panelTitle(cols, 'Pace', 'new tokens per half hour', [note]), body);
 }
 
 export function usageLines(input: UsageInput): Line[] {
@@ -224,19 +282,15 @@ export function usageLines(input: UsageInput): Line[] {
   const spends = input.spends ?? [];
   const reading = input.spends === null;
   const feed = feedOf(input.limits, now);
-  const blank = pageRow(cols);
-  const out = [
-    ...sessionRows(cols, spends, reading, feed, now),
-    blank,
-    ...paceRows(cols, spends, reading, now),
-    blank,
-    ...weekRows(cols, spends, reading, feed, now),
-    blank,
-    ...chatRows(cols, input, spends, feed),
-  ];
-  // A section that had nothing to say must not leave a gap at the bottom.
-  while (out[out.length - 1] === blank) out.pop();
-  return out;
+  const gap = pageRow(cols);
+  const panels = [
+    sessionRows(cols, spends, reading, feed, now),
+    weekRows(cols, spends, reading, feed, now),
+    chatRows(cols, input, spends, feed),
+    paceRows(cols, spends, reading, now),
+  ].filter(rows => rows.length);
+  // A panel that had nothing to say leaves no gap behind it either.
+  return panels.flatMap((rows, i) => (i ? [gap, ...rows] : rows));
 }
 
 // How much of the bar the meters may have. Phase 3 shrinks them in steps.
