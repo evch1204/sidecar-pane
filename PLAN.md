@@ -307,11 +307,17 @@ Two sources, and the view keeps them apart.
   "This week" would be a claim about a reset only a feed knows.
 - **Limits** (how much of the 5 hour and weekly allowance is used) are only
   ever handed to a status line script. `hooks/statusline.mjs` saves what it is
-  given to `~/.sidecar/usage.json`. There is exactly one `statusLine` slot in
-  `~/.claude/settings.json` and the owner's is already taken, so the script
-  cannot sit beside anything: it **chains**. Name the previous command in
-  `~/.sidecar/statusline-chain.json` and it feeds it the same stdin and prints
-  its output, so both work. Installing it stays the owner's call.
+  given to `~/.sidecar/usage.json`. There is exactly **one** `statusLine` slot
+  in `~/.claude/settings.json` — not a list like `hooks` — so the script cannot
+  sit beside anything. It has to *be* the command, and `npm run connect` makes
+  it one: a timestamped backup of `settings.json`, then the whole previous
+  `statusLine` object into `~/.sidecar/statusline-chain.json`, then ours in the
+  slot. The script runs whatever was chained with the same stdin and prints
+  exactly what it printed, **including nothing** — a tool that only forwards the
+  payload to its own app still shows no status line. `npm run disconnect` puts
+  the old object straight back. It is never installed without the owner running
+  the command, and a tool that rewrites the slot on launch will take it back,
+  which reads as `feed quiet` rather than a wrong number.
 - **Without a feed, nothing is a percentage.** The session number becomes the
   window's own new tokens, estimated from the transcripts and written `~209k`,
   and the same estimate is what the menu bar shows.

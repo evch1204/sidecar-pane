@@ -10,6 +10,8 @@
   "scripts": {
     "start": "tsx src/cli.tsx",
     "pane": "node scripts/open-pane.mjs",
+    "connect": "node scripts/connect.mjs connect",
+    "disconnect": "node scripts/connect.mjs disconnect",
     "snapshot": "tsx src/cli.tsx --snapshot",
     "typecheck": "tsc --noEmit"
   },

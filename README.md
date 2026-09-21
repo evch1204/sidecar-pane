@@ -61,27 +61,35 @@ In Windows Terminal, this opens it as a split on the right of the pane you are i
 npm run pane -- "C:\path\to\a\project"
 ```
 
-## Usage limits
+## Real percentages
 
-Tokens are counted from your transcripts and need nothing. The 5 hour and
-weekly limits are different: Claude Code only hands them to a status line
-script. To see them, add this to `~/.claude/settings.json`:
+Tokens are counted from your transcripts and need nothing. Your 5 hour and
+weekly limits are different: Claude Code hands those numbers to one thing only,
+the single `statusLine` command in `~/.claude/settings.json`. So the pane can
+only show real percentages if that command is ours.
 
-```json
-"statusLine": {"type": "command", "command": "node /path/to/sidecar-pane/hooks/statusline.mjs"}
+One command connects it, and one puts it back:
+
+```sh
+npm run connect
+npm run disconnect
 ```
 
-It saves the numbers to `~/.sidecar/usage.json` for the pane. There is only
-one status line slot, so if yours is already taken, name the old command in
-`~/.sidecar/statusline-chain.json` and the script will run it with the same
-input and print its output:
+`connect` copies `settings.json` to `settings.json.sidecar-backup-<time>` beside
+it, then sets `statusLine` to `node "…/hooks/statusline.mjs"`. Nothing else in
+the file changes, and your `hooks` are never touched. If a status line was
+already there, the whole thing is saved to `~/.sidecar/statusline-chain.json`
+first, and our script runs it with the same input and prints exactly what it
+printed before — including nothing at all, if that is what it printed. So your
+status line keeps working and the pane reads the limits on the way past. Run
+`node scripts/connect.mjs status` to see where things stand.
 
-```json
-{"command": "node C:/path/to/your/statusline.mjs"}
-```
+One honest caveat: a tool that rewrites `statusLine` every time it launches will
+quietly take the slot back. Orca appears to do this. You will notice because the
+Usage view starts saying `feed quiet`; run `npm run connect` again.
 
-Without any of this the Usage view estimates the window from your transcripts
-and says that is what it is doing.
+Without the feed the Usage view estimates the window from your transcripts and
+says that is what it is doing.
 
 ## Keys
 
@@ -121,7 +129,7 @@ a row off in some terminal, run with `--mouse-debug` to see what it reports.
 
 - `src/core` reads folders, files, git, Claude Code's transcripts, its subagents and token counts. It knows nothing about the screen.
 - `src/ui` draws with Ink. It knows nothing about the file system beyond what `core` hands it. `cells.ts` is the row model everything is drawn from, `views/` builds the rows of each view, `App.tsx` holds the state, keys and mouse.
-- `hooks/statusline.mjs` is the optional status line script that feeds the usage limits.
+- `hooks/statusline.mjs` is the optional status line script that feeds the usage limits, and `scripts/connect.mjs` is the `npm run connect` / `npm run disconnect` pair that puts it in the slot and takes it out again.
 - `scripts/smoke.tsx` drives the app against this repo with fake key presses and mouse reports, then prints frames: `npx tsx scripts/smoke.tsx`.
 - `scripts/smoke-history.tsx` builds a whole fake chat in a temp folder (transcript, a subagent, a usage feed and snapshots) and prints every view reading it: `npx tsx scripts/smoke-history.tsx`.
 - `design/` is the design canvas as files, and the script that captures the real pane into it.
