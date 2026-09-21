@@ -22,8 +22,8 @@ import {glyph, theme} from './theme';
 import {agentsBadge, agentsLines, agentsTabVisible, runningAgents} from './views/agents';
 import {changesLines, spinner, turnKey, type Open} from './views/changes';
 import {
-  changedPlaces, filesLines, firstReadId, MORE_ROWS, nodeId, peekEnd, readerHead, readerIdAt, readerLineOf, readerLines,
-  type Marks,
+  changedPlaces, filesLines, firstReadId, MORE_ROWS, nodeId, paperMeasure, peekEnd, readerHead, readerIdAt,
+  readerLineOf, readerLines, type Marks,
 } from './views/files';
 import {usageExtras, usageLines, type ExtrasRoom} from './views/usage';
 
@@ -319,9 +319,11 @@ export function App({root, interactive, mouseDebug = false}: Props) {
   const peekFile = useFile(root, peekPath, git, version);
   const readFile = useFile(root, readerPath, git, version);
   // Markdown is laid out whether or not it is being shown, because `r` has to
-  // map the row under the cursor onto its source line and back.
+  // map the row under the cursor onto its source line and back. The page costs
+  // a pass over the file, so it is only laid out again when the file's lines or
+  // the paper's measure change, never on a spinner tick.
   const mdLines = useMemo(
-    () => (readerPath && isMarkdown(readerPath) && readFile.view?.kind === 'text' ? formatMarkdown(readFile.view.lines, Math.min(cols - 6, 78)) : null),
+    () => (readerPath && isMarkdown(readerPath) && readFile.view?.kind === 'text' ? formatMarkdown(readFile.view.lines, paperMeasure(cols), glyph) : null),
     [readerPath, readFile.view, cols],
   );
   const formatted = raw ? null : mdLines;
@@ -688,6 +690,9 @@ export function App({root, interactive, mouseDebug = false}: Props) {
         return setSel(s => ({...s, changes: `t:${act.key}`}));
       }
 
+      // The pills are two states, not a toggle: pressing the lit one does nothing.
+      case 'page':
+        return act.raw === raw ? undefined : run({do: 'raw'});
       case 'back':
         return setReaderPath(null);
       case 'none':
@@ -943,7 +948,7 @@ export function App({root, interactive, mouseDebug = false}: Props) {
           ? [['o', 'read all'], ['esc', 'close'], ['m', 'menu'], [']', 'next change']]
           : [['enter', 'peek'], ['m', 'menu'], ['↑↓', 'move'], ['o', 'read'], ['c', 'changed'], ['q', 'quit']]
         : slot === 'reader'
-          ? [['↑↓', 'line'], ['esc', 'back'], ['m', 'menu'], [']', 'change'], ['space', 'page'], ...(markdown ? [['r', raw ? 'formatted' : 'raw'] as Hint] : [])]
+          ? [['↑↓', 'line'], ['esc', 'back'], ['m', 'menu'], [']', 'change'], ['space', 'scroll'], ...(markdown ? [['r', raw ? 'page' : 'source'] as Hint] : [])]
           : slot === 'agents'
             ? [['enter', 'open'], ['m', 'menu'], ['↑↓', 'move'], ['q', 'quit']]
             : [['↑↓', 'scroll'], ['m', 'menu'], ['q', 'quit']];

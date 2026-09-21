@@ -117,12 +117,19 @@ export const glyph = {
   // bottom edge, a meter, and the big numbers in the Usage view.
   lower: '▄',
   upper: '▀',
+  // A page of markdown: the boxes of a task list, and the three sides of the
+  // frame a code block sits in.
+  boxOff: '☐',
+  boxOn: '☑',
+  codeTop: '┌',
+  codeSide: '│',
+  codeBottom: '└',
   columns: [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'],
   spinner: ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'],
   digits,
 } as const;
 
-type Style = {color?: string; bold?: boolean; italic?: boolean; underline?: boolean};
+type Style = {color?: string; bold?: boolean; italic?: boolean; underline?: boolean; bg?: string};
 
 export const syntax: Record<Kind, Style> = {
   keyword: {color: theme.keyword},
@@ -136,7 +143,16 @@ export const syntax: Record<Kind, Style> = {
   section: {color: theme.ink, bold: true},
   bullet: {color: theme.dim},
   code: {color: theme.warn},
-  strong: {bold: true},
+  strong: {color: theme.ink, bold: true},
   emphasis: {italic: true},
   link: {color: theme.link, underline: true},
+  // A struck-out line is work that is done with, and faint says so. A real
+  // strikethrough would need a new field on every segment in the pane.
+  strike: {color: theme.faint},
+  // Inline code on a page, on a chip of recessed ground, the same way a code
+  // block sits in a well. `surface2` belongs to the cursor's own row, so a
+  // chip drawn on it would disappear the moment the cursor arrived.
+  chip: {color: theme.warn, bg: theme.scope},
+  // The frame of a code block and the bar beside a quote: structure, not words.
+  frame: {color: theme.faint},
 };

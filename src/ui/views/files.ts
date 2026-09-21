@@ -2,12 +2,12 @@ import path from 'node:path';
 import type {FileView} from '../../core/file';
 import {pathKey, type Change} from '../../core/git';
 import {layoutLine, type Segment} from '../../core/highlight';
-import type {MdLine} from '../../core/markdown';
+import {isMarkdown, type MdKind, type MdLine} from '../../core/markdown';
 import type {TreeNode} from '../../core/tree';
 import type {FileHistory} from '../../core/turns';
 import {
-  chevron, counts, pageRow, RIGHT_PAD, seg, sp, spineRow, wellBottom, wellRow, wellTop, wellWidth, widthOf,
-  type Line, type Seg,
+  chevron, counts, pageRow, RIGHT_PAD, seg, slice, sp, spineRow, wellBottom, wellRow, wellTop, wellWidth, widthOf,
+  type Line, type Seg, type Zone,
 } from '../cells';
 import {glyph, syntax, theme} from '../theme';
 import {wrap} from '../util';
@@ -282,19 +282,137 @@ export function readerIdAt(line: number, formatted: MdLine[] | null): string | n
 // The first row of the file itself, so the reader can open on the file rather
 // than on the "changed by" list above it. Null when there is nothing to read.
 export function firstReadId(input: Pick<ReaderInput, 'view' | 'formatted'>): string | null {
-  if (input.formatted) return input.formatted.length ? mdLineId(0) : null;
+  if (input.formatted) {
+    // The page starts with a blank paper row: the cursor belongs on the title.
+    const first = input.formatted.findIndex(row => row.kind !== 'blank');
+    return input.formatted.length ? mdLineId(Math.max(0, first)) : null;
+  }
+
   return input.view.kind === 'text' && input.view.lines.length ? lineId(1) : null;
 }
+
+// One state of the reader, as a button, in the same shape the pills under the
+// tabs use: the one you are in is lit, the other is a word you can press.
+const readPill = (label: string, on: boolean): Seg[] => [
+  seg(` ${label} `, on ? theme.ink : theme.dim, {bold: on, bg: on ? theme.surface2 : undefined}),
+];
 
 export function readerHead(input: Pick<ReaderInput, 'cols' | 'root' | 'path' | 'view' | 'formatted'>): Line[] {
   const {cols} = input;
   // A small pill, so "back" looks like something you can press.
   const back = [seg(` ${glyph.back} Files `, theme.dim, {bg: theme.surface2})];
-  return [
-    pageRow(cols, [...back, sp(2), ...crumbs(input.root, input.path)], [seg(input.formatted ? `Markdown  ${glyph.sep}  formatted` : kindOf(input.path, input.view), theme.dim)], {
-      zones: [{from: 1, to: 1 + widthOf(back), act: {type: 'back'}}],
-    }),
-  ];
+  const note = [seg(kindOf(input.path, input.view), theme.dim)];
+  const zones: Zone[] = [{from: 1, to: 1 + widthOf(back), act: {type: 'back'}}];
+
+  // Only a markdown file has two ways to be read, so only it gets the pills.
+  if (!isMarkdown(input.path)) return [pageRow(cols, [...back, sp(2), ...crumbs(input.root, input.path)], note, {zones})];
+
+  const page = readPill('Page', Boolean(input.formatted));
+  const source = readPill('Source', !input.formatted);
+  const pills = [...page, sp(1), ...source];
+  // The kind and the line count give way before the pills do: the pills are a
+  // control, and the note is a fact you can do without.
+  const withNote = [...note, sp(2), ...pills];
+  const room = cols - 2 - RIGHT_PAD - widthOf(back) - 2;
+  const right = widthOf(withNote) + 10 <= room ? withNote : pills;
+
+  // The columns come from the text that was really drawn, never from a guess.
+  const rightEnd = cols - 1 - RIGHT_PAD;
+  if (widthOf(right) <= room) {
+    const sourceFrom = rightEnd - widthOf(source);
+    zones.push(
+      {from: sourceFrom - widthOf(page) - 1, to: sourceFrom - 1, act: {type: 'page', raw: false}},
+      {from: sourceFrom, to: rightEnd, act: {type: 'page', raw: true}},
+    );
+  }
+
+  return [pageRow(cols, [...back, sp(2), ...crumbs(input.root, input.path)], right, {zones})];
+}
+
+// ---- the page ---------------------------------------------------------------
+
+// The sheet a markdown file is read on: a lit fill with three columns of
+// margin each side, centred in the pane when the pane is wider than it is.
+const MARGIN = 3;
+
+// The text measure. Wide enough for a table, never wider than a column of
+// prose should be, and the same number the page is laid out to in core.
+export const paperMeasure = (cols: number): number => Math.max(12, Math.min(72, cols - 2 * MARGIN - 2));
+
+type Paper = {left: number; width: number; measure: number};
+
+function paperOf(cols: number): Paper {
+  const measure = paperMeasure(cols);
+  const width = measure + 2 * MARGIN;
+  // Column 0 and the scrollbar column are never painted, so the sheet lives
+  // in columns 1 to cols - 2 and is centred inside them.
+  return {left: 1 + Math.max(0, Math.floor((cols - 2 - width) / 2)), width, measure};
+}
+
+// One row of the page, exactly the sheet's width every time, so the right
+// margin is a straight edge and the fill never has a hole in it. The change
+// bar sits in the first margin column, where a line number would be.
+function paperRow(
+  cols: number,
+  sheet: Paper,
+  body: Seg[],
+  more: Omit<Line, 'segs'> & {bg?: string; fill?: string; mark?: Seg} = {},
+): Line {
+  const {bg, fill, mark, ...rest} = more;
+  const page = bg ?? theme.surface;
+  const inner = fill ?? page;
+  const text = widthOf(body) > sheet.measure ? slice(body, 0, sheet.measure) : body;
+  return {
+    ...rest,
+    segs: [
+      sp(sheet.left),
+      mark ? {...mark, bg: page} : sp(1, page),
+      sp(MARGIN - 1, page),
+      ...text.map(s => ({...s, bg: s.bg ?? inner})),
+      sp(sheet.measure - widthOf(text), inner),
+      sp(MARGIN, page),
+      sp(cols - 1 - sheet.left - sheet.width),
+    ],
+  };
+}
+
+type PageStyle = {color?: string; bold?: boolean; italic?: boolean; fill?: string};
+
+// The page's typography. A terminal has one font size, so a heading is weight,
+// spacing and a rule; only code and a table header get ground of their own.
+const PAGE: Record<MdKind, PageStyle> = {
+  blank: {},
+  heading1: {color: theme.ink, bold: true},
+  heading2: {color: theme.ink, bold: true},
+  heading3: {color: theme.text, bold: true},
+  heading4: {color: theme.dim, bold: true},
+  ruleHeavy: {color: theme.faint},
+  ruleThin: {color: theme.faint},
+  para: {color: theme.text},
+  list: {color: theme.text},
+  quote: {color: theme.dim, italic: true},
+  codeLabel: {color: theme.faint},
+  code: {color: theme.text, fill: theme.well},
+  codeEnd: {color: theme.faint},
+  // The header's strip is recessed, like the one over a peek. The row under
+  // the cursor owns `surface2`, and two bands of one colour read as one thing.
+  tableHead: {color: theme.ink, bold: true, fill: theme.scope},
+  tableRule: {color: theme.faint},
+  tableRow: {color: theme.text},
+};
+
+// The row's kind says how the page reads; a word's kind says what the word is.
+// The word wins wherever it has an opinion of its own.
+function ink(row: PageStyle, part: Segment): Seg {
+  const style = part.kind ? syntax[part.kind] : {};
+  return {
+    text: part.text,
+    color: style.color ?? row.color,
+    bold: style.bold ?? row.bold,
+    italic: style.italic ?? row.italic,
+    underline: style.underline,
+    bg: style.bg,
+  };
 }
 
 // The whole file, full height, with the turns that wrote it on top.
@@ -335,15 +453,21 @@ export function readerLines(input: ReaderInput): Line[] {
   }
 
   if (input.formatted) {
+    const sheet = paperOf(cols);
     input.formatted.forEach((line, i) => {
       const id = mdLineId(i);
       const here = id === sel;
       let marked = false;
       for (let n = line.from; n <= line.to && !marked; n++) marked = isMarked(input.marks, n);
-      const bg = here ? theme.surface2 : undefined;
+      const style = PAGE[line.kind];
       out.push(
-        pageRow(cols, [seg(marked ? glyph.bar : ' ', theme.accent, {bg}), sp(2, bg), ...line.segments.map(s => ({text: s.text, ...(s.kind ? syntax[s.kind] : {color: theme.text}), bg}))], [], {
-          bg, id, pick: true, rail: marked ? theme.accent : undefined,
+        paperRow(cols, sheet, line.segments.map(part => ink(style, part)), {
+          // The cursor row is one colour right across the sheet, code and
+          // table strips included, or it would read as two rows.
+          bg: here ? theme.surface2 : undefined,
+          fill: here ? theme.surface2 : style.fill,
+          mark: seg(marked ? glyph.bar : ' ', theme.accent),
+          id, pick: true, rail: marked ? theme.accent : undefined,
         }),
       );
     });
