@@ -116,61 +116,101 @@
       "x": 1288,
       "y": 1500
     },
+    "V3-Agents.dc.html": {
+      "h": 1064,
+      "page": "v3",
+      "title": "Agents · one opened",
+      "w": 564,
+      "x": 1932,
+      "y": 0
+    },
     "V3-Changes.dc.html": {
+      "h": 1064,
+      "page": "v3",
+      "title": "Changes · a finished turn, a diff open in place",
+      "w": 564,
+      "x": 0,
+      "y": 0
+    },
+    "V3-Files.dc.html": {
+      "h": 1064,
+      "page": "v3",
+      "title": "Files · a peek in place",
+      "w": 564,
+      "x": 644,
+      "y": 1500
+    },
+    "V3-Menu.dc.html": {
+      "h": 1064,
+      "page": "v3",
+      "title": "The View menu",
+      "w": 564,
+      "x": 644,
+      "y": 0
+    },
+    "V3-Reader.dc.html": {
+      "h": 1064,
+      "page": "v3",
+      "title": "Reader · markdown, formatted",
+      "w": 564,
+      "x": 1288,
+      "y": 1500
+    },
+    "V3-Usage.dc.html": {
+      "h": 1064,
+      "page": "v3",
+      "title": "Usage",
+      "w": 564,
+      "x": 0,
+      "y": 1500
+    },
+    "V3-Working.dc.html": {
+      "h": 1064,
+      "page": "v3",
+      "title": "While Claude works · three agents",
+      "w": 564,
+      "x": 1288,
+      "y": 0
+    },
+    "V4-Changes.dc.html": {
       "x": 0,
       "y": 0,
       "w": 564,
       "h": 1064,
-      "title": "Changes · a finished turn, a diff open in place",
-      "page": "v3"
+      "title": "Changes · the stream, redrawn",
+      "page": "v4"
     },
-    "V3-Menu.dc.html": {
+    "V4-Working.dc.html": {
       "x": 644,
       "y": 0,
       "w": 564,
       "h": 1064,
-      "title": "The View menu",
-      "page": "v3"
+      "title": "While Claude works · the agent chart",
+      "page": "v4"
     },
-    "V3-Working.dc.html": {
+    "V4-Agents.dc.html": {
       "x": 1288,
       "y": 0,
       "w": 564,
       "h": 1064,
-      "title": "While Claude works · three agents",
-      "page": "v3"
+      "title": "Agents · who ran when, and where",
+      "page": "v4"
     },
-    "V3-Agents.dc.html": {
+    "V4-Worktrees.dc.html": {
       "x": 1932,
       "y": 0,
       "w": 564,
       "h": 1064,
-      "title": "Agents · one opened",
-      "page": "v3"
+      "title": "Changes · across worktrees",
+      "page": "v4"
     },
-    "V3-Usage.dc.html": {
+    "V4-Bar.dc.html": {
       "x": 0,
       "y": 1500,
       "w": 564,
-      "h": 1064,
-      "title": "Usage",
-      "page": "v3"
-    },
-    "V3-Files.dc.html": {
-      "x": 644,
-      "y": 1500,
-      "w": 564,
-      "h": 1064,
-      "title": "Files · a peek in place",
-      "page": "v3"
-    },
-    "V3-Reader.dc.html": {
-      "x": 1288,
-      "y": 1500,
-      "w": 564,
-      "h": 1064,
-      "title": "Reader · markdown, formatted",
-      "page": "v3"
+      "h": 564,
+      "title": "The bar · session and week, in every state",
+      "page": "v4"
     }
   },
   "createdOnFiles": {
@@ -180,7 +220,7 @@
   "designSystems": [],
   "launch": {
     "view": "canvas",
-    "page": "v3"
+    "page": "v4"
   },
   "notes": {
     "changes": {
@@ -226,20 +266,65 @@
       "y": 1200
     },
     "v3a": {
-      "x": 0,
-      "y": -300,
-      "text": "Version 3 · the pane as built: Version 1 look, menu bar, agents",
       "kind": "title1",
       "maxW": 2496,
-      "page": "v3"
+      "page": "v3",
+      "text": "Version 3 · the pane as built: Version 1 look, menu bar, agents",
+      "w": 240,
+      "x": 0,
+      "y": -300
     },
     "v3b": {
-      "x": 0,
-      "y": 1200,
-      "text": "Usage and Files",
       "kind": "title1",
       "maxW": 1852,
-      "page": "v3"
+      "page": "v3",
+      "text": "Usage and Files",
+      "w": 240,
+      "x": 0,
+      "y": 1200
+    },
+    "v4a": {
+      "x": 0,
+      "y": -300,
+      "kind": "title1",
+      "maxW": 2496,
+      "page": "v4",
+      "text": "Version 4 · Proposal: shapes before words, the agent chart, worktrees"
+    },
+    "v4b": {
+      "x": 0,
+      "y": 1200,
+      "kind": "title1",
+      "maxW": 2496,
+      "page": "v4",
+      "text": "The bar, and the notes behind the drawings"
+    },
+    "v4why": {
+      "x": 644,
+      "y": 1500,
+      "w": 560,
+      "page": "v4",
+      "fill": "orange",
+      "size": "m",
+      "text": "WHAT CHANGED FROM VERSION 3, AND WHY\n\n1. Numbers become shapes. Every file and every past turn gets five cells: how many are lit is how much changed, green and red is which way. You can see the big turn without reading.\n\n2. A past turn is ONE line, not two: prompt, size, time. The open turn is the only thing that talks.\n\n3. Files are grouped by folder, so \"src/ui/views/\" is written once, not six times. A coloured letter (M A D R, as git says it) replaces the word Edited.\n\n4. One bar says where the turn landed: 58% core, 31% ui, 11% docs.\n\n5. The day has a skyline: one column per turn, the open one lit. Click a column to jump.\n\n6. The spine runs through every turn again, as in Version 2: filled node = open, ring = closed, pulsing = running."
+    },
+    "v4agents": {
+      "x": 1288,
+      "y": 1500,
+      "w": 560,
+      "page": "v4",
+      "fill": "blue",
+      "size": "m",
+      "text": "AGENTS, THE WAY CLAUDE CODE PRINTS THEM\n\nA1 to A4 go away: they were labels you had to decode. An agent is called what Claude called it (\"Write the WezTerm launcher\"), with a coloured square. The same square sits on the files that agent wrote, so nothing needs a legend.\n\nThe count comes first: \"3 agents · 2 running · 1 done\". Under each running agent is the line Claude Code shows: the tool it is in right now, and how many tool uses so far.\n\nThe Agents view adds time: one lane per agent on a shared clock, so you can SEE that three ran at once and one ran alone for 18 minutes. Lanes are grouped by the folder the agent worked in.\n\nAll of it is already on disk: the agent's own record holds its description, model, tool calls, tokens, start and end."
+    },
+    "v4worktrees": {
+      "x": 1932,
+      "y": 1500,
+      "w": 560,
+      "page": "v4",
+      "fill": "green",
+      "size": "m",
+      "text": "HOW WORKTREES WOULD WORK\n\nToday the pane watches one folder. When Claude starts an agent in its own worktree, that agent's edits land in ANOTHER folder, so the pane shows nothing until the branch is merged. That happened all day today.\n\n1. Find them: \"git worktree list\" from the folder the pane was opened in. One repo, N folders.\n\n2. Each worktree is just another project to the pane: its own chats, its own snapshots, its own git status. The pane already keys everything by folder, so this is the same machinery run N times. Active worktrees poll fast, idle ones slowly.\n\n3. Which agent is where is exact, not guessed: every agent's record names its worktree path and branch, and every line of its transcript carries the folder it ran in.\n\n4. Default scope stays the folder you opened, PLUS any worktree an agent of yours is working in. \"in jiaolong ▾\" widens it to all (key: w).\n\n5. A worktree knows its state: ahead of its parent, running, merged. \"Not in your folder until it is merged\" is said on the row."
     }
   },
   "order": [
@@ -264,7 +349,12 @@
     "V3-Agents.dc.html",
     "V3-Usage.dc.html",
     "V3-Files.dc.html",
-    "V3-Reader.dc.html"
+    "V3-Reader.dc.html",
+    "V4-Changes.dc.html",
+    "V4-Working.dc.html",
+    "V4-Agents.dc.html",
+    "V4-Worktrees.dc.html",
+    "V4-Bar.dc.html"
   ],
   "pages": [
     {
@@ -278,6 +368,10 @@
     {
       "id": "v3",
       "name": "Version 3 · Built"
+    },
+    {
+      "id": "v4",
+      "name": "Version 4 · Proposal"
     }
   ],
   "title": "Sidecar pane redesign"

@@ -6,6 +6,9 @@ files['Kit.dc.html'] = kit;
 // Version 3 reads the theme Version 1 set, so it is built before Version 2 changes it.
 const {files3} = await import('./v3.mjs');
 Object.assign(files, files3);
+// Version 4 is drawn in the build's own theme too, so it also comes before Version 2.
+const {files4, text4} = await import('./v4.mjs');
+Object.assign(files, files4); Object.assign(text, text4);
 const {files2, text2} = await import('./v2.mjs');
 Object.assign(files, files2); Object.assign(text, text2);
 fs.mkdirSync(OUT, {recursive: true});

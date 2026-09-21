@@ -12,6 +12,7 @@ with the repo and can be rebuilt or republished from anywhere.
 | Version 1 · Cards | The first redesign. One stream, cards, diffs that open in place. Drawn by hand. |
 | Version 2 · Workbench | The alternative look: painted background, timeline, agent lanes. Drawn by hand. Not chosen. |
 | Version 3 · Built | What the pane really draws today. Not drawn: captured from the running app. |
+| Version 4 · Proposal | The next look, drawn by hand and not built yet: sizes as shapes, files grouped by folder, the agents as the chart Claude Code prints, worktrees, and the bar in every state. |
 
 ## What is here
 
