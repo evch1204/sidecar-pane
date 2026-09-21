@@ -2,6 +2,7 @@ import {execFile, execFileSync} from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import {parseStats, type FileStat} from './git';
 
 // What a turn changed cannot be read out of the transcript: Claude edits
 // through shell commands as often as through its file tools, and a command
@@ -139,18 +140,12 @@ export async function patchBetween(store: Store, root: string, from: string, to:
   return git(store, root, ['diff', '--no-color', '--no-ext-diff', '--find-renames', '-U3', from, to]);
 }
 
-export type FileStat = {
-  rel: string;
-  status: 'added' | 'modified' | 'deleted' | 'renamed';
-  added: number;
-  removed: number;
-};
-
-const LETTER = {A: 'added', M: 'modified', D: 'deleted', R: 'renamed', C: 'added', T: 'modified'} as const;
+export type {FileStat};
 
 // Which files differ between two snapshots, and by how much. Counting is a
 // separate, much cheaper call than the patch itself, so the list of turns can
-// show numbers without reading a single line of any diff.
+// show numbers without reading a single line of any diff. The output is the
+// same shape git gives for two commits, so `parseStats` reads both.
 export async function statBetween(
   store: Store,
   root: string,
@@ -158,43 +153,8 @@ export async function statBetween(
   to: string,
 ): Promise<FileStat[]> {
   const names = (await git(store, root, ['diff', '--name-status', '-z', '--find-renames', from, to])) ?? '';
-  const status = new Map<string, FileStat['status']>();
-  const parts = names.split('\0');
-  for (let i = 0; i < parts.length; i++) {
-    const code = parts[i];
-    if (!code || !/^[A-Z]/.test(code)) continue;
-    const kind = LETTER[code[0] as keyof typeof LETTER] ?? 'modified';
-    // A rename is followed by the old path and then the new one.
-    if (code[0] === 'R' || code[0] === 'C') {
-      status.set(parts[i + 2] ?? '', kind);
-      i += 2;
-    } else {
-      status.set(parts[i + 1] ?? '', kind);
-      i += 1;
-    }
-  }
-
   const counts = (await git(store, root, ['diff', '--numstat', '-z', '--find-renames', from, to])) ?? '';
-  const out: FileStat[] = [];
-  const tokens = counts.split('\0');
-  for (let i = 0; i < tokens.length; i++) {
-    const match = /^(\d+|-)\t(\d+|-)\t(.*)$/s.exec(tokens[i] ?? '');
-    if (!match) continue;
-    let rel = match[3]!;
-    if (rel === '') {
-      rel = tokens[i + 2] ?? '';
-      i += 2;
-    }
-
-    out.push({
-      rel,
-      status: status.get(rel) ?? 'modified',
-      added: match[1] === '-' ? 0 : Number(match[1]),
-      removed: match[2] === '-' ? 0 : Number(match[2]),
-    });
-  }
-
-  return out.sort((a, b) => a.rel.localeCompare(b.rel));
+  return parseStats(names, counts);
 }
 
 // The patch for one file between two snapshots.

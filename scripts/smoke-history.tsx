@@ -21,18 +21,27 @@ fs.mkdirSync(path.join(project, 'src'), {recursive: true});
 const write = (rel: string, text: string) => fs.writeFileSync(path.join(project, rel), text);
 const run = (...args: string[]) => execFileSync('git', ['-C', project, ...args], {stdio: 'ignore'});
 
+const at = (minutesAgo: number) => new Date(Date.now() - minutesAgo * 60_000).toISOString();
+// A commit with a date of our choosing, so a turn can have one inside its
+// window without living through the wait.
+const commit = (when: string, message: string, ...paths: string[]) => {
+  run('add', ...(paths.length ? paths : ['-A']));
+  execFileSync('git', ['-C', project, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', message], {
+    stdio: 'ignore',
+    env: {...process.env, GIT_AUTHOR_DATE: when, GIT_COMMITTER_DATE: when},
+  });
+};
+
 write('src/greet.ts', 'export function greet(name: string) {\n  return `hello ${name}`;\n}\n');
 write('README.md', '# demo\n\nA project.\n');
 run('init', '-q');
-run('add', '-A');
-run('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'first');
+commit(at(30), 'first');
 
 // The transcript, exactly as Claude Code writes one.
 const chat = '11111111-2222-3333-4444-555555555555';
 const dir = path.join(process.env.SIDECAR_CLAUDE_HOME, 'projects', path.resolve(project).replace(/[\\/:.]/g, '-'));
 fs.mkdirSync(dir, {recursive: true});
 const lines: string[] = [{type: 'ai-title', aiTitle: 'Make greet friendlier', sessionId: chat}].map(o => JSON.stringify(o));
-const at = (minutesAgo: number) => new Date(Date.now() - minutesAgo * 60_000).toISOString();
 
 const turn = (uuid: string, prompt: string, when: string) =>
   JSON.stringify({
@@ -112,8 +121,26 @@ fs.writeFileSync(path.join(agentDir, 'agent-def456.jsonl'), [
 fs.writeFileSync(path.join(dir, `${chat}.jsonl`), lines.join('\n') + '\n');
 await take(store, project, Date.parse(at(8)));
 
-// Sidecar was watching the whole time, so both turns count as measured.
-fs.writeFileSync(path.join(store.dir, 'watched.json'), JSON.stringify([[Date.parse(at(25)), Date.now()]]));
+// --- turn three: nobody was watching, and git kept the receipt ------------
+lines.push(turn('turn-3', 'add a farewell as well, then commit it', at(5)));
+write('src/bye.ts', 'export function bye(name: string) {\n  return `bye ${name}`;\n}\n');
+write('src/scratch.ts', 'const tmp = 1;\n');
+lines.push(acts(at(4.5), [
+  {name: 'Write', input: {file_path: path.join(project, 'src/bye.ts'), description: 'Add a farewell'}},
+  {name: 'Write', input: {file_path: path.join(project, 'src/scratch.ts'), description: 'Scratch a check'}},
+  {name: 'Bash', input: {command: 'git commit -am "Add a farewell"', description: 'Commit the farewell'}},
+]));
+lines.push(says(at(4), 'bye is in src/bye.ts and committed. I removed the scratch file afterwards.'));
+fs.writeFileSync(path.join(dir, `${chat}.jsonl`), lines.join('\n') + '\n');
+// The scratch file never reaches a commit, so its row has no counts to show.
+fs.rmSync(path.join(project, 'src/scratch.ts'));
+// Only the farewell is committed, so the two measured turns are still there to
+// see as uncommitted work.
+commit(at(4), 'Add a farewell', 'src/bye.ts');
+
+// Sidecar was running for turns one and two only. Turn three happened while it
+// was closed, so its lines come from the commit instead.
+fs.writeFileSync(path.join(store.dir, 'watched.json'), JSON.stringify([[Date.parse(at(25)), Date.parse(at(7))]]));
 
 // What the status line script would have saved.
 fs.writeFileSync(path.join(process.env.SIDECAR_HOME, 'usage.json'), JSON.stringify({
@@ -151,15 +178,21 @@ const show = async (label: string) => {
 };
 
 await wait(1500);
-await show('changes: both turns measured, the newest open');
+await show('changes: the newest turn was not watched, so git filled it in');
 
-await press('\u001B[B', '\u001B[B', '\r');
+await press('\u001B[B', '\r');
+await wait(500);
+await show('changes: the commit that holds src/bye.ts, opened in place');
+
+// Fold turn three away and open turn two, the one sidecar did watch.
+await press('\r', '\u001B[A', '\r', '\u001B[B', '\r');
+await press('\u001B[B', '\r');
 await wait(500);
 await show('changes: README.md opened in place, as that turn left it');
 
 await press('v');
 await wait(300);
-await press('\u001B[B', '\u001B[B', '\r');
+await press('\u001B[A', '\r');
 await show('by file: greet.ts, and both turns that touched it');
 
 await press('3', '\u001B[B', '\r');

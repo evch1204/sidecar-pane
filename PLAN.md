@@ -103,7 +103,8 @@ Sidecar pane ──watches──▶ events.jsonl      (what is Claude doing righ
   scrolling list. Nothing is shown "down there" in a second half any more.
 - Done: Agents and Usage views, a menu bar, formatted markdown in the reader.
 - Done: sidecar records when it was watching, so a turn is only called
-  measured when it really was (see "Where the history comes from").
+  measured when it really was, and a turn it was not open for is filled in
+  from the project's own commits (see "Where the history comes from").
 - Done: the left line replaces the card, and a toggled row keeps its place
   under the pointer.
 - Done: Usage rebuilt — honest numbers, a big reading per section, and the
@@ -302,9 +303,10 @@ checked on this machine, not assumed.
 |---|---|---|
 | Which chat, which prompt, what Claude did about it | `~/.claude/projects/<project>/<session>.jsonl` | Exact, and it goes back through every past chat |
 | Which lines a turn changed | a snapshot of the project taken either side of the turn | Exact, from the moment sidecar first runs |
+| Which lines a turn sidecar was *not* open for changed | the project's own commits, matched to the turn by time | Exact lines; the turn they belong to is matched, and the row says so |
 | What differs from the last commit | git | Exact |
 
-Three things follow from that.
+Four things follow from that.
 
 **No hooks.** The transcript is flushed message by message: opening the file
 and reading the bytes appended since last time tells you the chat, the prompt,
@@ -320,9 +322,9 @@ after: a bare git repo in `~/.sidecar/<project>/shadow.git` with the project as
 its work tree. Measured on this Mac: 89 ms cold, 57 ms warm, and the project's
 own `.git` is never touched.
 
-**Say which one you are looking at.** A turn from before sidecar ever ran shows
-its prompt and its steps, and its files are marked `not recorded` with no
-counts. Nothing pretends to a precision it does not have.
+**Say which one you are looking at.** A file nothing recorded is still in the
+turn's list, marked `not recorded` with no counts, per file rather than per
+turn. Nothing pretends to a precision it does not have.
 
 **Know when you were looking.** Snapshots are only written when something
 changed, so an hour with sidecar open and nothing happening used to look the
@@ -330,6 +332,24 @@ same as an hour with it closed, and an old turn could borrow the nearest
 snapshots from hours away. Sidecar now records the stretches it was running
 (`watched.json`), and a turn is only measured when one stretch covers it from
 start to end.
+
+**A turn nobody watched is filled in from the commits.** Open the pane an hour
+late and the session's own work used to read `not recorded`, and opening a file
+said it matched the last commit — which was true, and useless. The project's
+git history has those lines. So a turn with no snapshots either side of it is
+matched to commits by time: a commit belongs to the turn with the latest start
+at or before the commit's committer time, across every chat of this project, so
+a turn's window runs from its own start to the start of the next turn wherever
+that was typed. The turn's diff is then the parent of its first commit up to
+its last, on HEAD's first-parent history, and its status line says `from 3
+commits` or `from commit 8476629`.
+
+This squares with "Never guess a file from a command": nothing here is a guess
+about lines. Git counted them. The only thing matched is which turn a commit
+belongs to, which is why the row names the commits it used and why a turn the
+pane *did* watch keeps its snapshot diff and ignores commits entirely. Cost is
+one `git rev-parse HEAD` per poll while HEAD is unchanged, and the log is
+bounded by the oldest turn still missing. Outside a git repo nothing changes.
 
 ## Mouse
 

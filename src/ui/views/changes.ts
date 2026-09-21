@@ -155,13 +155,15 @@ function fileRow(ctx: Ctx, key: string, rel: string, abs: string | null, left: S
 }
 
 function changedFileRow(ctx: Ctx, change: TurnChange, file: ChangedFile, pins: string[], tags: Seg[]): void {
-  const right = change.measured ? counts(file.added, file.removed) : [seg('not recorded', theme.faint, {italic: true})];
+  // Per file, not per turn: a turn filled in from commits can hold both a file
+  // git counted and a file only the transcript named.
+  const right = file.known ? counts(file.added, file.removed) : [seg('not recorded', theme.faint, {italic: true})];
   fileRow(
     ctx,
     fileKey(turnKey(change), file.rel),
     file.rel,
     file.status === 'deleted' ? null : file.path,
-    [seg((change.measured ? VERB[file.status] : 'Touched').padEnd(9), theme.dim), ...pathSegs(file.rel, true), ...tags],
+    [seg((file.known ? VERB[file.status] : 'Touched').padEnd(9), theme.dim), ...pathSegs(file.rel, true), ...tags],
     right,
     pins,
     {nested: true, live: change.running},
@@ -185,6 +187,13 @@ function meta(change: TurnChange, agents: AgentRun[], now: number, counted = tru
     }
   } else if (!change.running) {
     out.push(...dot(), seg('no file changes', theme.faint));
+  }
+
+  // Where the counts came from, when it was not this pane watching. The lines
+  // are git's own, only the turn they belong to is matched by time, so the row
+  // says so quietly rather than as a warning.
+  if (change.via === 'commits' && change.commits) {
+    out.push(...dot(), seg(change.commits === 1 ? `from commit ${(change.to ?? '').slice(0, 7)}` : `from ${change.commits} commits`, theme.dim));
   }
 
   if (agents.length && counted) out.push(...dot(), seg(`${agents.length} agent${agents.length === 1 ? '' : 's'}`, theme.dim));
@@ -483,7 +492,7 @@ export function agentRow(ctx: AgentCtx, node: AgentNode, change: TurnChange | nu
   for (const file of agent.wrote) {
     const rel = path.relative(ctx.root, file).split(path.sep).join('/');
     const stat = change?.files.find(f => f.path === file);
-    row([seg('Wrote'.padEnd(9), theme.dim), ...pathSegs(rel, false)], stat && change?.measured ? counts(stat.added, stat.removed) : []);
+    row([seg('Wrote'.padEnd(9), theme.dim), ...pathSegs(rel, false)], stat?.known ? counts(stat.added, stat.removed) : []);
   }
 
   for (const step of agent.steps.slice(-5)) row([seg(step.tool.padEnd(9), theme.faint), seg(step.why || path.basename(step.file ?? ''), theme.dim)], [seg(clock(step.at), theme.faint)]);
@@ -569,7 +578,7 @@ function byFile(ctx: Ctx): void {
         history.rel,
         history.status === 'deleted' ? null : history.path,
         [seg(clock(touch.change.turn.at), theme.dim), sp(2), seg(touch.change.turn.prompt, theme.text)],
-        touch.change.measured ? counts(touch.added, touch.removed) : [seg('not recorded', theme.faint, {italic: true})],
+        touch.known ? counts(touch.added, touch.removed) : [seg('not recorded', theme.faint, {italic: true})],
         [id],
         {nested: true},
       );
