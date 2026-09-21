@@ -317,7 +317,7 @@ export function readerLines(input: ReaderInput): Line[] {
           cols,
           [sp(1), seg(clock(touch.change.turn.at), theme.dim), sp(2), seg(touch.change.turn.prompt, here ? theme.ink : theme.text)],
           [
-            ...(touch.change.measured ? counts(touch.added, touch.removed) : [seg('not recorded', theme.faint, {italic: true})]),
+            ...(touch.known ? counts(touch.added, touch.removed) : [seg('not recorded', theme.faint, {italic: true})]),
             // The crumb says this row leaves the reader for the Changes view.
             sp(CRUMB_TAIL - 1), seg(glyph.crumb, here ? theme.accent : theme.faint),
           ],
