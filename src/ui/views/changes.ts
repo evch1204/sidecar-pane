@@ -473,7 +473,13 @@ export function agentRow(ctx: AgentCtx, node: AgentNode, change: TurnChange | nu
   const room = cols - 4 - RIGHT_PAD - widthOf(under.lead);
   const row = (left: Seg[], right: Seg[] = []) => ctx.out.push(spineRow(cols, [...under.lead, ...left], right, {mark: under.mark, pins: mine}));
   row([seg(`${agent.type}  ${glyph.sep}  ${modelName(agent.model)}  ${glyph.sep}  ${agent.steps.length} step${agent.steps.length === 1 ? '' : 's'}  ${glyph.sep}  ${tokens(agent.tokens)}`, theme.faint)]);
-  if (status === 'stopped') row([seg('Went quiet without handing back.', theme.warn)]);
+  // The notification says how it ended; without one the quiet is only a guess,
+  // so the sentence stays vaguer.
+  if (status === 'stopped') {
+    const why =
+      agent.ended === 'killed' ? 'Stopped before it handed back.' : agent.ended === 'failed' ? 'Failed before it handed back.' : 'Went quiet without handing back.';
+    row([seg(why, theme.warn)]);
+  }
   for (const file of agent.wrote) {
     const rel = path.relative(ctx.root, file).split(path.sep).join('/');
     const stat = change?.files.find(f => f.path === file);

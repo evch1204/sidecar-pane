@@ -79,7 +79,18 @@ lines.push(acts(at(9), [
   {name: 'Write', input: {file_path: path.join(project, 'README.md'), description: 'Document greet'}},
   {name: 'Edit', input: {file_path: path.join(project, 'src/greet.ts'), description: 'Add a comment'}},
   {name: 'Agent', id: 'call-agent-1', input: {description: 'Check the README wording', subagent_type: 'Explore', prompt: 'Read README.md and check it.'}},
+  {name: 'Agent', id: 'call-agent-2', input: {description: 'Rewrite the example', subagent_type: 'general-purpose', prompt: 'Rewrite the README example.'}},
 ]));
+
+// The user stopped the second agent while it was inside a tool call, so its
+// transcript has an unanswered call and no report. The notification Claude Code
+// writes into this chat is the only thing that says so.
+const killed = (id: string, status: string, when: string) =>
+  JSON.stringify({
+    type: 'user', promptSource: 'system', turnOrigin: 'task_notification', isSidechain: false, sessionId: chat, timestamp: when,
+    message: {role: 'user', content: `<task-notification>\n<task-id>${id}</task-id>\n<status>${status}</status>\n<summary>Agent "Rewrite the example" was stopped by user</summary>\n</task-notification>`},
+  });
+lines.push(killed('def456', 'killed', at(8.6)));
 lines.push(says(at(8.5), 'The README now documents greet, with an example. I had a subagent check the wording.'));
 
 // The subagent that turn started, where Claude Code would have written it.
@@ -91,6 +102,12 @@ fs.writeFileSync(path.join(agentDir, 'agent-abc123.jsonl'), [
   JSON.stringify({type: 'user', isSidechain: true, agentId: 'abc123', timestamp: at(9), message: {role: 'user', content: 'Read README.md and check it.'}}),
   agentLine(at(8.9), {id: 'a-1', model: 'claude-haiku-4-5-20251001', usage, content: [{type: 'tool_use', id: 'a-t1', name: 'Read', input: {file_path: path.join(project, 'README.md')}}]}),
   agentLine(at(8.7), {id: 'a-2', model: 'claude-haiku-4-5-20251001', usage, stop_reason: 'end_turn', content: [{type: 'text', text: 'The README reads well. One nit: the example could show the punctuation argument.'}]}),
+].join('\n') + '\n');
+
+fs.writeFileSync(path.join(agentDir, 'agent-def456.meta.json'), JSON.stringify({agentType: 'general-purpose', description: 'Rewrite the example', toolUseId: 'call-agent-2', spawnDepth: 1, stoppedByUser: true}));
+fs.writeFileSync(path.join(agentDir, 'agent-def456.jsonl'), [
+  JSON.stringify({type: 'user', isSidechain: true, agentId: 'def456', timestamp: at(9), message: {role: 'user', content: 'Rewrite the README example.'}}),
+  agentLine(at(8.8), {id: 'b-1', model: 'claude-fable-5-1', usage, stop_reason: 'tool_use', content: [{type: 'tool_use', id: 'b-t1', name: 'Bash', input: {command: 'npm test', description: 'Run the tests'}}]}),
 ].join('\n') + '\n');
 fs.writeFileSync(path.join(dir, `${chat}.jsonl`), lines.join('\n') + '\n');
 await take(store, project, Date.parse(at(8)));
@@ -147,6 +164,9 @@ await show('by file: greet.ts, and both turns that touched it');
 
 await press('3', '\u001B[B', '\r');
 await show('agents: the subagent, opened');
+
+await press('\r', '\u001B[B', '\u001B[B', '\u001B[B', '\u001B[B', '\u001B[B', '\r');
+await show('agents: the one the user stopped, read from the notification');
 
 await press('4');
 await wait(1200);

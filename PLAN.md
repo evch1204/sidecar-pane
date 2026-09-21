@@ -234,7 +234,7 @@ against three real runs.
 | Shown | Where it comes from | How good |
 |---|---|---|
 | Kind, task, model, steps, tokens, report | the agent's own transcript | Exact |
-| Running or done | the last reply ended the agent's turn, or it did not | Exact; "stopped" is a guess and is labelled as one |
+| Running, done or stopped | the task notification the chat writes when an agent ends (`<task-id>`, `<status>`), or the last reply ending its turn | Exact, including an agent the user stopped; only a run with no notification yet falls back to a quiet timer, and that guess is labelled as one |
 | Who started whom | the child's meta names the tool call; the parent's steps carry that call's id | Exact when both files are there, otherwise the shallower agent that was running when it started |
 | Files an agent wrote | its own Edit and Write calls | A hint: a shell command can write without naming a file |
 | Lines changed per agent | nothing | Not available. Snapshots are per turn, so an agent's row shows the turn's counts for that file |
@@ -251,8 +251,11 @@ Decisions, and why:
   agent gets one dim second line: the step it is on.
 - **Quiet is not the same as stopped.** An agent that is inside a tool call, or
   waiting on a child agent, writes nothing to its own transcript while it is
-  plainly alive. Five quiet minutes with no tool call open still means
-  "stopped"; quiet inside a call is given an hour.
+  plainly alive. The notification answers it outright, so the timers only cover
+  a run Claude Code was quit in the middle of: five quiet minutes with no call
+  open, twelve minutes inside a call (a guess, bounded by Claude Code's
+  10 minute Bash timeout), and no limit at all while the open call is the one
+  that started a child agent — that agent lives as long as its child does.
 - **A crowd folds.** More than eight agents in a turn and the finished ones
   become one row you can open. In the Changes view more than three become one
   row, because the whole story belongs to this view.
