@@ -1,0 +1,284 @@
+{
+  "v": 3,
+  "attachments": {},
+  "boards": {
+    "Changes-live.dc.html": {
+      "h": 1064,
+      "title": "Changes · while Claude works",
+      "w": 564,
+      "x": 644,
+      "y": 0
+    },
+    "Changes-parallel.dc.html": {
+      "h": 1064,
+      "title": "Changes · parallel agents, grouped by agent",
+      "w": 564,
+      "x": 1932,
+      "y": 0
+    },
+    "Changes-pinned.dc.html": {
+      "h": 1064,
+      "title": "Changes · a long diff, pinned header",
+      "w": 564,
+      "x": 1288,
+      "y": 0
+    },
+    "Files-markdown.dc.html": {
+      "h": 1064,
+      "title": "Files · markdown, formatted",
+      "w": 564,
+      "x": 1288,
+      "y": 1500
+    },
+    "Files-reader.dc.html": {
+      "h": 1064,
+      "title": "Files · the reader, who wrote what",
+      "w": 564,
+      "x": 644,
+      "y": 1500
+    },
+    "Files.dc.html": {
+      "h": 1064,
+      "is_interactive": true,
+      "title": "Files · tree with a peek (click rows)",
+      "w": 564,
+      "x": 0,
+      "y": 1500
+    },
+    "Kit.dc.html": {
+      "h": 1040,
+      "title": "Terminal kit",
+      "w": 1240,
+      "x": 0,
+      "y": 3000
+    },
+    "Main.dc.html": {
+      "h": 1064,
+      "is_interactive": true,
+      "title": "Changes · the stream (click rows)",
+      "w": 564,
+      "x": 0,
+      "y": 0
+    },
+    "Usage.dc.html": {
+      "h": 1064,
+      "title": "Usage · opened from the header meters",
+      "w": 564,
+      "x": 1932,
+      "y": 1500
+    },
+    "V2-Agents.dc.html": {
+      "h": 1064,
+      "page": "v2",
+      "title": "Agents · orchestrator, agents, timeline",
+      "w": 564,
+      "x": 0,
+      "y": 1500
+    },
+    "V2-Changes.dc.html": {
+      "h": 1064,
+      "is_interactive": true,
+      "page": "v2",
+      "title": "Changes · timeline (click View in the menu bar)",
+      "w": 564,
+      "x": 0,
+      "y": 0
+    },
+    "V2-Files.dc.html": {
+      "h": 1064,
+      "page": "v2",
+      "title": "Files · who is working where",
+      "w": 564,
+      "x": 644,
+      "y": 1500
+    },
+    "V2-Menu.dc.html": {
+      "h": 1064,
+      "page": "v2",
+      "title": "The View menu, open",
+      "w": 564,
+      "x": 644,
+      "y": 0
+    },
+    "V2-Parallel.dc.html": {
+      "h": 1064,
+      "page": "v2",
+      "title": "Changes · parallel agents as lanes",
+      "w": 564,
+      "x": 1288,
+      "y": 0
+    },
+    "V2-Usage.dc.html": {
+      "h": 1064,
+      "page": "v2",
+      "title": "Usage · session, week, chat, agents",
+      "w": 564,
+      "x": 1288,
+      "y": 1500
+    },
+    "V3-Changes.dc.html": {
+      "x": 0,
+      "y": 0,
+      "w": 564,
+      "h": 1064,
+      "title": "Changes · a finished turn, a diff open in place",
+      "page": "v3"
+    },
+    "V3-Menu.dc.html": {
+      "x": 644,
+      "y": 0,
+      "w": 564,
+      "h": 1064,
+      "title": "The View menu",
+      "page": "v3"
+    },
+    "V3-Working.dc.html": {
+      "x": 1288,
+      "y": 0,
+      "w": 564,
+      "h": 1064,
+      "title": "While Claude works · three agents",
+      "page": "v3"
+    },
+    "V3-Agents.dc.html": {
+      "x": 1932,
+      "y": 0,
+      "w": 564,
+      "h": 1064,
+      "title": "Agents · one opened",
+      "page": "v3"
+    },
+    "V3-Usage.dc.html": {
+      "x": 0,
+      "y": 1500,
+      "w": 564,
+      "h": 1064,
+      "title": "Usage",
+      "page": "v3"
+    },
+    "V3-Files.dc.html": {
+      "x": 644,
+      "y": 1500,
+      "w": 564,
+      "h": 1064,
+      "title": "Files · a peek in place",
+      "page": "v3"
+    },
+    "V3-Reader.dc.html": {
+      "x": 1288,
+      "y": 1500,
+      "w": 564,
+      "h": 1064,
+      "title": "Reader · markdown, formatted",
+      "page": "v3"
+    }
+  },
+  "createdOnFiles": {
+    "at": "2026-09-20T23:23:26Z",
+    "v": 1
+  },
+  "designSystems": [],
+  "launch": {
+    "view": "canvas",
+    "page": "v3"
+  },
+  "notes": {
+    "changes": {
+      "kind": "title1",
+      "maxW": 2496,
+      "text": "Version 1 · Changes: one stream, diffs open in place",
+      "w": 240,
+      "x": 0,
+      "y": -300
+    },
+    "files": {
+      "kind": "title1",
+      "maxW": 2496,
+      "text": "Version 1 · Files, and usage",
+      "w": 240,
+      "x": 0,
+      "y": 1200
+    },
+    "kit": {
+      "kind": "title1",
+      "maxW": 1852,
+      "text": "What it is built from",
+      "w": 240,
+      "x": 0,
+      "y": 2700
+    },
+    "v2a": {
+      "kind": "title1",
+      "maxW": 1852,
+      "page": "v2",
+      "text": "Version 2 · Workbench: menu bar, timeline, agent lanes",
+      "w": 240,
+      "x": 0,
+      "y": -300
+    },
+    "v2b": {
+      "kind": "title1",
+      "maxW": 1852,
+      "page": "v2",
+      "text": "Agents, files and usage",
+      "w": 240,
+      "x": 0,
+      "y": 1200
+    },
+    "v3a": {
+      "x": 0,
+      "y": -300,
+      "text": "Version 3 · the pane as built: Version 1 look, menu bar, agents",
+      "kind": "title1",
+      "maxW": 2496,
+      "page": "v3"
+    },
+    "v3b": {
+      "x": 0,
+      "y": 1200,
+      "text": "Usage and Files",
+      "kind": "title1",
+      "maxW": 1852,
+      "page": "v3"
+    }
+  },
+  "order": [
+    "Main.dc.html",
+    "Changes-live.dc.html",
+    "Changes-pinned.dc.html",
+    "Files.dc.html",
+    "Files-reader.dc.html",
+    "Files-markdown.dc.html",
+    "Kit.dc.html",
+    "Changes-parallel.dc.html",
+    "Usage.dc.html",
+    "V2-Changes.dc.html",
+    "V2-Menu.dc.html",
+    "V2-Parallel.dc.html",
+    "V2-Agents.dc.html",
+    "V2-Files.dc.html",
+    "V2-Usage.dc.html",
+    "V3-Changes.dc.html",
+    "V3-Menu.dc.html",
+    "V3-Working.dc.html",
+    "V3-Agents.dc.html",
+    "V3-Usage.dc.html",
+    "V3-Files.dc.html",
+    "V3-Reader.dc.html"
+  ],
+  "pages": [
+    {
+      "id": "v1",
+      "name": "Version 1 · Cards"
+    },
+    {
+      "id": "v2",
+      "name": "Version 2 · Workbench"
+    },
+    {
+      "id": "v3",
+      "name": "Version 3 · Built"
+    }
+  ],
+  "title": "Sidecar pane redesign"
+}
