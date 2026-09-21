@@ -63,6 +63,17 @@ const diffNo = (row: string): number => Number(/^[\s│▎]*(\d+) [+−] /.exec(
 // Markdown spells a sentence the same way formatted and as written, once the
 // markers it swallows are gone.
 const bare = (row: string): string => row.replace(/[*`_[\]|#>]/g, '').replace(/\s+/g, ' ').trim();
+// Which of the reader's two pills is lit. The lit one is drawn on the same
+// background as the cursor, and it is the only word on the head row that is,
+// besides the way back to the tree.
+const litPill = (row: string): string => {
+  for (const part of row.split(CURSOR_BG).slice(1)) {
+    const word = plain(part).trim().split(/\s{2,}/)[0] ?? '';
+    if (word === 'Page' || word === 'Source') return word;
+  }
+
+  return '';
+};
 
 let failed = 0;
 const check = (ok: boolean, what: string) => {
@@ -139,7 +150,7 @@ function pane(root: string) {
 
 // ---- the repo itself -------------------------------------------------------
 
-const {press, show, text, cursorRow, cursorRows, cursorAt, numbers, onto, quit} = pane(target);
+const {press, show, frame, text, cursorRow, cursorRows, cursorAt, numbers, onto, quit} = pane(target);
 
 await wait(1800); // first git, transcript and snapshot read
 await show('changes: the bar, the tabs, the pills and the stream');
@@ -254,7 +265,29 @@ if (fs.existsSync(plan) && (await onto('PLAN.md'))) {
   await wait(400);
   await press('o');
   await wait(700);
-  await show('files: PLAN.md in the reader, formatted');
+  await show('files: PLAN.md as a page');
+
+  // ---- the two pills, and what each of them shows -------------------------
+  // The page is the default for markdown, and the pill says so. The columns of
+  // the pills come from the frame, never from a guess about where they landed.
+  const headAt = () => frame().split('\n').findIndex(row => plain(row).includes('‹ Files'));
+  const headRow = () => frame().split('\n')[headAt()] ?? '';
+  check(litPill(headRow()) === 'Page', `the Page pill should be lit, and the head row reads "${plain(headRow()).trim()}"`);
+  check(text(1).some(row => row.includes('━')), 'the rule under the title should be on screen in Page view');
+  check(numbers(1).length <= 2, `a page has no line numbers, and it showed ${numbers(1).length}`);
+
+  await press('r');
+  await wait(400);
+  await show('files: PLAN.md as written, line numbers and the Source pill');
+  check(litPill(headRow()) === 'Source', `r should light the Source pill, and the head row reads "${plain(headRow()).trim()}"`);
+  const numbered = numbers(1).length;
+  check(numbered > height(1) / 2, `Source should number its lines, and it numbered ${numbered} of ${height(1)} rows`);
+
+  await press(click(plain(headRow()).indexOf(' Page ') + 1, headAt()));
+  await wait(400);
+  await show('files: the Page pill clicked, and the page is back');
+  check(litPill(headRow()) === 'Page', 'clicking the Page pill should bring the page back');
+  check(text(1).some(row => row.includes('━')), 'the title rule should be back on screen');
 
   // Far enough in that the two shapes have drifted apart, and on the first
   // row of a plain paragraph, which both of them spell the same way. A row

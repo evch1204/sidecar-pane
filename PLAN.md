@@ -185,6 +185,13 @@ Decisions, and why:
   pane, so while Claude works the card is the prompt, one status line, the
   files so far and the step in progress. What Claude said, and how long it
   thought, appear when the turn is over and the pane becomes history.
+- **A markdown file reads as a page.** A plan or a readme is read, not
+  scanned, so the reader lays one out as a sheet of paper: a `surface` fill
+  with margins, a title over a heavy rule, sections over thin ones, wrapped
+  prose, hanging bullets, real tables and code in a well. The words as they
+  were typed are never more than one click away, on the `Source` pill beside
+  it, and every row on the page remembers which source lines it came from, so
+  the two shapes hold the same place in the file.
 - **Changed lines wrap, unchanged lines truncate.** A long line used to hide
   the edit past the right edge. The edit is the point, so it is never cut.
   This replaced sideways scrolling.
@@ -445,6 +452,7 @@ Every line carries what a click on it does, so a row is a button.
 | A file in the tree | peek it in place; click again to close | scroll | |
 | The last row of a peek | show forty more lines of it, or, when a change is still below, jump there as `]` does | scroll | |
 | `‹ Files` in the reader | back to the tree | | |
+| `Page` / `Source` in the reader | read a markdown file as a page, or as it is written | | |
 | The last column | jump there | scroll | drag the thumb |
 
 The last column is also a minimap: the thumb is a background, and the change
@@ -466,8 +474,8 @@ File tree, plain preview with line numbers, keyboard control, Windows Terminal s
 
 1. ~~Toolkit check.~~ **Decided: Ink stays.** Its input parser already splits SGR mouse reports into their own events, so the mouse costs one regular expression instead of a new toolkit, and OpenTUI's pre-1.0 risk buys nothing.
 2. Syntax colours for code.
-3. Markdown formatted: headings, bold, italics, lists, quotes, code blocks, tables, links.
-4. Three heading styles to choose from, shown side by side in the pane.
+3. ~~Markdown formatted: headings, bold, italics, lists, quotes, code blocks, tables, links.~~
+4. ~~Three heading styles to choose from, shown side by side in the pane.~~ **Done, and there was nothing to choose between:** a markdown file is a page — a lit sheet with margins, a title over a heavy rule, sections over thin ones, wrapped prose, real tables and boxed code — with `Page` and `Source` pills in the reader's head row.
 
 - **You decide:** toolkit, and the markdown look.
 - **Done when:** opening `PLAN.md` in the pane reads like a document.

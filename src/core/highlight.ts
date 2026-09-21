@@ -13,7 +13,12 @@ export type Kind =
   | 'code'
   | 'strong'
   | 'emphasis'
-  | 'link';
+  | 'link'
+  // A page of markdown adds three: text that is struck out, inline code on a
+  // chip of its own, and the frame a code block or a quote is drawn with.
+  | 'strike'
+  | 'chip'
+  | 'frame';
 
 export type Segment = {text: string; kind: Kind | null};
 

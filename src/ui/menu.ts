@@ -65,7 +65,7 @@ export function menus(state: MenuState): Menu[] {
         ? [
             {head: 'Files'},
             {label: 'Changed files only', key: 'c', checked: state.changedOnly, command: {do: 'changedOnly'}},
-            ...(state.markdown ? [{label: 'Raw markdown', key: 'r', checked: state.raw, command: {do: 'raw'}} as Item] : []),
+            ...(state.markdown ? [{label: 'Page view', key: 'r', checked: !state.raw, command: {do: 'raw'}} as Item] : []),
           ]
         : [];
 

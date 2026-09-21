@@ -31,6 +31,8 @@ export type Act =
   // that can be cleared from where they are shown.
   | {type: 'group'; group: Group}
   | {type: 'filter'; what: 'chat' | 'changedOnly'; on: boolean}
+  // The reader's two pills: a markdown file as a page, or as it is written.
+  | {type: 'page'; raw: boolean}
   | {type: 'back'}
   | {type: 'none'};
 
