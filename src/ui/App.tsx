@@ -45,6 +45,10 @@ const GROUP_NOTE: Record<Group, string> = {turn: 'by turn', file: 'by file', fla
 const NONE: ReadonlySet<string> = new Set();
 const CLOSED: Open = {turns: NONE, files: NONE, more: NONE, steps: NONE, says: NONE, agents: NONE, hists: NONE};
 
+// Acts that add or remove lines. The row they were aimed at has to stay where
+// it was, or the next click lands on something else.
+const TOGGLING: ReadonlySet<Act['type']> = new Set(['turn', 'file', 'toggle', 'hunk', 'gap', 'node']);
+
 function flipped(set: ReadonlySet<string>, key: string): ReadonlySet<string> {
   const next = new Set(set);
   if (next.has(key)) next.delete(key);
@@ -329,6 +333,8 @@ export function App({root, interactive, mouseDebug = false}: Props) {
   // The cursor is remembered by id, so it stays on the same thing through a
   // refresh. When that thing is gone it falls to the nearest line that is left.
   const lastIndex = useRef<Record<Slot, number>>({changes: 0, files: 0, agents: 0, usage: 0, reader: 0});
+  // The row a toggle was aimed at, and the screen row it was on.
+  const anchor = useRef<{id: string; y: number} | null>(null);
   const built = useMemo(() => {
     let made = build(sel[slot]);
     let index = made.lines.findIndex(line => line.pick && line.id === sel[slot]);
@@ -382,9 +388,23 @@ export function App({root, interactive, mouseDebug = false}: Props) {
   const bottomRows = roomy ? 2 : 1;
   const height = Math.max(3, rows - top.length - bottomRows);
   const most = Math.max(0, lines.length - height);
-  const at = Math.min(most, scroll[slot]);
+  // A toggled row keeps its place on screen: worked out here and not in an
+  // effect, which would paint one frame at the old offset first.
+  const anchored = ((): number | null => {
+    const want = anchor.current;
+    if (!want) return null;
+    const index = lines.findIndex(line => line.id === want.id);
+    return index < 0 ? null : Math.max(0, Math.min(most, index - want.y));
+  })();
+  const at = anchored ?? Math.min(most, scroll[slot]);
 
   useEffect(() => {
+    if (anchor.current) {
+      anchor.current = null;
+      setScroll(s => (s[slot] === at ? s : {...s, [slot]: at}));
+      return;
+    }
+
     if (cursor < 0) return;
     // Leave room above the cursor for the rows pinned over it.
     const pinned = current?.pins?.length ?? 0;
@@ -393,7 +413,7 @@ export function App({root, interactive, mouseDebug = false}: Props) {
       const lifted = cursor - next < pinned ? Math.max(0, cursor - pinned) : next;
       return lifted === s[slot] ? s : {...s, [slot]: lifted};
     });
-  }, [cursor, height, lines.length, slot]);
+  }, [cursor, height, lines, slot, at]);
 
   // Rows that stay in view: the turn and the file a long diff belongs to.
   const visible = useMemo(() => {
@@ -621,11 +641,24 @@ export function App({root, interactive, mouseDebug = false}: Props) {
       return setScroll(s => ({...s, [slot]: scrollFromThumb(lines.length, height, event.y - top.length)}));
     }
 
-    const line = visible[event.y - top.length];
+    const row = event.y - top.length;
+    const line = visible[row];
     if (!line) return;
-    if (line.pick) moveTo(line.id);
+    const act = zoneOf(line) ?? line.act;
+    if (act && TOGGLING.has(act.type)) {
+      // Rows that carry a toggle but no cursor stop, a wrapped prompt or a
+      // meta line, belong to the row above: anchor and move there.
+      let y = row;
+      while (y > 0 && !visible[y]!.id) y--;
+      const owner = visible[y];
+      if (owner?.id) {
+        anchor.current = {id: owner.id, y};
+        moveTo(owner.id);
+      } else if (line.pick) moveTo(line.id);
+    } else if (line.pick) moveTo(line.id);
+
     if (twice && line.at) return openReader(line.at.path, line.at.line);
-    perform(zoneOf(line) ?? line.act, 'click');
+    perform(act, 'click');
   };
 
   // ---- keys ---------------------------------------------------------------------
@@ -673,7 +706,13 @@ export function App({root, interactive, mouseDebug = false}: Props) {
       if (key.pageDown || input === ' ') return step(1, page);
       if (input === 'g') return step(-1, lines.length);
       if (input === 'G') return step(1, lines.length);
-      if (key.return || key.rightArrow) return perform(current?.act);
+      if (key.return || key.rightArrow) {
+        // Same as a click: the row being opened or closed stays where it is.
+        const act = current?.act;
+        const y = current?.id ? visible.findIndex(line => line.id === current.id) : -1;
+        if (act && TOGGLING.has(act.type) && y >= 0 && current?.id) anchor.current = {id: current.id, y};
+        return perform(act);
+      }
 
       if (key.escape || key.leftArrow) {
         if (slot === 'reader') return setReaderPath(null);

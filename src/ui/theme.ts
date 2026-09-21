@@ -19,6 +19,10 @@ export const theme = {
   keyword: '#C6A0F0',
   string: '#A8CF8E',
 
+  // The left line that runs under an open turn. Quiet enough to be structure
+  // rather than content; the line of a running turn is drawn in `accent`.
+  spine: '#3A3835',
+
   // Surfaces, from the ground up: a card, the row under the cursor, the well a
   // diff sits in, and the strip a hunk header sits on.
   surface: '#181817',
@@ -42,9 +46,38 @@ export const theme = {
 // Subagents are told apart by a label first and a colour second.
 export const agentColours = [theme.link, theme.string, theme.warn, theme.keyword] as const;
 
+// One big number, as a 3 × 5 pixel font: three screen rows of half blocks, two
+// columns per pixel. Each string is five rows of three pixels, top to bottom.
+const digits: Record<string, string> = {
+  '0': '111101101101111',
+  '1': '010110010010111',
+  '2': '111001111100111',
+  '3': '111001111001111',
+  '4': '101101111001001',
+  '5': '111100111001111',
+  '6': '111100111101111',
+  '7': '111001001001001',
+  '8': '111101111101111',
+  '9': '111101111001111',
+  '%': '101001010100101',
+  k: '100101110101101',
+  M: '101111111101101',
+  '.': '000000000000010',
+  '~': '000100111001000',
+  ' ': '000000000000000',
+};
+
 export const glyph = {
   open: '▾',
   closed: '▸',
+  // The left line under an open turn, the guide in a tree, and the branches
+  // that hang off either.
+  spine: '│',
+  guide: '│',
+  branch: '├─',
+  branchLast: '└─',
+  // The one separator between facts on a row, with two spaces either side.
+  sep: '·',
   rule: '─',
   heavy: '━',
   heavyHalf: '╸',
@@ -74,6 +107,7 @@ export const glyph = {
   cornerBR: '▘',
   columns: [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'],
   spinner: ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'],
+  digits,
 } as const;
 
 type Style = {color?: string; bold?: boolean; italic?: boolean; underline?: boolean};

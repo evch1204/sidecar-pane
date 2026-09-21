@@ -153,16 +153,21 @@ type Draw = {
   // The id of the line under the cursor.
   sel: string | null;
   pins: string[];
+  // The well hangs off the left line of the row that opened it, in `accent`
+  // while that turn is still running.
+  live?: boolean;
 };
 
 // A file's diff as lines of the stream, sitting in a well under its own row.
 export function diffLines(rows: ViewRow[], groups: DiffGroup[], draw: Draw): Line[] {
   const {cols, fileKey, sel, pins} = draw;
-  const out: Line[] = [wellTop(cols, {pins})];
+  // Every row of the well sits on the same left line.
+  const rail = {spine: true, live: draw.live} as const;
+  const out: Line[] = [wellTop(cols, {pins, ...rail})];
   const digits = digitsOf(rows);
   // change bar, line number, space, sign, space
   const gutter = 1 + digits + 3;
-  const room = wellWidth(cols) - gutter;
+  const room = wellWidth(cols, true) - gutter;
 
   rows.forEach((row, index) => {
     const id = `${fileKey}#${index}`;
@@ -174,7 +179,7 @@ export function diffLines(rows: ViewRow[], groups: DiffGroup[], draw: Draw): Lin
           cols,
           [sp(1), seg(row.band.time, theme.accent), sp(2), seg(row.band.prompt, row.band.measured ? theme.text : theme.dim)],
           [...counts(row.band.added, row.band.removed, 4), sp(1)],
-          {bg: theme.scope, pins},
+          {bg: theme.scope, pins, ...rail},
         ),
       );
       return;
@@ -185,14 +190,14 @@ export function diffLines(rows: ViewRow[], groups: DiffGroup[], draw: Draw): Lin
       out.push(
         wellRow(
           cols,
-          [sp(1), seg(row.folded ? glyph.closed : glyph.open, here ? theme.accent : theme.faint), sp(1), seg(row.label, theme.link)],
+          [sp(1), seg(row.folded ? glyph.closed : glyph.open, here ? theme.accent : theme.dim), sp(1), seg(row.label, theme.link)],
           [
             ...(row.named ? [seg(`${row.from}–${row.to}`, theme.faint), sp(2)] : []),
             ...(row.added ? [seg(`+${row.added}`, theme.add)] : []),
             ...(row.removed ? [sp(row.added ? 1 : 0), seg(`${glyph.minus}${row.removed}`, theme.del)] : []),
             sp(1),
           ],
-          {bg: here ? theme.surface2 : theme.scope, id, pick: true, pins, act: {type: 'hunk', key: `${owner?.key}:${row.hunk}`}},
+          {bg: here ? theme.surface2 : theme.scope, id, pick: true, pins, ...rail, act: {type: 'hunk', key: `${owner?.key}:${row.hunk}`}},
         ),
       );
       return;
@@ -204,14 +209,14 @@ export function diffLines(rows: ViewRow[], groups: DiffGroup[], draw: Draw): Lin
           cols,
           [sp(gutter), seg(`${glyph.gap} ${row.count} unchanged line${row.count === 1 ? '' : 's'}`, here ? theme.accent : theme.faint)],
           [],
-          {bg: here ? theme.surface2 : undefined, id, pick: true, pins, act: {type: 'gap', file: fileKey, group: row.group, hunk: row.hunk}},
+          {bg: here ? theme.surface2 : undefined, id, pick: true, pins, ...rail, act: {type: 'gap', file: fileKey, group: row.group, hunk: row.hunk}},
         ),
       );
       return;
     }
 
     if (row.kind === 'note') {
-      out.push(wellRow(cols, [sp(gutter), seg(row.text, row.tone === 'warn' ? theme.warn : theme.dim)], [], {pins}));
+      out.push(wellRow(cols, [sp(gutter), seg(row.text, row.tone === 'warn' ? theme.warn : theme.dim)], [], {pins, ...rail}));
       return;
     }
 
@@ -254,6 +259,7 @@ export function diffLines(rows: ViewRow[], groups: DiffGroup[], draw: Draw): Lin
           {
             bg: tint,
             pins,
+            ...rail,
             ...(first ? {id, pick: true, at: draw.path ? {path: draw.path, line: line.newNo ?? line.oldNo ?? 0} : undefined} : {}),
           },
         ),
@@ -261,6 +267,6 @@ export function diffLines(rows: ViewRow[], groups: DiffGroup[], draw: Draw): Lin
     });
   });
 
-  out.push(wellBottom(cols, {pins}));
+  out.push(wellBottom(cols, {pins, ...rail}));
   return out;
 }
