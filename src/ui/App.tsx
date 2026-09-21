@@ -431,14 +431,21 @@ export function App({root, interactive, mouseDebug = false}: Props) {
   })();
   const at = anchored ?? Math.min(most, scroll[slot]);
 
+  // What the page last followed. The wheel and the scrollbar move the page
+  // without moving the cursor, so only a change to one of these pulls it back.
+  const followed = useRef({cursor: -1, height: 0, total: 0, slot: slot as string});
   useEffect(() => {
+    const was = followed.current;
+    const moved = was.cursor !== cursor || was.height !== height || was.total !== lines.length || was.slot !== slot;
+    followed.current = {cursor, height, total: lines.length, slot};
+
     if (anchor.current) {
       anchor.current = null;
       setScroll(s => (s[slot] === at ? s : {...s, [slot]: at}));
       return;
     }
 
-    if (cursor < 0) return;
+    if (!moved || cursor < 0) return;
     // Leave room above the cursor for the rows pinned over it.
     const pinned = current?.pins?.length ?? 0;
     setScroll(s => {
