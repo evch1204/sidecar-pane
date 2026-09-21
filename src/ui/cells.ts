@@ -190,7 +190,9 @@ export function dimmed(line: Line): Line {
     ...line,
     segs: line.segs.map(s => ({
       ...s,
-      color: BLOCKS.test(s.text) ? theme.scope : theme.faint,
+      // A fill on a painted panel would vanish into the dimmed surface, so
+      // there it keeps the left line's grey: a shape, without a colour.
+      color: BLOCKS.test(s.text) ? (s.bg ? theme.spine : theme.scope) : theme.faint,
       bold: false,
       bg: s.bg ? theme.scope : undefined,
     })),
@@ -201,33 +203,86 @@ export function dimmed(line: Line): Line {
 // until three quarters are gone, then warn, then the colour of a deletion.
 export const meterTone = (part: number): string => (part >= 0.9 ? theme.del : part >= 0.75 ? theme.warn : theme.text);
 
-// A thick meter: a half-block bar, the used part in `color` and the rest left
-// faint, so it reads as one bar rather than a bar next to a rule.
-export function lowerMeter(n: number, part: number, color: string): Seg[] {
+// A thick meter: a half-block bar, the used part in `color` and the rest in
+// `track`. Faint by default, so the menu bar's meters read as one bar on the
+// bare terminal; the Usage view passes a quieter track, because there the bar
+// has a painted panel to be measured against.
+export function lowerMeter(n: number, part: number, color: string, track: string = theme.faint): Seg[] {
   const used = Math.round(Math.max(0, Math.min(1, part)) * n);
-  return [seg(glyph.lower.repeat(used), color), seg(glyph.lower.repeat(Math.max(0, n - used)), theme.faint)];
+  return [seg(glyph.lower.repeat(used), color), seg(glyph.lower.repeat(Math.max(0, n - used)), track)];
 }
 
-// One number in big type: three rows of half blocks, two columns per pixel,
-// two columns between characters. Digits, `%`, `k`, `M`, `~` and `.` only.
-export function bigDigits(text: string, color: string = theme.ink, bg?: string): Seg[][] {
-  const block = glyph.columns[8];
-  const cell = (top: boolean, bottom: boolean): Seg =>
-    top && bottom
-      ? seg(block.repeat(2), color, {bg})
-      : top
-        ? seg(glyph.upper.repeat(2), color, {bg})
-        : bottom
-          ? seg(glyph.lower.repeat(2), color, {bg})
-          : sp(2, bg);
+// A panel: the run of rows one section of the Usage view sits on. No edges and
+// no corners, only full cells — the background covers columns 1 to `cols - 2`,
+// exactly the span of a cursor row, and the text sits two columns in from each
+// side, so a right-aligned value lands against an edge instead of on air.
+export const panelInner = (cols: number): number => cols - 6;
 
+export function panelRow(
+  cols: number,
+  left: Seg[] = [],
+  right: Seg[] = [],
+  bg: string = theme.surface,
+  more: Omit<Line, 'segs'> = {},
+): Line {
+  // `pageRow` already leaves `RIGHT_PAD` clear of the scrollbar, so the right
+  // inset only has to make that up to the same two columns as the left one.
+  return pageRow(cols, [sp(INDENT, bg), ...left], [...right, sp(INDENT - RIGHT_PAD, bg)], {...more, bg});
+}
+
+// A panel's title strip: the section's name, what it is counting, and one fact
+// on the right. The note is the first thing to go when the pane is narrow.
+export function panelTitle(cols: number, name: string, note: string, right: Seg[] = []): Line {
+  const rightWide = widthOf(right);
+  const room = panelInner(cols) - width(name) - (rightWide ? rightWide + 1 : 0);
+  const keep = note && width(note) + 2 <= room;
+  return panelRow(
+    cols,
+    [seg(name, theme.ink, {bold: true}), ...(keep ? [seg(`  ${note}`, theme.dim)] : [])],
+    right,
+    theme.surface2,
+  );
+}
+
+// The glyphs of a big number, in order, with anything unprintable dropped.
+const bigFont = (text: string): string[][] =>
+  [...text].map(char => glyph.digits[char]).filter((font): font is string[] => Boolean(font));
+
+// How many columns `bigDigits` will take. The font is proportional, so this is
+// the sum of the glyph widths plus one gap of `scale` between each pair.
+export function bigWidth(text: string, scale = 2): number {
+  const fonts = bigFont(text);
+  if (!fonts.length) return 0;
+  return fonts.reduce((n, font) => n + font[0]!.length * scale, 0) + (fonts.length - 1) * scale;
+}
+
+// One number in big type: three screen rows of half blocks, `scale` columns a
+// pixel and `scale` columns between glyphs. Every cell carries `bg`, blank
+// pixels included, so a number can sit on a panel without holes in it. A unit
+// (`%`, `k`, `M`, `~`) is not part of the figure, so it takes its own colour.
+export function bigDigits(
+  text: string,
+  color: string = theme.ink,
+  more: {bg?: string; scale?: number; unit?: string} = {},
+): Seg[][] {
+  const {bg, scale = 2, unit = theme.dim} = more;
+  const block = glyph.columns[8];
+  const chars = [...text].filter(char => glyph.digits[char]);
   return [0, 1, 2].map(row =>
-    [...text].flatMap((char, i) => {
-      const font = glyph.digits[char];
-      if (!font) return [];
+    chars.flatMap((char, i) => {
+      const font = glyph.digits[char]!;
+      const ink = /[0-9.]/.test(char) ? color : unit;
       // Each screen row is two pixel rows: the top half and the bottom half.
-      const cells = [0, 1, 2].map(x => cell(font[row * 6 + x] === '1', row < 2 && font[row * 6 + 3 + x] === '1'));
-      return i ? [sp(2, bg), ...cells] : cells;
+      // The last row has no bottom half, so the figure sits on a baseline.
+      const top = font[row * 2]!;
+      const bottom = font[row * 2 + 1] ?? '';
+      const cells = [...top].map((_, x) => {
+        const hi = top[x] === '#';
+        const lo = bottom[x] === '#';
+        const fill = hi && lo ? block : hi ? glyph.upper : lo ? glyph.lower : '';
+        return fill ? seg(fill.repeat(scale), ink, {bg}) : sp(scale, bg);
+      });
+      return i ? [sp(scale, bg), ...cells] : cells;
     }),
   );
 }
