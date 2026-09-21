@@ -4,7 +4,7 @@ import type {DiffLine, FileDiff, FileStatus} from '../../core/diff';
 import {modelName} from '../../core/usage';
 import type {ChangedFile, FileHistory, TurnChange} from '../../core/turns';
 import {
-  blankRow, counts, INDENT, INDENT2, pageRow, seg, sp, span, spineRow, tokens,
+  blankRow, counts, INDENT, INDENT2, pageRow, RIGHT_PAD, seg, sp, span, spineRow, tokens, widthOf,
   type Group, type Line, type Seg,
 } from '../cells';
 import {diffLines, viewRows, type DiffGroup} from '../diffrows';
@@ -46,6 +46,10 @@ export type ChangesInput = {
 };
 
 const FILES_SHOWN = 8;
+// More agents than this in one turn and the Changes view rolls them into one
+// row. A file row carries this many agent labels before it counts the rest.
+const AGENTS_SHOWN = 3;
+const TAGS_SHOWN = 2;
 const STEPS_SHOWN = 40;
 const SAYS_SHOWN = 2;
 const DAY = 86_400_000;
@@ -84,12 +88,10 @@ export function agentsByTurn(changes: TurnChange[], agents: AgentRun[]): Map<str
   const out = new Map<string, AgentRun[]>();
   const placed = new Map<string, string>();
   for (const agent of [...agents].sort((a, b) => a.depth - b.depth || a.startedAt - b.startedAt)) {
+    // Either the main chat started it, or an agent did: then it belongs to
+    // whichever turn its parent belongs to.
     let key = turnOfCall.get(agent.toolUseId);
-    if (!key) {
-      const parent = agents.find(other => other.steps.some(step => step.id === agent.toolUseId));
-      key = parent ? placed.get(parent.id) : undefined;
-    }
-
+    if (!key && agent.parentId) key = placed.get(agent.parentId);
     if (!key) continue;
     placed.set(agent.id, key);
     out.set(key, [...(out.get(key) ?? []), agent]);
@@ -154,7 +156,9 @@ function changedFileRow(ctx: Ctx, change: TurnChange, file: ChangedFile, pins: s
   );
 }
 
-function meta(change: TurnChange, agents: AgentRun[], now: number): Seg[] {
+// `counted` is false when the turn has its own row for the agents: the count
+// belongs there and saying it twice reads as two different facts.
+function meta(change: TurnChange, agents: AgentRun[], now: number, counted = true): Seg[] {
   const out: Seg[] = [];
   const dot = () => (out.length ? [sep()] : []);
   if (change.running) out.push(seg('running', theme.accent));
@@ -171,7 +175,7 @@ function meta(change: TurnChange, agents: AgentRun[], now: number): Seg[] {
     out.push(...dot(), seg('no file changes', theme.faint));
   }
 
-  if (agents.length) out.push(...dot(), seg(`${agents.length} agent${agents.length === 1 ? '' : 's'}`, theme.dim));
+  if (agents.length && counted) out.push(...dot(), seg(`${agents.length} agent${agents.length === 1 ? '' : 's'}`, theme.dim));
   const took = (change.running ? now : change.turn.endedAt) - change.turn.at;
   if (took >= 1000) out.push(...dot(), seg(span(took), theme.dim));
   return out;
@@ -230,7 +234,7 @@ function openTurn(ctx: Ctx, change: TurnChange, agents: AgentRun[]): void {
   const pins = rail.pins;
 
   turnHead(ctx, change, true);
-  ctx.out.push(spineRow(cols, meta(change, agents, now), [], rail));
+  ctx.out.push(spineRow(cols, meta(change, agents, now, agents.length <= AGENTS_SHOWN), [], rail));
 
   // What Claude said about it. Only once the turn is over: while it runs, the
   // conversation is on screen right next to this pane.
@@ -274,7 +278,9 @@ function openTurn(ctx: Ctx, change: TurnChange, agents: AgentRun[]): void {
   const all = open.more.has(key);
   for (const file of all ? change.files : change.files.slice(0, FILES_SHOWN)) {
     const by = writers.get(file.path) ?? [];
-    const tags: Seg[] = by.flatMap(i => [sp(1), seg(agentLabel(i), agentColour(i), {bold: true})]);
+    // Two labels is as much as a file row can carry; the rest is a count.
+    const tags: Seg[] = by.slice(0, TAGS_SHOWN).flatMap(i => [sp(1), seg(agentLabel(i), agentColour(i), {bold: true})]);
+    if (by.length > TAGS_SHOWN) tags.push(sp(1), seg(`+${by.length - TAGS_SHOWN}`, theme.faint));
     if (by.length > 1) tags.push(sp(1), seg(glyph.warn, theme.warn));
     changedFileRow(ctx, change, file, pins, tags.length ? [sp(1), ...tags] : []);
   }
@@ -288,8 +294,24 @@ function openTurn(ctx: Ctx, change: TurnChange, agents: AgentRun[]): void {
     );
   }
 
-  // Subagents, grouped by agent. One row each; open one for what it did.
-  agents.forEach((agent, i) => agentRow(ctx, agent, i, change, pins));
+  // Subagents as a tree under the turn. A handful is worth listing here; a
+  // crowd folds into one row, because the whole story is the Agents view's.
+  if (agents.length) {
+    const rollId = `ga:${key}`;
+    const rollKey = `roll:${key}`;
+    const crowd = agents.length > AGENTS_SHOWN;
+    const rolled = crowd && !open.agents.has(rollKey);
+    const hereRoll = rollId === sel;
+    if (crowd) {
+      ctx.out.push(
+        spineRow(cols, [chevron(!rolled, hereRoll), sp(1), ...agentSummary(agents, now)], [], {
+          ...rail, id: rollId, pick: true, bg: hereRoll ? theme.surface2 : undefined, act: {type: 'toggle', set: 'agents', key: rollKey},
+        }),
+      );
+    }
+
+    if (!rolled) agentRows(ctx, agentTree(agents), change, crowd ? [...pins, rollId] : pins, turn.actions.length > 0);
+  }
 
   // Every tool call, folded into one row. The list is there when you want it.
   if (turn.actions.length) {
@@ -328,38 +350,117 @@ export function agentStatus(agent: AgentRun, now: number, frame: number): Seg[] 
   return [seg(glyph.dot, theme.faint)];
 }
 
-// An agent as one row: label, kind, the job it was given, how it ended.
-export function agentRow(ctx: Pick<Ctx, 'cols' | 'sel' | 'now' | 'frame' | 'root' | 'out'> & {open: Pick<Open, 'agents'>}, agent: AgentRun, index: number, change: TurnChange | null, pins: string[]): void {
+export type AgentNode = {agent: AgentRun; index: number; kids: AgentNode[]};
+
+// Who started whom. `parentId` is exact: the parent's own transcript carries
+// the call that started the child. Without it, a deeper agent hangs off
+// whichever shallower agent was running when it started. `index` stays the
+// place in the turn's whole list, so a folded list keeps its labels.
+export function agentTree(agents: AgentRun[], shown?: (agent: AgentRun) => boolean): AgentNode[] {
+  const nodes: AgentNode[] = agents.map((agent, index) => ({agent, index, kids: []})).filter(node => !shown || shown(node.agent));
+  const byId = new Map(nodes.map(node => [node.agent.id, node]));
+  const roots: AgentNode[] = [];
+  for (const node of nodes) {
+    const {agent} = node;
+    let parent = agent.parentId ? byId.get(agent.parentId) : undefined;
+    if (!agent.parentId && agent.depth > 1) {
+      const before = nodes.filter(other => other.agent.depth < agent.depth && other.agent.startedAt <= agent.startedAt);
+      parent = before.sort((a, b) => a.agent.startedAt - b.agent.startedAt).pop();
+    }
+
+    // A parent can only have started before its child, which also rules a
+    // loop out.
+    if (parent && parent !== node && parent.agent.startedAt <= agent.startedAt) parent.kids.push(node);
+    else roots.push(node);
+  }
+
+  return roots;
+}
+
+export const agentsFlat = (nodes: AgentNode[]): AgentNode[] => nodes.flatMap(node => [node, ...agentsFlat(node.kids)]);
+
+// `4 agents  ·  3 running  ·  1 done  ·  276k tokens`
+export function agentSummary(agents: AgentRun[], now: number, unit = false): Seg[] {
+  const count = (status: string) => agents.filter(a => statusOf(a, now) === status).length;
+  const spent = agents.reduce((n, a) => n + a.tokens, 0);
+  const out: Seg[] = [seg(`${agents.length} agent${agents.length === 1 ? '' : 's'}`, theme.dim)];
+  const running = count('running');
+  const done = count('done');
+  const stopped = count('stopped');
+  if (running) out.push(sep(), seg(`${running} running`, theme.accent));
+  if (done) out.push(sep(), seg(`${done} done`, theme.dim));
+  if (stopped) out.push(sep(), seg(`${stopped} stopped`, theme.warn));
+  out.push(sep(), seg(`${tokens(spent)}${unit ? ' tokens' : ''}`, theme.dim));
+  return out;
+}
+
+const guide = (on: boolean): Seg => (on ? seg(glyph.guide, theme.spine) : sp(1));
+
+// Where a row sits in the tree. `stack[i]` is true when the line at level i
+// carries on below this row; the row's own level is the last one. Level 0 sits
+// in the left line's column and every level after it three columns further in.
+// A branch row ends in `├─`; the rows hanging under it end in four spaces, so
+// their text starts under the task and not under the status glyph.
+export function agentBranch(stack: boolean[]): {mark: Seg; lead: Seg[]} {
+  const depth = stack.length - 1;
+  const branch = seg(stack[depth] ? glyph.branch : glyph.branchLast, theme.spine);
+  if (depth === 0) return {mark: branch, lead: []};
+  return {mark: guide(stack[0] ?? false), lead: [sp(1), ...stack.slice(1, depth).flatMap(on => [guide(on), sp(2)]), branch, sp(1)]};
+}
+
+function agentUnder(stack: boolean[], gap: number): {mark: Seg; lead: Seg[]} {
+  const rails = stack.slice(1);
+  return {mark: guide(stack[0] ?? false), lead: [sp(1), ...rails.flatMap((on, i) => [guide(on), sp(i === rails.length - 1 ? gap : INDENT)])]};
+}
+
+type AgentCtx = Pick<Ctx, 'cols' | 'sel' | 'now' | 'frame' | 'root' | 'out'> & {open: Pick<Open, 'agents'>};
+
+// An agent as one row of the tree: status first, then the label, the kind it
+// was asked for and the job, with elapsed time and tokens in fixed columns on
+// the right. A running one gets one dim row with the step it is on; an open
+// one gets its detail under that.
+export function agentRow(ctx: AgentCtx, node: AgentNode, change: TurnChange | null, pins: string[], stack: boolean[], pad: number): void {
   const {cols, sel, now} = ctx;
+  const {agent, index} = node;
   const id = `a:${agent.id}`;
   const here = id === sel;
   const isOpen = ctx.open.agents.has(agent.id);
   const status = statusOf(agent, now);
-  const last = agent.steps[agent.steps.length - 1];
-  const doing = status === 'running' && last ? `${last.tool} ${last.why || path.basename(last.file ?? '')}` : agent.task;
-  const live = change?.running;
+  const branch = agentBranch(stack);
+  // The rows under an agent start under its task: the status glyph, a space
+  // and the label wide.
+  const under = agentUnder([...stack, node.kids.length > 0], pad + 2);
+  const mine = [...pins, id];
 
   ctx.out.push(
     spineRow(
       cols,
       [
-        chevron(isOpen, here),
+        ...branch.lead,
+        ...agentStatus(agent, now, ctx.frame),
         sp(1),
-        seg(agentLabel(index).padEnd(3), agentColour(index), {bold: true}),
-        sp(agent.depth > 1 ? 2 : 0),
+        seg(agentLabel(index).padEnd(pad), agentColour(index), {bold: true}),
         // "general-purpose" says nothing. A kind that was chosen does.
         ...(agent.type === 'general-purpose' ? [] : [seg(`${agent.type}  `, theme.ink)]),
-        seg(doing, status === 'running' ? theme.ink : theme.text),
+        seg(agent.task, status === 'running' ? theme.ink : theme.text),
       ],
-      [...agentStatus(agent, now, ctx.frame), sp(1), seg(span((status === 'running' ? now : agent.endedAt) - agent.startedAt).padStart(7), theme.dim), sp(1), seg(tokens(agent.tokens).padStart(5), theme.faint)],
-      {id, pick: true, pins, live, bg: here ? theme.surface2 : undefined, act: {type: 'toggle', set: 'agents', key: agent.id}},
+      [seg(span((status === 'running' ? now : agent.endedAt) - agent.startedAt).padStart(7), theme.dim), sp(1), seg(tokens(agent.tokens).padStart(5), theme.faint)],
+      {id, pick: true, pins, mark: branch.mark, bg: here ? theme.surface2 : undefined, act: {type: 'toggle', set: 'agents', key: agent.id}},
     ),
   );
-  if (!isOpen) return;
 
-  const inner = {pins: [...pins, id], live};
-  const row = (left: Seg[], right: Seg[] = []) => ctx.out.push(spineRow(cols, [sp(INDENT2), ...left], right, inner));
-  row([seg(`${agent.type}  ${glyph.sep}  ${modelName(agent.model)}  ${glyph.sep}  ${agent.steps.length} step${agent.steps.length === 1 ? '' : 's'}  ${glyph.sep}  ${tokens(agent.tokens)} tokens`, theme.faint)]);
+  // While it runs, the one thing worth a second row is what it is doing.
+  const last = agent.steps[agent.steps.length - 1];
+  if (status === 'running' && last) {
+    ctx.out.push(
+      spineRow(cols, [...under.lead, seg(last.tool, theme.faint), sp(INDENT), seg(last.why || path.basename(last.file ?? ''), theme.dim)], [], {mark: under.mark, pins: mine}),
+    );
+  }
+
+  if (!isOpen) return;
+  const room = cols - 4 - RIGHT_PAD - widthOf(under.lead);
+  const row = (left: Seg[], right: Seg[] = []) => ctx.out.push(spineRow(cols, [...under.lead, ...left], right, {mark: under.mark, pins: mine}));
+  row([seg(`${agent.type}  ${glyph.sep}  ${modelName(agent.model)}  ${glyph.sep}  ${agent.steps.length} step${agent.steps.length === 1 ? '' : 's'}  ${glyph.sep}  ${tokens(agent.tokens)}`, theme.faint)]);
   if (status === 'stopped') row([seg('Went quiet without handing back.', theme.warn)]);
   for (const file of agent.wrote) {
     const rel = path.relative(ctx.root, file).split(path.sep).join('/');
@@ -369,8 +470,30 @@ export function agentRow(ctx: Pick<Ctx, 'cols' | 'sel' | 'now' | 'frame' | 'root
 
   for (const step of agent.steps.slice(-5)) row([seg(step.tool.padEnd(9), theme.faint), seg(step.why || path.basename(step.file ?? ''), theme.dim)], [seg(clock(step.at), theme.faint)]);
   if (agent.says && status !== 'running') {
-    for (const text of wrap(agent.says.replace(/[*_`#>]/g, ''), cols - 12).slice(0, 3)) row([seg(text, theme.text)]);
+    for (const text of wrap(agent.says.replace(/[*_`#>]/g, ''), Math.max(20, room - 8)).slice(0, 3)) row([seg(text, theme.text)]);
   }
+}
+
+// How deep a tree is worth drawing: past this the indents cost more than the
+// nesting tells you.
+const TREE_MAX = 4;
+
+// `tail` is for a tree with more of its turn under it: the last branch is then
+// still a `├─`, because the turn's own line carries on past it.
+export function agentRows(ctx: AgentCtx, nodes: AgentNode[], change: TurnChange | null, pins: string[], tail = false): void {
+  // One label column for the whole tree, so `A10` does not push its own task
+  // out of line with the rest.
+  const pad = Math.max(3, ...agentsFlat(nodes).map(node => agentLabel(node.index).length + 1));
+  const draw = (level: AgentNode[], stack: boolean[], under: string[]) => {
+    level.forEach((node, i) => {
+      const mine = [...stack, i < level.length - 1 || (stack.length === 0 && tail)];
+      agentRow(ctx, node, change, under, mine, pad);
+      // A nested agent keeps its parent's row on screen with it.
+      if (node.kids.length && mine.length < TREE_MAX) draw(node.kids, mine, [...under, `a:${node.agent.id}`]);
+    });
+  };
+
+  draw(nodes, [], pins);
 }
 
 function byTurn(ctx: Ctx): void {

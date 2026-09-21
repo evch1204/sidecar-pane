@@ -29,6 +29,9 @@ export type AgentRun = {
   task: string;
   // The tool call in the parent transcript that started this agent.
   toolUseId: string;
+  // The agent whose own transcript carries that call, when there is one: an
+  // agent the main chat started has no parent here.
+  parentId?: string;
   // 1 for an agent the main chat started, 2 for one started by an agent.
   depth: number;
   model: string;
@@ -36,6 +39,8 @@ export type AgentRun = {
   endedAt: number;
   // The last reply ended the agent's turn, so it has handed back.
   done: boolean;
+  // A tool call it made has not come back yet, so the quiet is the tool's.
+  waiting: boolean;
   tokens: number;
   steps: AgentStep[];
   // Absolute paths the agent's own Edit and Write calls named.
@@ -44,7 +49,7 @@ export type AgentRun = {
   says: string;
 };
 
-type Seen = {size: number; tail: string; run: AgentRun; messages: Set<string>};
+type Seen = {size: number; tail: string; run: AgentRun; messages: Set<string>; awaiting: Set<string>};
 export type AgentState = {seen: Map<string, Seen>};
 
 export function newAgentState(): AgentState {
@@ -83,6 +88,15 @@ function parseInto(seen: Seen, lines: string[]): void {
       run.endedAt = Math.max(run.endedAt, at);
     }
 
+    // A tool result comes back on a `user` line and names the call it answers.
+    // Until it does, the agent is inside that call and not idle.
+    const answers = line.type === 'user' ? line.message?.content : null;
+    if (Array.isArray(answers)) {
+      for (const block of answers as {type?: string; tool_use_id?: string}[]) {
+        if (block.type === 'tool_result' && block.tool_use_id) seen.awaiting.delete(block.tool_use_id);
+      }
+    }
+
     if (line.type !== 'assistant' || !line.message) continue;
     const message = line.message;
     if (message.model) run.model = message.model;
@@ -99,6 +113,7 @@ function parseInto(seen: Seen, lines: string[]): void {
       if (block.type === 'text' && block.text?.trim()) run.says = block.text.trim();
       if (block.type !== 'tool_use' || !block.name) continue;
       run.done = false;
+      if (block.id) seen.awaiting.add(block.id);
       const input = block.input ?? {};
       const file = typeof input.file_path === 'string' ? path.resolve(input.file_path) : null;
       run.steps.push({
@@ -122,6 +137,8 @@ function parseInto(seen: Seen, lines: string[]): void {
       if (file && (block.name === 'Edit' || block.name === 'Write') && !run.wrote.includes(file)) run.wrote.push(file);
     }
   }
+
+  run.waiting = !run.done && seen.awaiting.size > 0;
 }
 
 // Every subagent any chat in this project has started, oldest first.
@@ -161,6 +178,7 @@ export function readAgents(root: string, state: AgentState): AgentRun[] {
           size: 0,
           tail: '',
           messages: new Set(),
+          awaiting: new Set(),
           run: {
             id,
             sessionId,
@@ -172,6 +190,7 @@ export function readAgents(root: string, state: AgentState): AgentRun[] {
             startedAt: 0,
             endedAt: 0,
             done: false,
+            waiting: false,
             tokens: 0,
             steps: [],
             wrote: [],
@@ -200,15 +219,30 @@ export function readAgents(root: string, state: AgentState): AgentRun[] {
     }
   }
 
+  // Who started whom: the child's meta names the tool call that spawned it,
+  // and that call is one of the parent's own steps. An agent the main chat
+  // started matches nothing here, and keeps no parent.
+  const byCall = new Map<string, AgentRun>();
+  for (const run of out) for (const step of run.steps) if (step.id) byCall.set(step.id, run);
+  for (const run of out) {
+    const parent = run.toolUseId ? byCall.get(run.toolUseId) : undefined;
+    run.parentId = parent && parent !== run ? parent.id : undefined;
+  }
+
   return out.sort((a, b) => a.startedAt - b.startedAt);
 }
 
 // Quiet for this long without handing back means it is not coming back.
 const STALLED_MS = 5 * 60_000;
 
+// Quiet inside a tool call is the tool's quiet, not the agent's: a long build,
+// or a child agent that is still working, writes nothing to this transcript
+// while the agent is plainly alive. Only give up on it after an hour.
+const WAITING_MS = 60 * 60_000;
+
 export type AgentStatus = 'running' | 'done' | 'stopped';
 
 export function statusOf(run: AgentRun, now: number): AgentStatus {
   if (run.done) return 'done';
-  return now - run.endedAt < STALLED_MS ? 'running' : 'stopped';
+  return now - run.endedAt < (run.waiting ? WAITING_MS : STALLED_MS) ? 'running' : 'stopped';
 }

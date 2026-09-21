@@ -128,9 +128,12 @@ export function spineRow(
 ): Line {
   const {bg, mark, live, ...rest} = more;
   const first = mark ?? spineMark(live);
+  // A two column mark (a tree branch, `├─`) pushes the content one column in
+  // and takes that column from the middle, so the right edge never moves.
+  const w = width(first.text);
   return {
     ...rest,
-    segs: [sp(1), {...first, bg: first.bg ?? bg}, sp(1, bg), ...fit(left, right, cols - 4 - RIGHT_PAD, bg), sp(RIGHT_PAD, bg)],
+    segs: [sp(1), {...first, bg: first.bg ?? bg}, sp(1, bg), ...fit(left, right, cols - 3 - w - RIGHT_PAD, bg), sp(RIGHT_PAD, bg)],
   };
 }
 
