@@ -93,6 +93,9 @@ export const glyph = {
   // The one separator between facts on a row, with two spaces either side.
   sep: '·',
   rule: '─',
+  // A heavier line: the rule under a page's title, the used part of a thin meter.
+  heavy: '━',
+  heavyHalf: '╸',
   dot: '●',
   bullet: '•',
   diamond: '◆',
