@@ -243,23 +243,29 @@ export function App({root, interactive, mouseDebug = false}: Props) {
       const at = key.indexOf('|');
       const scope = key.slice(0, at);
       const rel = key.slice(at + 1);
-      const fromGit = (note?: string): DiffGroup[] => {
+      // `dead` is what to say when there is nothing left to show at all.
+      const fromGit = (note?: string, dead?: string): DiffGroup[] => {
         const found = diff?.files[diff.index.get(pathKey(path.resolve(root, rel))) ?? -1] ?? null;
         return found
           ? [{key: 'git', band: null, file: found, note}]
-          : [{key: 'none', band: null, file: null, note: 'Nothing to show: this file matches the last commit.'}];
+          : [{key: 'none', band: null, file: null, note: dead ?? 'Nothing to show: this file matches the last commit.'}];
       };
 
       if (scope === 'git') return fromGit();
       const change = history.changes.find(c => turnKey(c) === scope);
-      if (change?.measured && history.store) {
+      // Snapshots or commits, whichever recorded this turn; a file only the
+      // transcript named has neither, so it falls through.
+      if (change?.measured && change.files.find(f => f.rel === rel)?.known) {
         const one = await fileInTurn(root, history.store, change, rel);
         // A finished turn's diff never changes, so it is only read once.
         if (!change.running) settled.current.add(key);
         return one ? [{key: 'turn', band: null, file: one}] : [{key: 'none', band: null, file: null, note: 'That turn left no diff for this file.'}];
       }
 
-      return fromGit('Not recorded turn by turn. This is everything since the last commit.');
+      return fromGit(
+        'Not recorded turn by turn. This is everything since the last commit.',
+        'Not recorded: the pane was not open during this turn and no commit holds this change.',
+      );
     };
 
     void (async () => {

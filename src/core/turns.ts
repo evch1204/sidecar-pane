@@ -1,10 +1,13 @@
 import path from 'node:path';
 import {buildDiff, type FileDiff, type FileStatus} from './diff';
+import {commitsSince, EMPTY_TREE, patchBetweenCommits, statBetweenCommits, type Commit} from './git';
 import type {Session, Turn} from './sessions';
 import {after, before, covered, patchFile, statBetween, type Store} from './snapshot';
 
 // Joins the two halves of the story: the transcript knows which chat and which
 // prompt, the snapshots know which lines. A turn is the unit that has both.
+// When sidecar was not running for a turn there is still a third source: the
+// project's own commits, matched to the turn by time.
 
 export type ChangedFile = {
   rel: string;
@@ -12,6 +15,10 @@ export type ChangedFile = {
   status: FileStatus;
   added: number;
   removed: number;
+  // True when the counts are real, because a snapshot or a commit holds them.
+  // False for a file the transcript merely named: it stays in the list, with
+  // no numbers.
+  known: boolean;
 };
 
 export type TurnChange = {
@@ -21,11 +28,16 @@ export type TurnChange = {
   files: ChangedFile[];
   added: number;
   removed: number;
-  // True when the files were read off snapshots taken either side of the turn.
-  // False when sidecar was not running then and all we have is what the
-  // transcript claimed.
+  // True when the counts are real, whichever source recorded them.
   measured: boolean;
+  // Which source: snapshots taken either side of the turn, or the commits that
+  // landed inside its window. Null when neither recorded it and all we have is
+  // what the transcript claimed.
+  via: 'snapshots' | 'commits' | null;
+  // How many commits were matched to it, so the row can say where it got this.
+  commits: number;
   running: boolean;
+  // Two snapshot trees, or two commits, depending on `via`.
   from: string | null;
   to: string | null;
 };
@@ -39,7 +51,72 @@ function claimed(root: string, turn: Turn): ChangedFile[] {
     status: 'modified' as FileStatus,
     added: 0,
     removed: 0,
+    known: false,
   }));
+}
+
+// A commit belongs to the turn with the latest start at or before its
+// committer time, across every chat of this project: a turn's window runs from
+// its own start to the start of the next turn wherever that was typed, or to
+// now for the newest. That catches both the commits Claude makes while working
+// and the one the owner makes by hand after reading the result.
+//
+// Only a turn the pane did not watch is filled in this way. A turn measured
+// from snapshots already knows its own lines, and commits would add nothing
+// but doubt about which of them it was.
+async function fromCommits(root: string, changes: TurnChange[]): Promise<void> {
+  const missing = changes.filter(change => !change.measured);
+  if (missing.length === 0) return;
+
+  // The log only has to reach as far back as the oldest turn still missing.
+  const since = Math.min(...missing.map(change => change.turn.at));
+  const log = await commitsSince(root, since);
+  if (!log || log.length === 0) return;
+
+  // Both lists are in time order, so one walk matches them.
+  const order = [...changes].sort((a, b) => a.turn.at - b.turn.at);
+  const mine = new Map<TurnChange, Commit[]>();
+  let i = 0;
+  let owner: TurnChange | null = null;
+  for (const commit of log) {
+    while (i < order.length && order[i]!.turn.at <= commit.at) owner = order[i++]!;
+    if (!owner || owner.measured) continue;
+    mine.set(owner, [...(mine.get(owner) ?? []), commit]);
+  }
+
+  for (const [change, window] of mine) {
+    const first = window[0]!;
+    // The very first commit of a repository has no parent to compare with.
+    const base = first.parent || EMPTY_TREE;
+    const tip = window[window.length - 1]!.sha;
+
+    const key = `${base}..${tip}`;
+    let files = stats.get(key);
+    if (!files) {
+      files = (await statBetweenCommits(root, base, tip)).map(stat => ({
+        rel: stat.rel,
+        path: path.resolve(root, stat.rel),
+        status: stat.status,
+        added: stat.added,
+        removed: stat.removed,
+        known: true,
+      }));
+      // A commit never changes, so its counts are worked out once.
+      stats.set(key, files);
+    }
+
+    // A file the transcript named that no commit holds stays in the list the
+    // way it reads today: there, and honest about having no numbers.
+    const held = new Set(files.map(file => file.rel));
+    change.files = [...files, ...change.files.filter(file => !held.has(file.rel))].sort((a, b) => a.rel.localeCompare(b.rel));
+    change.added = files.reduce((n, f) => n + f.added, 0);
+    change.removed = files.reduce((n, f) => n + f.removed, 0);
+    change.measured = true;
+    change.via = 'commits';
+    change.commits = window.length;
+    change.from = base;
+    change.to = tip;
+  }
 }
 
 // Every turn of every chat, newest last, with what it changed.
@@ -63,6 +140,8 @@ export async function loadTurns(
         added: 0,
         removed: 0,
         measured: false,
+        via: null,
+        commits: 0,
         running,
         from: null,
         to: null,
@@ -85,6 +164,7 @@ export async function loadTurns(
 
       if (start.tree === end.tree) {
         base.measured = true;
+        base.via = 'snapshots';
         out.push(base);
         continue;
       }
@@ -92,6 +172,7 @@ export async function loadTurns(
       base.from = start.tree;
       base.to = end.tree;
       base.measured = true;
+      base.via = 'snapshots';
 
       const key = `${start.tree}..${end.tree}`;
       let files = stats.get(key);
@@ -102,6 +183,7 @@ export async function loadTurns(
           status: stat.status,
           added: stat.added,
           removed: stat.removed,
+          known: true,
         }));
         // Trees never change, so a count only has to be worked out once.
         if (!running) stats.set(key, files);
@@ -114,18 +196,28 @@ export async function loadTurns(
     }
   }
 
+  // Whatever the pane was not there for, git may still have the receipt.
+  // Outside a git repo this does nothing and every turn reads as it did.
+  await fromCommits(root, out);
+
   return out;
 }
 
-// The diff of one file as one turn left it.
+// The diff of one file as one turn left it: between the two snapshots, or
+// between the two commits, depending on which recorded it.
 export async function fileInTurn(
   root: string,
-  store: Store,
+  store: Store | null,
   change: TurnChange,
   rel: string,
 ): Promise<FileDiff | null> {
   if (!change.from || !change.to) return null;
-  const patch = await patchFile(store, root, change.from, change.to, rel);
+  const patch =
+    change.via === 'commits'
+      ? await patchBetweenCommits(root, change.from, change.to, rel)
+      : store
+        ? await patchFile(store, root, change.from, change.to, rel)
+        : null;
   if (!patch) return null;
   return buildDiff(root, root, patch)[0] ?? null;
 }
@@ -136,9 +228,9 @@ export type FileHistory = {
   status: FileStatus;
   added: number;
   removed: number;
-  // At least one of the turns below was measured from snapshots.
+  // At least one of the turns below has real counts for this file.
   measured: boolean;
-  touches: {change: TurnChange; added: number; removed: number}[];
+  touches: {change: TurnChange; added: number; removed: number; known: boolean}[];
 };
 
 // The same changes seen the other way round: one row per file, and the turns
@@ -163,10 +255,12 @@ export function byFile(changes: TurnChange[]): FileHistory[] {
 
       entry.added += file.added;
       entry.removed += file.removed;
-      entry.measured ||= change.measured;
+      // Per file, not per turn: a turn filled in from commits can hold both a
+      // file git counted and a file only the transcript named.
+      entry.measured ||= file.known;
       // The newest status wins: a file created then edited is still new.
       if (file.status === 'added' || file.status === 'deleted') entry.status = file.status;
-      entry.touches.push({change, added: file.added, removed: file.removed});
+      entry.touches.push({change, added: file.added, removed: file.removed, known: file.known});
     }
   }
 
