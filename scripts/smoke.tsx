@@ -10,8 +10,8 @@ import {App} from '../src/ui/App';
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const target = process.argv[2] ? path.resolve(process.argv[2]) : repo;
 const DOWN = '\u001B[B';
-const RIGHT = '\u001B[C';
 const ESC = '\u001B';
+const ENTER = '\r';
 
 // A left click at a column and row, as the terminal would report it.
 const click = (col: number, row: number) => `\u001B[<0;${col + 1};${row + 1}M`;
@@ -26,7 +26,7 @@ const stdin = Object.assign(new PassThrough(), {
 });
 
 const frames: string[] = [];
-const stdout = Object.assign(new PassThrough(), {columns: 72, rows: 30, isTTY: true});
+const stdout = Object.assign(new PassThrough(), {columns: 72, rows: 40, isTTY: true});
 stdout.on('data', chunk => frames.push(String(chunk)));
 
 const app = render(<App root={target} interactive />, {
@@ -40,54 +40,58 @@ const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 const press = async (...keys: string[]) => {
   for (const key of keys) {
     stdin.write(key);
-    await wait(40);
+    await wait(60);
   }
 };
 
 const show = async (label: string) => {
-  await wait(300);
+  await wait(400);
   console.log(`\n=== ${label}\n${frames.at(-1)}`);
 };
 
-await wait(900); // first git read
+await wait(1800); // first git, transcript and snapshot read
+await show('changes: the stream, newest turn open');
 
-await press(DOWN, RIGHT, DOWN, RIGHT, DOWN, DOWN);
-await show('files: src/core opened, cursor on a file');
+await press(DOWN, DOWN, ENTER);
+await show('changes: a row of the open turn, entered');
 
-await press(RIGHT, DOWN, DOWN, DOWN);
-await show('files: preview focused, tree shrunk, scrolled 3 lines');
-
-await press(ESC, '2');
-await wait(1400); // first diff, transcript and snapshot read
-await show('changes: every turn, newest first, with why on the right');
-
-await press('\r');
-await show('changes: a turn opened, showing the files it changed');
-
-await press(DOWN, RIGHT);
-await show('changes: one file, as that turn left it');
+await press('m');
+await show('the View menu, open over a dimmed pane');
 
 await press(ESC, 'v');
-await show('changes: grouped by file instead');
+await show('changes: grouped by file');
 
 await press('v');
-await show('changes: every change since the last commit');
+await wait(600);
+await press(ENTER);
+await wait(600);
+await show('changes: everything since the last commit, first file opened in place');
 
-await press(DOWN, RIGHT, 'n');
-await show('changes: diff focused, cursor on the next hunk');
-
-await press('\r');
-await show('changes: that hunk folded');
-
-// Row 2 is the top of the list, so this clicks the third row.
-await press(click(4, 4));
-await show('changes: a row opened by clicking it');
+await press('n', ENTER);
+await show('changes: jumped to a hunk and folded it');
 
 await press(wheelDown(20, 14), wheelDown(20, 14));
-await show('changes: wheel over the diff scrolled it, cursor left alone');
+await show('changes: wheel scrolled the stream, cursor left alone');
 
-await press(click(11, 0));
-await show('files: switched back by clicking the Files tab');
+await press(click(16, 2));
+await wait(300);
+await press(DOWN, DOWN, ENTER, DOWN, DOWN, ENTER, DOWN, DOWN, ENTER);
+await wait(500);
+await show('files: a folder opened, then a file peeked in place');
+
+await press(ENTER);
+await wait(400);
+await show('files: the reader, full height');
+
+await press(ESC, '3');
+await show('agents: every subagent, under the prompt that started it');
+
+await press(DOWN, ENTER);
+await show('agents: one agent opened');
+
+await press('4');
+await wait(1200);
+await show('usage');
 
 stdin.write('q');
 await app.waitUntilExit();
