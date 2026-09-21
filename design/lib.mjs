@@ -16,7 +16,7 @@ export const bar = color => ({kind: 'bar', color, t: ' '});
 export const guide = () => ({kind: 'guide', t: ' '});
 export const hole = (name, fg, o = {}) => ({kind: 'hole', name, fg, t: ' ', ...o});
 export const len = segs => segs.reduce((n, x) => n + [...x.t].length, 0);
-const GLYPH = {hole: '?', bar: '▎', guide: '│', box: '▄', meter: '━', hline: '─'};
+const GLYPH = {hole: '?', bar: '▎', guide: '│', box: '▄', split: '▄', meter: '━', hline: '─'};
 export const plain = segs => segs.map(x => (x.kind === 'pipe' ? (x.node ? '●' : x.curve ? '╭' : x.l || x.r ? (x.u || x.d ? '┼' : '─') : '│') : x.kind ? [...x.t].map(() => GLYPH[x.kind] ?? ' ').join('') : x.t)).join('');
 export const setTheme = t => Object.assign(C, t);
 // A run of cells, each holding one block-element rectangle. rect = [x, y, w, h] as fractions of ONE cell.
@@ -27,6 +27,9 @@ export const rightHalf = (color, o) => box(1, [.5, 0, .5, 1], color, o);
 export const leftHalf = (color, o) => box(1, [0, 0, .5, 1], color, o);
 export const column = (eighths, color, o) => box(1, [0, 1 - eighths / 8, 1, eighths / 8], color, o);
 export const pill = (text, bg, fg, o = {}) => [rightHalf(bg, o), s(text, fg, {bg, ...o}), leftHalf(bg, o)];
+// Several colours in ONE box: parts = [[cells, color], ...]. Separate boxes side by side each round their
+// own top edge when the canvas zooms, and end up a pixel apart.
+export const split = (parts, o = {}) => { const live = parts.filter(([n]) => n > 0); return {kind: 'split', t: ' '.repeat(live.reduce((n, [c]) => n + c, 0)), parts: live, ...o}; };
 export const meter = (n, frac, color, o = {}) => ({kind: 'meter', t: ' '.repeat(n), frac, color, ...o});
 export const hline = (n, color, o = {}) => ({kind: 'hline', t: ' '.repeat(n), color, ...o});
 export const pipe = (o) => ({kind: 'pipe', t: ' ', ...o});
@@ -125,6 +128,10 @@ function renderSeg(x) {
       ? `<span style="position:absolute;left:${rx * 100}%;top:${ry * 100}%;width:${rw * 100}%;height:${rh * 100}%;background:${x.color}"></span>`
       : Array.from({length: n}, (_, i) => `<span style="position:absolute;left:${((i + rx) / n) * 100}%;top:${ry * 100}%;width:${(rw / n) * 100}%;height:${rh * 100}%;background:${x.color}"></span>`).join('');
     return `<span${x.cls ? ` class="${x.cls}"` : ''} style="${css({flex: 'none', width: n + 'ch', position: 'relative', background: x.bg})}">${inner}</span>`;
+  }
+  if (x.kind === 'split') {
+    let at = 0; const stops = x.parts.map(([c, color]) => { const from = (at / n) * 100; at += c; return `${color} ${from}% ${(at / n) * 100}%`; }).join(', ');
+    return `<span${x.cls ? ` class="${x.cls}"` : ''} style="${css({flex: 'none', width: n + 'ch', position: 'relative', background: x.bg})}"><span style="position:absolute;left:0;right:0;top:${RH / 2}px;height:${RH / 2}px;background:linear-gradient(90deg, ${stops})"></span></span>`;
   }
   if (x.kind === 'meter') {
     const q = Math.round(x.frac * n * 2) / 2 / n; // half-cell precision, like the glyphs

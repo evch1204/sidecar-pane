@@ -1,7 +1,7 @@
 // Version 4, a proposal. Same terminal, same theme as the build, but numbers
 // become shapes, a turn's files are grouped by folder, the agents are drawn as
 // the chart Claude Code itself prints, and worktrees are first class.
-import {C, s, sp, bar, fit, len, lower, upper, column, pill, hline, pipe, tok, sliceSegs, page, RH} from './lib.mjs';
+import {C, s, sp, bar, fit, len, lower, upper, column, pill, split, hline, pipe, tok, sliceSegs, page, RH} from './lib.mjs';
 
 // The build's own extras (src/ui/theme.ts), which lib.mjs predates.
 const X = {spine: '#3A3835', track: '#3A3835', teal: '#6FC7C1', pink: '#E39AC0', tintAdd: '#12301D', tintDel: '#33161A'};
@@ -18,11 +18,14 @@ const chip = (text, bg, fg, o) => pill(text, bg, fg, o);
 const dot = () => s('  ·  ', C.faint);
 
 // Five cells: how much changed (how many are lit) and which way (green, red).
-const size = (g, r) => [lower(g, C.add), lower(r, C.del), lower(5 - g - r, X.track)];
+const size = (g, r) => [split([[g, C.add], [r, C.del], [5 - g - r, X.track]])];
 const stat = (add, del) => [add ? s(('+' + add).padStart(5), C.add) : sp(5), sp(1), del ? s(('−' + del).padStart(5), C.del) : sp(5)];
 const LETTER = {A: C.add, M: C.link, D: C.del, R: C.keyword};
 const fileRow = (prefix, letter, name, g, r, add, del, o = {}) =>
   V(prefix, [sp(1), s(letter, LETTER[letter], {b: 1}), sp(2), s(name, o.nameFg ?? C.ink), ...(o.tail ?? [])], [...size(g, r), sp(2), ...stat(add, del), sp(1)], {bg: o.bg});
+// A turn's work, where it stands in git: committed, then merged.
+const commitRow = (prefix, sha, subject, time) => V(prefix, [s('◆', C.link), sp(1), s(sha, C.link), sp(2), s(subject, C.dim)], [s(time, C.faint), sp(1)]);
+const mergeRow = (prefix, sha, into, time) => V(prefix, [s('✓', C.add), sp(1), s(sha, C.link), sp(2), s('merged into ', C.dim), s(into, C.text, {b: 1})], [s(time, C.faint), sp(1)]);
 const folderRow = (prefix, name, note) => V(prefix, [s(name, C.dim)], note ? [s(note, C.faint), sp(1)] : []);
 
 // A closed turn is one line: the prompt, how big it was, when.
@@ -32,7 +35,7 @@ function closedTurn(prompt, files, g, r, time, o = {}) {
   const shown = chars.length > room ? chars.slice(0, room - 1).join('').trimEnd() + '…' : prompt;
   const right = files === null
     ? [s(o.note ?? 'no file changes', C.faint, {i: o.note ? 1 : 0}), sp(3), s(time, C.faint), sp(1)]
-    : [s(String(files).padStart(2) + (files === 1 ? ' file ' : ' files'), C.dim), sp(1), ...size(g, r), sp(1), s((o.tag ?? '').padEnd(3), C.faint), sp(2), s(time, C.faint), sp(1)];
+    : [s(String(files).padStart(2) + (files === 1 ? ' file ' : ' files'), C.dim), sp(1), ...size(g, r), sp(1), ...(o.git === 'merged' ? [s('✓', C.add), sp(2)] : o.git ? [s('◆', C.link), s(String(o.git).padEnd(2), C.dim)] : [sp(3)]), sp(2), s(time, C.faint), sp(1)];
   return V(node('ring', o.color ?? C.faint), [s(shown, C.text)], right);
 }
 
@@ -58,7 +61,7 @@ function menubar({feed = 'on', status = 'idle', used = .58}) {
   const left = [sp(1), s('◆', C.accent), sp(1), s('Sidecar', C.ink, {b: 1}), sp(2), s('View', C.text)];
   const lit = Math.round(used * 6);
   const meters = {
-    on: [s('5h', C.dim), sp(1), lower(lit, tone(used)), lower(6 - lit, X.track), sp(1), s(Math.round(used * 100) + '%', C.ink, {b: 1}), sp(2), s('1h 52m', C.dim), s(' · ', C.faint), s('wk', C.dim), sp(1), s('23%', C.text)],
+    on: [s('5h', C.dim), sp(1), split([[lit, tone(used)], [6 - lit, X.track]]), sp(1), s(Math.round(used * 100) + '%', C.ink, {b: 1}), sp(2), s('1h 52m', C.dim), s(' · ', C.faint), s('wk', C.dim), sp(1), s('23%', C.text)],
     off: [s('5h', C.dim), sp(1), s('~', C.faint), s('4.3M', C.text), sp(2), s('32m left', C.dim), s(' · ', C.faint), s('connect for %', C.link, {u: 1})],
     quiet: [s('5h', C.faint), sp(1), s('58%', C.faint), sp(2), s('feed quiet 40m', C.warn), s(' · ', C.faint), s('reconnect', C.link, {u: 1})],
   }[feed].map(x => ({...x, href: 'V4-Bar.dc.html'}));
@@ -98,7 +101,7 @@ function landed(prefix, parts) {
   let used = 0;
   const cells = parts.map(([, share], i) => { const n = i === parts.length - 1 ? w - used : Math.round(share * w); used += n; return n; });
   return [
-    V(prefix, parts.map(([, ], i) => lower(cells[i], HUES[i % HUES.length])), []),
+    V(prefix, [split(parts.map(([, ], i) => [cells[i], HUES[i % HUES.length]]))], []),
     V(prefix, parts.flatMap(([name, share], i) => [...(i ? [sp(3)] : []), s('■', HUES[i % HUES.length]), s(' ' + name, C.text), s(' ' + Math.round(share * 100) + '%', C.dim)])),
   ];
 }
@@ -113,7 +116,7 @@ function landed(prefix, parts) {
     V(none, [sp(8), ...activity(none, [2, 1, 8, 1, 1, 3, 6, 5, 7, 4, 2], 8)], [s('+4,180', C.add), sp(1), s('−1,630', C.del), sp(1)]),
     gapRow(),
     V(node('fill', C.accent, {first: true}), [s('i think option 3 is exactly what i want. and when i…', C.ink, {b: 1})], [s('13:05', C.dim), sp(1)]),
-    V(p, [...chip('8 files', C.surface2, C.text), sp(1), ...chip('+310', X.tintAdd, C.add), sp(1), ...chip('−76', X.tintDel, C.del), s('   14m 12s', C.dim), dot(), s('1 agent', C.dim), dot(), s('166k', C.dim)]),
+    V(p, [...chip('8 files', C.surface2, C.text), sp(1), ...chip('+310', X.tintAdd, C.add), sp(1), ...chip('−76', X.tintDel, C.del), s('  14m', C.dim), dot(), s('1 agent', C.dim)], [...chip('✓ merged', X.tintAdd, C.add), sp(1)]),
     ...landed(p, [['src/core', .58], ['src/ui', .31], ['docs', .11]]),
     gapRow(p),
     folderRow(p, 'src/core'),
@@ -139,15 +142,18 @@ function landed(prefix, parts) {
     V(p, [s('✦', C.accent), sp(1), s('Turns the pane did not watch now read their files', C.text)]),
     V(p, [sp(2), s('from the commits made before your next prompt. ', C.text), s('more', C.link, {u: 1})]),
     gapRow(p),
+    commitRow(p, '2fa351d', 'Fill a turn nobody watched from commits', '13:19'),
+    mergeRow(p, 'bffa4d9', 'improve-pane-layout-polish', '13:20'),
+    gapRow(p),
     closedTurn('wait im not sure about the new section. lets plan this', null, 0, 0, '12:58'),
-    closedTurn('so i currently dont see any changes or any diffs', 4, 3, 1, '12:41'),
+    closedTurn('so i currently dont see any changes or any diffs', 4, 3, 1, '12:41', {git: 'merged'}),
     closedTurn('can you run npm run pane for me for this session?', null, 0, 0, '12:30'),
-    closedTurn('sorry i forgot to pull from main before i started', 20, 4, 1, '11:21', {tag: 'git'}),
+    closedTurn('sorry i forgot to pull from main before i started', 20, 4, 1, '11:21', {git: 3}),
     closedTurn('try running orchestrating agent in this session', null, 0, 0, '11:14', {note: '4 agents'}),
     closedTurn('i think right now there is overall needs to have a', null, 0, 0, '11:12'),
     V(none, [sp(3), hline(20, X.spine), s('  yesterday  ', C.faint), hline(26, X.spine)]),
-    closedTurn('write the one-stream design into the plan', 3, 2, 0, '19:38'),
-    closedTurn('rebuild the pane as one stream, with a menu bar', 31, 5, 0, '18:02'),
+    closedTurn('write the one-stream design into the plan', 3, 2, 0, '19:38', {git: 'merged'}),
+    closedTurn('rebuild the pane as one stream, with a menu bar', 31, 5, 0, '18:02', {git: 'merged'}),
   ];
   files4['V4-Changes.dc.html'] = page({title: 'Changes, the stream redrawn', top: top('Changes', {}), stream, bottom: foot([['enter', 'open'], ['esc', 'back'], ['m', 'menu'], ['↑↓', 'move']])});
   text4['V4-Changes.dc.html'] = [...top('Changes', {}), ...stream];
@@ -299,9 +305,9 @@ const trunk = (last, color = X.spine) => [last ? sp(1) : pipe({u: 1, d: 1, color
     V(node('ring', WT.a), [...tagged(WT.a, 'commits'), sp(1), s('Fill a turn nobody watched from…', C.text)], [s('13:05', C.faint), sp(1)]),
     V(p, [s('agent', C.dim), dot(), s('14m', C.dim), s('   7 files ', C.dim), ...size(4, 1)], [s('✓ merged 13:20', C.add), sp(1)]),
     gapRow(p),
-    closedTurn('so i currently dont see any changes or any diffs', 4, 3, 1, '12:41', {color: WT.here}),
-    closedTurn('sorry i forgot to pull from main before i started', 20, 4, 1, '11:21', {color: WT.here, tag: 'git'}),
-    closedTurn('pull the latest and check the smoke scripts', 2, 1, 0, '10:50', {color: WT.main}),
+    closedTurn('so i currently dont see any changes or any diffs', 4, 3, 1, '12:41', {color: WT.here, git: 'merged'}),
+    closedTurn('sorry i forgot to pull from main before i started', 20, 4, 1, '11:21', {color: WT.here, git: 3}),
+    closedTurn('pull the latest and check the smoke scripts', 2, 1, 0, '10:50', {color: WT.main, git: 1}),
   ];
   const o = {status: 'agents', badge: '2', where: 'all 5 worktrees', all: true};
   files4['V4-Worktrees.dc.html'] = page({title: 'Changes across worktrees', top: top('Changes', o), stream, bottom: foot([['w', 'worktree'], ['enter', 'open'], ['esc', 'back'], ['m', 'menu']])});
