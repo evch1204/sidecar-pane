@@ -6,15 +6,16 @@ Sidecar is a **viewer** that sits beside the Claude Code CLI and shows what Clau
 
 You keep typing to Claude on the left. On the right you see your files, which ones Claude just touched, what changed, and a readable preview of any file. You never have to ask "what did you change?" or run `git status` to find out.
 
-It has three views:
+It has four views:
 
 | View | What it answers |
 |---|---|
-| **Files** | What is in this project, and which files did Claude just touch? |
-| **Changes** | What changed this turn, and this session? Red and green. |
-| **Preview** | What does this file look like? Code in colour, markdown formatted. |
+| **Changes** | What changed this turn, and this session, and which prompt caused it? |
+| **Files** | What is in this project, which files changed, and what does this one look like? |
+| **Agents** | When Claude hands work to subagents, who is doing what right now? |
+| **Usage** | How much of the 5 hour and weekly allowance is gone, and where did the tokens go? |
 
-Plus one status line: is Claude working, idle, or waiting for you.
+Plus a menu bar that says whether Claude is working or idle.
 
 ### What it is not
 
@@ -96,59 +97,136 @@ Sidecar pane ──watches──▶ events.jsonl      (what is Claude doing righ
 
 ## Progress
 
-- Done: Day 1 skeleton.
-- Done: Files view from the design mockup: indent guides, change badges, folder counts, "changed only" filter, the focused half grows, coloured code, green bar beside changed lines, pane closes on `q`.
-- Done: tabs, and the Changes view (see "The Changes view" below).
-- Done: mouse. Click, wheel, drag the divider, drag a scrollbar.
-- Done: provenance. The Changes view groups by chat, day and prompt, and says
-  which turn wrote which hunk. Day 4 and Day 6 turned out to need no hooks at
-  all (see "Where the history comes from").
-- Badges currently mean "different from the last commit". "Changed this session" arrives with snapshots on Day 6.
-- Not yet: formatted markdown, Docs view, status, follow, launchers for anything but Windows Terminal.
-- Design mockup: https://claude.ai/artifact/8RPeQxwrBW5zBrefY6UK75
+- Done: Day 1 skeleton, the Files view, tabs, the mouse, and provenance from
+  Claude Code's own session files.
+- Done: the one-stream redesign (see "One stream" below). Every view is one
+  scrolling list. Nothing is shown "down there" in a second half any more.
+- Done: Agents and Usage views, a menu bar, formatted markdown in the reader.
+- Done: sidecar records when it was watching, so a turn is only called
+  measured when it really was (see "Where the history comes from").
+- Not yet: launchers for anything but Windows Terminal, follow mode, a
+  "waiting for you" state (the transcripts do not say when Claude is blocked on
+  a permission prompt).
+- Design canvas: https://claude.ai/artifact/B8wcGJHEqSzm1Ubncr2M9s, and the
+  same thing as files in `design/`. Page 3 of it is captured from the running
+  pane, so it is never out of date by more than one `design/capture.tsx` run.
 
-## The Changes view
+## One stream
 
-Both views now share one skeleton, so moving between them costs nothing:
+The first build had a list on top and whatever you selected underneath. It
+worked and it read like a terminal tool: your eyes went up to choose and down
+to read. The redesign borrows from the owner's own web app (deepdotspace,
+create mode), where a turn is a block and a diff opens under the row you
+clicked.
 
 ```
- sidecar   Files   Changes 3                  sidecar-pane • main   tab bar
-──────────────────────────────────────────────────────────────────
- M src/core/git.ts                                        +5 −2    a list
- M src/ui/App.tsx                                         +3 −1
-─ src/core/git.ts ───────────────────────── hunk 1/2  1-21 of 40 ─ divider
-     ▾ type Change                                   5–11  +3 −1    a body
-   5   export type Change = {
-▎  7 -   added: number | null;
-▎  7 +   added: number;
-       ⋯  38 unchanged lines
-──────────────────────────────────────────────────────────────────
- ↑↓ line  n/N hunk  ]/[ file  enter fold  q quit                   hints
+ ◆ Sidecar  View  Group       5h ━━━╸── 58%  wk 23%   ⠴ working
+
+  Changes 5   Files   Agents 2   Usage      by turn  ·  3 files
+
+ Day 3 launchers                                          today
+ ▗▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▖
+  ⠴ build the rest of the day 3 launchers in parallel.   19:31
+    one agent per terminal: wezterm, iterm2, kitty
+    running  ·  3 files  +18 −1  ·  3 agents  ·  3m 16s
+
+  ▸ Edited   src/launch/index.ts  A1 A2 ⚠             +2    −1
+  ▸ Created  src/launch/kitty.ts  A3                  +8
+  ▸ Created  src/launch/wezterm.ts  A1                +8
+  ▸ A1 Write the WezTerm launcher              ✓  1m 45s   73k
+  ▸ A2 Bash Try the AppleScript split          ⠴  3m 01s   98k
+  ▸ A3 Write kitty.ts                          ⠴  3m 01s   93k
+  ⠴ Bash     Wait for the agents                       4 steps
+ ▝▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▘
+ ▸ add a tmux launcher and wire it into the launcher list
+   19:00  ·  3 files  +12 −3  ·  3m 30s
 ```
-
-Grouped three ways, one key (`v`) apart:
-
-- **by turn** (the default) — chat, then day, then the prompt you typed, then
-  the files that prompt changed. Selecting the turn puts your own words, the
-  steps Claude took and what measurably changed in the body.
-- **by file** — the other question: this file looks wrong, which prompts
-  touched it? Its diff comes back banded, one band per turn.
-- **all changes** — everything since the last commit, the flat list.
 
 Decisions, and why:
 
-- **Your prompt is the row label.** Not a summary of it, not a generated title:
-  the words you typed are the reason the files moved.
-- **No restore.** The version-history view this borrows from has one. Sidecar
-  is a viewer; Claude edits.
-- **Unified, never split.** The pane is usually 50 to 70 columns. Two gutters and two code columns would leave under 30 columns a side, which is worse than one column with word-level marks.
-- **The list is a strip on top, not a sidebar.** Columns are scarce in a split, rows are not. This also settles the old "side by side when wide" question: on top, always, in both views.
-- **The rule between the halves doubles as the header** for the half below it, and is the handle you drag to resize. That buys back a row: chrome is five rows, not six.
-- **Changed lines are a background tint, not red and green text.** Foreground colouring destroys syntax colour and makes the eye read the sign column on every row. A tint reads as a shape, and the `+`/`-` column and the bar keep it working without colour.
-- **Word-level marks** use the same two hues pushed harder, so the exact edit stands out inside an already-coloured line. Only for delete and add runs of equal length whose lines are at least 30% alike; anything else is a rewrite, and marking all of it is noise.
-- **No raw `@@ -12,7 +12,9 @@`.** Hunk headers say what they contain (`loadGit()`, `type Change`) and fold. When git's context does not name anything, the header falls back to a line range.
-- **Unchanged runs collapse** to "⋯ 38 unchanged lines" and open in place, read from the file rather than from another call to git. Gaps of four lines or fewer are filled in at load: they cost as much room as the lines they hide.
-- **No hover.** It needs any-motion tracking, which sends a report per cell crossed, and it would only light up rows that already have a cursor.
+- **One list per view.** A view builds lines. The screen draws them, the cursor
+  indexes them, a click maps onto them. There is one array, so the three cannot
+  disagree. `src/ui/cells.ts` is that model; nothing else draws.
+- **A turn is a card, and your prompt is its title.** Not a summary: the words
+  you typed are the reason the files moved. The newest turn starts open, the
+  rest are two quiet lines each.
+- **Things open where they are.** A file's diff opens under its row, a file's
+  contents under its name in the tree, an agent's steps under the agent. Esc or
+  ← walks back up to the row that owns what you are in.
+- **The rows that own what you are reading stay pinned** at the top while a
+  long diff scrolls under them, so "which file, which turn" is never lost.
+- **A card is a fill, not a box.** Its edges are half blocks (`▗▄▖` and
+  `▝▀▘`) that only set a foreground colour. No columns are lost to borders,
+  and because the pane never paints its own background, cards float on any
+  terminal theme.
+- **A running turn says less.** The conversation is on screen right beside the
+  pane, so while Claude works the card is the prompt, one status line, the
+  files so far and the step in progress. What Claude said, and how long it
+  thought, appear when the turn is over and the pane becomes history.
+- **Changed lines wrap, unchanged lines truncate.** A long line used to hide
+  the edit past the right edge. The edit is the point, so it is never cut.
+  This replaced sideways scrolling.
+- **Unified, never split. No raw `@@`. Tints, not red and green text. Word
+  marks only when two lines are at least 30% alike.** Unchanged from the first
+  build, for the same reasons: columns are scarce and syntax colour matters.
+- **Every tool call is one folded row.** In auto mode a turn is sixty shell
+  commands. The list is there when you want it and one line when you do not.
+- **Three groupings, one key (`v`):** by turn, by file (which prompts touched
+  this file?), and everything since the last commit.
+- **A menu bar, not a legend.** Everything a key can do is also in a menu, and
+  the right end of the bar holds what you glance at: usage and whether Claude
+  is working. Tabs stay, because switching view should be one click.
+- **No restore, no hover.** Sidecar is a viewer; and hover needs a mouse report
+  per cell crossed.
+
+Two other looks were drawn and not chosen, and are kept on the canvas: a
+painted "workbench" with a timeline spine, and parallel agents as git-graph
+lanes. The lanes cost ten columns and the owner found per-file "who is working
+here" marks too much. What survived from them is the menu bar and the Agents
+view.
+
+## Agents
+
+Does Claude tell sidecar about its subagents? Not directly, and it does not
+need to. Claude Code writes every subagent to disk beside the chat that
+started it, live, and that is all sidecar reads:
+
+```
+~/.claude/projects/<project>/<chat>/subagents/agent-<id>.jsonl      what it did
+~/.claude/projects/<project>/<chat>/subagents/agent-<id>.meta.json  who started it
+```
+
+The meta file holds the kind of agent, the few words Claude gave the job, how
+deep it is (an agent started by an agent is depth 2) and the id of the tool
+call that started it. That id appears in the main chat, inside a turn, which is
+how an agent is tied to the prompt it was working for. Checked on this machine
+against three real runs.
+
+| Shown | Where it comes from | How good |
+|---|---|---|
+| Kind, task, model, steps, tokens, report | the agent's own transcript | Exact |
+| Running or done | the last reply ended the agent's turn, or it did not | Exact; "stopped" after five quiet minutes is a guess and is labelled as one |
+| Files an agent wrote | its own Edit and Write calls | A hint: a shell command can write without naming a file |
+| Lines changed per agent | nothing | Not available. Snapshots are per turn, so an agent's row shows the turn's counts for that file |
+
+An overlap (two agents wrote the same file) is flagged on the file's row.
+Waiting on a permission prompt is not recorded anywhere, so the pane cannot
+show it. Workflows and background agents are the same files on disk.
+
+## Usage
+
+Two sources, and the view keeps them apart.
+
+- **Tokens** are counted from the transcripts: every reply carries its own
+  count and the model that wrote it. Pace, share by model and the context
+  window need no setup, and cover every project, subagents included.
+- **Limits** (how much of the 5 hour and weekly allowance is used) are only
+  ever handed to a status line script. `hooks/statusline.mjs` saves what it is
+  given to `~/.sidecar/usage.json`. It is not installed for the owner: adding
+  it to `~/.claude/settings.json` is their call, and it sits beside their
+  hooks without touching them. Without it the view says "not connected".
+- **There is no per-model limit** in what Claude Code exposes. "By model" is a
+  share of the week's tokens, and says so.
 
 ## Where the history comes from
 
@@ -181,6 +259,13 @@ own `.git` is never touched.
 its prompt and its steps, and its files are marked `not recorded` with no
 counts. Nothing pretends to a precision it does not have.
 
+**Know when you were looking.** Snapshots are only written when something
+changed, so an hour with sidecar open and nothing happening used to look the
+same as an hour with it closed, and an old turn could borrow the nearest
+snapshots from hours away. Sidecar now records the stretches it was running
+(`watched.json`), and a turn is only measured when one stretch covers it from
+start to end.
+
 ## Mouse
 
 Ink has no mouse support, so the pane turns on the terminal's own reporting
@@ -189,21 +274,20 @@ and parses the escape sequences itself. Ink's input parser already hands each
 report to `useInput` on its own with the escape stripped, so nothing has to be
 hijacked: `src/ui/mouse.ts` is one regular expression.
 
+Every line carries what a click on it does, so a row is a button.
+
 | Where | Click | Wheel | Drag |
 |---|---|---|---|
+| A menu title | open or close that menu | | |
+| The usage meters | go to Usage | | |
 | A tab | switch view | | |
-| A list row | select it; a folder opens | scroll the list | |
-| The divider | focus the half below; double-click resets the split | scroll the body | resize the split |
+| A turn, a file, an agent, "more", Steps | open or close it in place | scroll | |
 | A hunk header | fold or unfold | scroll | |
 | A gap | open it | scroll | |
-| A diff line | move the cursor; double-click opens it in Files | scroll | |
-| A scrollbar | jump there | scroll | drag the thumb |
-
-Turning mouse reporting on stops the terminal doing its own text selection.
-Shift and drag still selects in Windows Terminal, iTerm2, kitty, WezTerm and
-Alacritty; `m` turns reporting off entirely for terminals that do not.
-`--mouse-debug` prints each report and the region it hit in the footer, which
-is how you check a new terminal counts rows the way the pane does.
+| A diff line | move the cursor; double-click opens the file there | scroll | |
+| A file in the tree | peek it in place; click again to close | scroll | |
+| `‹ Files` in the reader | back to the tree | | |
+| The last column | jump there | scroll | drag the thumb |
 
 ## 4. The build, day by day
 
