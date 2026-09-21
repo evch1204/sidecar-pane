@@ -268,8 +268,9 @@ Decisions, and why:
 
 ## Usage
 
-Four sections in one order — **Session, Last 7 days, This chat, Pace** — each
-answering one question, and each on its own panel.
+Three sections in one order — **Session, This week, This chat** — each answering
+one question, and each on its own panel. Pace lives inside Session, because how
+hard the window is being worked is the same question as what is left of it.
 
 - **A panel, not a card.** This is the one view in the pane that paints a
   background: a title strip on `surface2`, the body on `surface`, covering
@@ -280,19 +281,38 @@ answering one question, and each on its own panel.
   instead of against air, and it gives a meter ground, so the part that is still
   free can go quiet (`theme.track`) instead of reading as a second solid bar.
   One row with no background separates panels.
-- **One meter grammar, one meter a panel.** Heading with the value in bold on
-  the right, the bar, one dim note. Session's heading is its big number instead.
-  One style (`▄`), one length (the inner width), one fill colour (`meterTone`,
-  Context included), so two identical full-width bars never stack the way the
-  weekly limit and "By model" used to.
+- **No padding rows.** A panel is its title strip and then its rows, with
+  nothing between them and nothing at the bottom. The page was empty and grey
+  when every section held blank surface; the fix was to take the air out and put
+  the colour back, not to add sections.
+- **One meter grammar.** Name on the left, the figure in bold on the right with
+  the quiet word that says what it is a share of (`23% used`, `59% of tokens`),
+  then the meter, then at most one dim note. A limit's meter is the thin line
+  (`━━━───`, half a cell of precision with `╸`); Session's own is the thick `▄`
+  under its big number. `meterTone` colours both: `accent` while there is room,
+  `warn` from three quarters, `del` from nine tenths. The big digits take the
+  same tone, so the number and its bar always say the same thing.
 - **The big number is proportional.** Three screen rows of half blocks; a glyph
   is as wide as it needs to be, so `.` costs one pixel and `%` gets five.
   Rather than being cut off it gives way in steps: full size, then the `~` as
   ordinary text so the digits keep their size, then half size. `used` follows it
-  when there is room, so `58%` says which way it is counting.
-- **Pace is its own panel, and the last one,** so it is the first thing a short
-  pane drops. One column a half hour, three rows tall, a `▁` floor under an idle
-  one, and `accent` on the half hour we are in and nowhere else.
+  on the third row, and `resets in 1h 52m` / `at 00:40` sit right-aligned
+  against the first two; only when no size leaves room for those do they drop
+  under the meter as notes.
+- **Pace, inside Session.** Ten past half hours, three rows tall, a `▁` floor
+  under an idle one, `accent` on the half hour we are in. A bar is two columns
+  with one of air beside it at every width, so the chart keeps its shape in a 40
+  column pane. With a feed, two more bars in `warn` carry the current pace (the
+  mean of the last two half hours that had tokens) forward, and the legend
+  `■ used  ■ projected` names them. Those two are the first thing to go when the
+  pane is narrow, and the legend goes with them.
+- **The outlook sentence is arithmetic, not a feeling.** `paceOutlook` in
+  `src/core/usage.ts`: the window is five hours and the reading says when it
+  resets, so the start is known; `rate = used / elapsed`, and what is left of
+  the window goes at that rate. Over 100% it says "you reach the limit around
+  HH:MM, N minutes before it resets" in `warn`; under it, "you end the window at
+  about N%" in `dim`. Under ten minutes elapsed, nothing spent, or a stale
+  reading and there is no sentence at all.
 
 Two sources, and the view keeps them apart.
 
@@ -303,8 +323,11 @@ Two sources, and the view keeps them apart.
   once and only the last line carries the final `output_tokens`. Keeping the
   first undercounted every reply, so replies are held by message id and each
   count grows to the largest one seen.
-- **The window is a rolling seven days,** so it is labelled "Last 7 days".
-  "This week" would be a claim about a reset only a feed knows.
+- **"This week" is a claim only a feed can make.** With one, the feed's 7 day
+  window is a real week with a real reset, so the panel is titled "This week".
+  Without one it is a rolling seven days counted from the transcripts, titled
+  "Last 7 days" with the count on the strip, and it loses the one row it cannot
+  know: the `All models` limit.
 - **Limits** (how much of the 5 hour and weekly allowance is used) are only
   ever handed to a status line script. `hooks/statusline.mjs` saves what it is
   given to `~/.sidecar/usage.json`. There is exactly one `statusLine` slot in
@@ -315,17 +338,25 @@ Two sources, and the view keeps them apart.
 - **Without a feed, nothing is a percentage.** The session number becomes the
   window's own new tokens, estimated from the transcripts and written `~209k`,
   and the same estimate is what the menu bar shows.
-- **There is no per-model limit** in what Claude Code exposes. "By model" is a
-  share of the seven days' tokens, and says so. So it is **one row a model** —
-  name in a 12 column column, a dim bar with no track, the share in the same
-  right-hand column as every other value — not a stacked bar with a legend: a
-  track would claim a limit, and five hues would each mean something else in
-  this theme. A share that rounds to nothing reads `<1%`, never `0%`; a model
-  that spent nothing is dropped.
-- **No per-agent breakdown.** One line on the same grid — `Subagents  879k of
-  5.1M · main thread 4.2M   17%` — is the whole story, and a list of agents
-  belongs to the Agents view. The `· main thread` half goes when it will not
-  fit; the share never does.
+- **There is no per-model limit** in what Claude Code exposes. So the model row
+  under the week's limit is the chat's own model (or whichever spent most)
+  against the week's **tokens**, and the figure reads `59% of tokens`, never
+  `% used`. It gets no reset note, because it has no reset.
+- **"By model" is the stacked bar and its legend.** One bar the width of the
+  panel, a slice a model, largest remainder so the slices add up exactly and a
+  model with tokens always shows; then `■ Name NN%` chips, three across a wide
+  panel and two across a narrow one. A share that rounds to nothing reads
+  `<1%`, never `0%`; a model that spent nothing is dropped.
+- **A model's colour is its own.** `modelColours` in `theme.ts` — `link`,
+  `string`, `keyword` and two hues that mean nothing else, a teal and a pink —
+  keeps clear of `accent`, `warn`, `add` and `del`, which all have jobs. Hues
+  are handed out in **name order, not rank**, so a model keeps the same colour
+  in its own line, in the bar and in the legend, and keeps it when the shares
+  move.
+- **No per-agent breakdown.** One line — `Subagents 70%  ·  4.5M of 6.4M  ·
+  main thread 1.9M` — is the whole story, and a list of agents belongs to the
+  Agents view. The `· main thread` half goes when it will not fit, then the
+  counts; the share never does.
 
 ## Where the history comes from
 

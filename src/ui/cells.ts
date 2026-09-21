@@ -201,9 +201,10 @@ export function dimmed(line: Line): Line {
   };
 }
 
-// A meter is only worth a colour when it is worth worrying about: plain text
-// until three quarters are gone, then warn, then the colour of a deletion.
-export const meterTone = (part: number): string => (part >= 0.9 ? theme.del : part >= 0.75 ? theme.warn : theme.text);
+// How much is left is the thing the owner glances at, so a meter is coloured
+// all the way down: accent while there is room, then warn, then the colour of
+// a deletion once nine tenths are gone.
+export const meterTone = (part: number): string => (part >= 0.9 ? theme.del : part >= 0.75 ? theme.warn : theme.accent);
 
 // A thick meter: a half-block bar, the used part in `color` and the rest in
 // `track`. Faint by default, so the menu bar's meters read as one bar on the
@@ -212,6 +213,15 @@ export const meterTone = (part: number): string => (part >= 0.9 ? theme.del : pa
 export function lowerMeter(n: number, part: number, color: string, track: string = theme.faint): Seg[] {
   const used = Math.round(Math.max(0, Math.min(1, part)) * n);
   return [seg(glyph.lower.repeat(used), color), seg(glyph.lower.repeat(Math.max(0, n - used)), track)];
+}
+
+// A thin meter: one line, `━` for what is gone and the quiet rule for what is
+// left. Half a cell is worth reading at this weight, so a share that lands
+// between two columns ends in `╸` rather than being rounded away.
+export function thinMeter(n: number, part: number, color: string, track: string = theme.track): Seg[] {
+  const halves = Math.round(Math.max(0, Math.min(1, part)) * n * 2);
+  const used = glyph.heavy.repeat(Math.floor(halves / 2)) + (halves % 2 ? glyph.heavyHalf : '');
+  return [seg(used, color), seg(glyph.rule.repeat(Math.max(0, n - width(used))), track)];
 }
 
 // A panel: the run of rows one section of the Usage view sits on. No edges and
@@ -237,10 +247,10 @@ export function panelRow(
 export function panelTitle(cols: number, name: string, note: string, right: Seg[] = []): Line {
   const rightWide = widthOf(right);
   const room = panelInner(cols) - width(name) - (rightWide ? rightWide + 1 : 0);
-  const keep = note && width(note) + 2 <= room;
+  const keep = note && width(note) + 3 <= room;
   return panelRow(
     cols,
-    [seg(name, theme.ink, {bold: true}), ...(keep ? [seg(`  ${note}`, theme.dim)] : [])],
+    [seg(name, theme.ink, {bold: true}), ...(keep ? [seg(`   ${note}`, theme.dim)] : [])],
     right,
     theme.surface2,
   );
