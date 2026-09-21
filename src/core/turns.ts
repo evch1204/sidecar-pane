@@ -1,7 +1,7 @@
 import path from 'node:path';
 import {buildDiff, type FileDiff, type FileStatus} from './diff';
 import type {Session, Turn} from './sessions';
-import {after, before, patchFile, statBetween, type Store} from './snapshot';
+import {after, before, covered, patchFile, statBetween, type Store} from './snapshot';
 
 // Joins the two halves of the story: the transcript knows which chat and which
 // prompt, the snapshots know which lines. A turn is the unit that has both.
@@ -74,8 +74,17 @@ export async function loadTurns(
         ? (after(store, turn.endedAt) ?? (running ? store.shots[store.shots.length - 1] ?? null : null))
         : null;
 
-      if (!store || !start || !end || start.tree === end.tree) {
+      // Snapshots only belong to a turn if sidecar was looking the whole time.
+      // Otherwise the nearest ones may be hours away and full of other turns.
+      const watching = store ? covered(store, turn.at, running ? now : turn.endedAt) : false;
+      if (!store || !start || !end || !watching) {
         base.files = claimed(root, turn);
+        out.push(base);
+        continue;
+      }
+
+      if (start.tree === end.tree) {
+        base.measured = true;
         out.push(base);
         continue;
       }

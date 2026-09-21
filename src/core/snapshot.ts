@@ -18,7 +18,15 @@ export type Store = {
   dir: string;
   gitDir: string;
   shots: Shot[];
+  // Stretches of time sidecar was running and looking. Snapshots are only
+  // written when something changed, so without this a quiet hour with sidecar
+  // open looks exactly like an hour with it closed.
+  watched: [number, number][];
 };
+
+// Two looks closer together than this are one stretch of watching.
+const WATCH_GAP = 30_000;
+const KEEP_WATCHED = 300;
 
 const KEEP = 400;
 
@@ -49,7 +57,32 @@ export function openStore(root: string): Store | null {
     shots = [];
   }
 
-  return {dir, gitDir, shots};
+  let watched: [number, number][] = [];
+  try {
+    watched = JSON.parse(fs.readFileSync(path.join(dir, 'watched.json'), 'utf8')) as [number, number][];
+  } catch {
+    watched = [];
+  }
+
+  return {dir, gitDir, shots, watched};
+}
+
+export function markWatched(store: Store, at: number): void {
+  const last = store.watched[store.watched.length - 1];
+  if (last && at - last[1] < WATCH_GAP) last[1] = Math.max(last[1], at);
+  else store.watched.push([at, at]);
+  if (store.watched.length > KEEP_WATCHED) store.watched.splice(0, store.watched.length - KEEP_WATCHED);
+  try {
+    fs.writeFileSync(path.join(store.dir, 'watched.json'), JSON.stringify(store.watched));
+  } catch {
+    // Not being able to save it only costs precision on the next run.
+  }
+}
+
+// True when sidecar was looking for the whole of [from, to], give or take a
+// few seconds. Only then do the snapshots either side really belong to it.
+export function covered(store: Store, from: number, to: number, slack = 6000): boolean {
+  return store.watched.some(([start, end]) => start <= from + slack && end >= to - slack);
 }
 
 function git(store: Store, root: string, args: string[]): Promise<string | null> {
@@ -69,6 +102,7 @@ export async function take(store: Store, root: string, at: number): Promise<stri
   if ((await git(store, root, ['add', '-A'])) === null) return null;
   const tree = (await git(store, root, ['write-tree']))?.trim();
   if (!tree) return null;
+  markWatched(store, at);
 
   const last = store.shots[store.shots.length - 1];
   if (last?.tree === tree) return null;
