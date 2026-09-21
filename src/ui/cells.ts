@@ -24,6 +24,8 @@ export type Act =
   | {type: 'gap'; file: string; group: number; hunk: number}
   | {type: 'node'; path: string; dir: boolean}
   | {type: 'read'; path: string; line?: number}
+  // The last row of a peek: show more of the file, or jump to the next change.
+  | {type: 'more'; path: string}
   | {type: 'goTurn'; key: string}
   // The pills under the tabs: how the Changes view is grouped, and the filters
   // that can be cleared from where they are shown.

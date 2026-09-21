@@ -162,7 +162,9 @@ Decisions, and why:
   rest are two quiet lines each.
 - **Things open where they are.** A file's diff opens under its row, a file's
   contents under its name in the tree, an agent's steps under the agent. Esc or
-  ← walks back up to the row that owns what you are in.
+  ← walks back up to the row that owns what you are in. So a peek's last row
+  grows the peek in place under a label that says what it will show, and `o`
+  stays the one way to swap the page for the whole file.
 - **The rows that own what you are reading stay pinned** at the top while a
   long diff scrolls under them, so "which file, which turn" is never lost.
 - **A left line, not a card.** The first build drew a card: a fill with
@@ -353,6 +355,7 @@ Every line carries what a click on it does, so a row is a button.
 | A gap | open it | scroll | |
 | A diff line | move the cursor; double-click opens the file there | scroll | |
 | A file in the tree | peek it in place; click again to close | scroll | |
+| The last row of a peek | show forty more lines of it, or, when a change is still below, jump there as `]` does | scroll | |
 | `‹ Files` in the reader | back to the tree | | |
 | The last column | jump there | scroll | drag the thumb |
 
