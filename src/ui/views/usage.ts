@@ -7,6 +7,7 @@ import {
   type Line, type Seg,
 } from '../cells';
 import {glyph, theme} from '../theme';
+import {wrap} from '../util';
 
 // Three sections, each answering one question: what is left of this session,
 // where the last seven days went, and what this chat is carrying.
@@ -58,6 +59,9 @@ function when(at: number, now: number): string {
 
 const pct = (part: number): string => `${Math.round(part * 100)}%`;
 
+// A share that rounds to nothing is not nothing: it had some of the tokens.
+const sharePct = (part: number): string => (part > 0 && part < 0.005 ? '<1%' : pct(part));
+
 // Tokens per half hour over the last five hours: two columns a bucket, the
 // half hour we are in now in accent, the ones before it dim.
 function paceRows(cols: number, spends: Spend[], reading: boolean, now: number): Line[] {
@@ -78,7 +82,7 @@ function paceRows(cols: number, spends: Spend[], reading: boolean, now: number):
       const here = Math.max(0, Math.min(8, eighths - level * 8));
       // Even an idle half hour keeps a floor, so the time axis stays readable.
       const char = level === 0 && here === 0 ? glyph.columns[1]! : glyph.columns[here]!;
-      const colour = i === pace.buckets.length - 1 ? theme.accent : value ? theme.dim : theme.rule;
+      const colour = i === pace.buckets.length - 1 ? theme.accent : value ? theme.dim : theme.faint;
       segs.push(seg(char.repeat(2), colour), sp(1));
     });
     out.push(row(cols, segs));
@@ -111,15 +115,15 @@ function sessionRows(cols: number, spends: Spend[], reading: boolean, feed: Feed
   // No feed. Claude Code hands the allowance to a status line script and
   // nowhere else, so the only honest number here is the one we counted.
   const win: SessionWindow | null = reading ? null : windowOf(spends, now);
-  const hint = seg(
-    feed ? 'The limits feed has gone quiet.' : 'Set hooks/statusline.mjs as your status line for limits.',
-    theme.dim,
-  );
+  // There is one status line slot and it may already be taken, so the honest
+  // instruction is to chain: the script passes the old one's output through.
+  const hint = feed ? 'The limits feed has gone quiet.' : 'Limits: chain hooks/statusline.mjs into your status line.';
+  const hintRows = wrap(hint, bodyWidth(cols)).map(text => row(cols, [seg(text, theme.dim)]));
   if (!win) {
     return [
       section(cols, 'Session', reading ? 'reading…' : '5 hour window', []),
       row(cols, [seg(reading ? 'Reading your transcripts…' : 'No replies in the last five hours.', theme.dim)]),
-      row(cols, [hint]),
+      ...hintRows,
     ];
   }
 
@@ -130,7 +134,7 @@ function sessionRows(cols: number, spends: Spend[], reading: boolean, feed: Feed
       seg(span(win.resetsAt - now), theme.ink, {bold: true}),
     ]),
     ...bigDigits(`~${tokens(win.tokens)}`).map(segs => row(cols, segs)),
-    row(cols, [hint]),
+    ...hintRows,
   ];
 }
 
@@ -166,7 +170,7 @@ function weekRows(cols: number, spends: Spend[], reading: boolean, feed: Feed | 
     const cell = (n: number): Seg[] => {
       const share = shares[n];
       if (!share) return [];
-      const made = [seg(glyph.square, SHARE_COLOURS[n]), seg(` ${modelName(share.model)} `, theme.text), seg(pct(share.part), theme.dim)];
+      const made = [seg(glyph.square, SHARE_COLOURS[n]), seg(` ${modelName(share.model)} `, theme.text), seg(sharePct(share.part), theme.dim)];
       return [...made, sp(half - made.reduce((w, s) => w + s.text.length, 0))];
     };
 

@@ -12,17 +12,17 @@ import {openStore, take, type Store} from '../core/snapshot';
 import {visibleNodes} from '../core/tree';
 import {byFile, fileInTurn, loadTurns, type TurnChange} from '../core/turns';
 import {newUsageState, readLimits, readSpends, type Limits, type Spend} from '../core/usage';
-import {dimmed, overlay, seg, sp, type Act, type Group, type Line, type Seg, type View} from './cells';
+import {dimmed, overlay, seg, sp, widthOf, type Act, type Group, type Line, type Seg, type View} from './cells';
 import type {DiffGroup} from './diffrows';
 import {follow, scrollFromThumb, thumb} from './layout';
-import {footer, menuBar, menuBox, menus, tabRow, type Command} from './menu';
+import {footer, isAction, MENU_WIDTH, menuBar, menuBox, menus, pillRow, tabRow, type Command, type Hint, type Pill} from './menu';
 import {DOUBLE_CLICK_MS, MOUSE_OFF, MOUSE_ON, parseMouse, type MouseEvent} from './mouse';
 import {Screen} from './Screen';
 import {glyph, theme} from './theme';
-import {agentsLines, runningAgents} from './views/agents';
-import {changesLines, changesSummary, spinner, turnKey, type Open} from './views/changes';
-import {changedPlaces, filesLines, lineId, nodeId, PEEK_ROWS, readerHead, readerLines, type Marks} from './views/files';
-import {usageExtras, usageLines} from './views/usage';
+import {agentsBadge, agentsLines, agentsTabVisible, runningAgents} from './views/agents';
+import {changesLines, spinner, turnKey, type Open} from './views/changes';
+import {changedPlaces, filesLines, firstReadId, lineId, nodeId, PEEK_ROWS, readerHead, readerLines, type Marks} from './views/files';
+import {usageExtras, usageLines, type ExtrasRoom} from './views/usage';
 
 type Props = {
   root: string;
@@ -37,13 +37,18 @@ type Slot = View | 'reader';
 
 const NO_MARKS: ReadonlySet<number> = new Set();
 const REFRESH_MS = 3000;
+// Usage is read in every view, so the menu bar's meters are never blank; only
+// the view itself needs it fresh.
+const SLOW_MS = 30_000;
 const SPIN_MS = 250;
 const WHEEL_ROWS = 3;
 const GROUPS: Group[] = ['turn', 'file', 'flat'];
-const GROUP_NOTE: Record<Group, string> = {turn: 'by turn', file: 'by file', flat: 'all changes'};
+const GROUP_PILL: Record<Group, string> = {turn: 'By turn', file: 'By file', flat: 'All'};
 
 const NONE: ReadonlySet<string> = new Set();
-const CLOSED: Open = {turns: NONE, files: NONE, more: NONE, steps: NONE, says: NONE, agents: NONE, hists: NONE};
+const CLOSED: Open = {turns: NONE, files: NONE, more: NONE, steps: NONE, says: NONE, agents: NONE, folded: NONE, hists: NONE};
+
+type Notice = {text: string; warn?: boolean};
 
 // Acts that add or remove lines. The row they were aimed at has to stay where
 // it was, or the next click lands on something else.
@@ -73,7 +78,7 @@ function useTerminalSize() {
 }
 
 // Run `work` now and then every few seconds, never two at once.
-function usePolling(work: () => Promise<void>, deps: unknown[], active: boolean, live: boolean) {
+function usePolling(work: () => Promise<void>, deps: unknown[], active: boolean, live: boolean, every = REFRESH_MS) {
   useEffect(() => {
     if (!active) return;
     let alive = true;
@@ -89,12 +94,12 @@ function usePolling(work: () => Promise<void>, deps: unknown[], active: boolean,
     };
 
     void tick();
-    const timer = live ? setInterval(tick, REFRESH_MS) : undefined;
+    const timer = live ? setInterval(tick, every) : undefined;
     return () => {
       alive = false;
       clearInterval(timer);
     };
-  }, [...deps, active, live]);
+  }, [...deps, active, live, every]);
 }
 
 // Git state. `version` ticks on every read so the tree also notices files
@@ -144,12 +149,14 @@ function useHistory(root: string, live: boolean) {
   return {...state, store: store.current};
 }
 
-function useUsage(active: boolean, live: boolean) {
+// The tokens and the limits are read in every view, because the right end of
+// the menu bar shows them everywhere. Only the Usage view needs them fresh.
+function useUsage(showing: boolean, live: boolean) {
   const reader = useRef(newUsageState());
   const [spends, setSpends] = useState<Spend[] | null>(null);
   const [limits, setLimits] = useState<Limits | null>(null);
   usePolling(async () => setLimits(readLimits()), [], true, live);
-  usePolling(async () => setSpends([...readSpends(reader.current, Date.now())]), [], active, live);
+  usePolling(async () => setSpends([...readSpends(reader.current, Date.now())]), [], true, live, showing ? REFRESH_MS : SLOW_MS);
   return {spends, limits};
 }
 
@@ -180,7 +187,7 @@ export function App({root, interactive, mouseDebug = false}: Props) {
   const {cols, rows} = useTerminalSize();
 
   const [view, setView] = useState<View>('changes');
-  const [notice, setNotice] = useState('');
+  const [notice, setNotice] = useState<Notice | null>(null);
   const [mouse, setMouse] = useState(true);
   const [menu, setMenu] = useState<{open: number; item: number} | null>(null);
   const [frame, setFrame] = useState(0);
@@ -210,6 +217,8 @@ export function App({root, interactive, mouseDebug = false}: Props) {
   const {diff, version: diffVersion} = useDiff(root, view === 'changes', interactive);
   const history = useHistory(root, interactive);
   const {spends, limits} = useUsage(view === 'usage', interactive);
+  const say = (text: string) => setNotice({text});
+  const refuse = (text: string) => setNotice({text, warn: true});
   const now = history.now;
 
   const mine = useMemo(() => (chat ? history.changes.filter(c => c.chatId === chat) : history.changes), [history.changes, chat]);
@@ -313,7 +322,9 @@ export function App({root, interactive, mouseDebug = false}: Props) {
     if (slot === 'agents') return {head: [], lines: agentsLines({cols, now, frame, root, changes: history.changes, agents: history.agents, open, sel: at})};
     if (slot === 'usage') {
       const last = [...history.changes].sort((a, b) => a.turn.endedAt - b.turn.endedAt).pop();
-      return {head: [], lines: usageLines({cols, now, spends, limits, context: last?.turn.context ? {tokens: last.turn.context, model: last.turn.model} : null})};
+      // The cache hit belongs to this chat, so the chat's own id goes with it.
+      const context = last?.turn.context ? {tokens: last.turn.context, model: last.turn.model, chat: last.turn.sessionId} : null;
+      return {head: [], lines: usageLines({cols, now, spends, limits, context})};
     }
 
     if (slot === 'reader' && readerPath && readFile.view) {
@@ -366,25 +377,47 @@ export function App({root, interactive, mouseDebug = false}: Props) {
 
   const roomy = rows >= 28;
   const project = path.basename(root);
-  const list = menus({view, group, hideSpace, changedOnly, mouse, agents: agentsRunning});
+  const chatName = chat ? (history.changes.find(c => c.chatId === chat)?.chat ?? 'one chat') : null;
+  const inDiff = Boolean(current?.pins?.some(id => id.startsWith('f:')));
+  const markdown = slot === 'reader' && Boolean(readerPath && isMarkdown(readerPath));
+  const list = menus({view, group, hideSpace, changedOnly, chat: chatName, inDiff, markdown, raw, mouse});
   const status: Seg[] = working
     ? [seg(spinner(frame), theme.accent), seg(' working', theme.ink)]
     : agentsRunning
       ? [seg(spinner(frame), theme.accent), seg(` ${agentsRunning} agent${agentsRunning === 1 ? '' : 's'}`, theme.ink)]
       : [seg(glyph.dot, theme.faint), seg(' idle', theme.dim)];
-  const extras = usageExtras(limits, now);
-  const bar = menuBar(cols, list, menu?.open ?? null, [...extras, ...(extras.length ? [sp(3)] : []), ...status]);
+  // What is left of the bar once the menus and the status have had their
+  // columns. The meters shrink in steps and then go, so the menus always fit.
+  const barLeft = 2 + list.reduce((n, m) => n + m.title.length + 2, 0);
+  const metersRoom = cols - barLeft - 2 - widthOf(status) - 3;
+  const room: ExtrasRoom = metersRoom >= 30 ? 'full' : metersRoom >= 24 ? 'noWeek' : 'plain';
+  const extras = usageExtras(limits, now, {spends, room});
+  const bar = menuBar(cols, list, menu?.open ?? null, {meters: widthOf(extras) <= metersRoom ? extras : [], status});
 
-  const changedCount = git ? [...git.changes.values()].filter(c => c.status !== 'D').length : 0;
-  const tabNote: Seg[] =
+  const uncommitted = git ? [...git.changes.values()].filter(c => c.status !== 'D').length : 0;
+  const showAgents = agentsTabVisible(history.changes, history.agents, now) || view === 'agents';
+  const tabs = tabRow(cols, view, {agents: agentsBadge(history.agents, now, frame)}, {agents: !showAgents});
+
+  // The pills carry the state the tab row used to describe in dim words: they
+  // say what is showing and change it in one click.
+  const pills: Pill[] =
     view === 'changes'
-      ? [seg(GROUP_NOTE[group], theme.dim), ...(chat ? [seg('  one chat', theme.warn)] : []), ...(group === 'turn' && changesSummary(mine).length ? [seg('  ·  ', theme.faint), ...changesSummary(mine)] : [])]
+      ? [
+          ...GROUPS.map(g => ({label: GROUP_PILL[g], on: group === g, act: {type: 'group', group: g} as Act})),
+          ...(chatName ? [{label: `Chat: ${chatName}`, on: true, tone: theme.warn, clear: true, act: {type: 'filter', what: 'chat', on: false} as Act}] : []),
+        ]
       : view === 'files'
-        ? changedOnly ? [seg('changed only', theme.warn)] : []
+        ? [
+            {label: 'All', on: !changedOnly, act: {type: 'filter', what: 'changedOnly', on: false}},
+            {label: uncommitted ? `Changed ${uncommitted}` : 'Changed', on: changedOnly, act: {type: 'filter', what: 'changedOnly', on: true}},
+          ]
         : [];
-  const tabs = tabRow(cols, view, {changes: changedCount, agents: agentsRunning}, tabNote);
+  const note: Seg[] = view === 'changes' && uncommitted ? [seg(`${uncommitted} uncommitted`, theme.dim)] : [];
+  const pillsLine = pills.length ? pillRow(cols, pills, note) : null;
   const blank: Line = {segs: [sp(cols)]};
-  const top: Line[] = roomy ? [bar.line, blank, tabs, blank, ...head, ...(head.length ? [blank] : [])] : [bar.line, tabs, ...head];
+  const top: Line[] = roomy
+    ? [bar.line, blank, tabs, ...(pillsLine ? [pillsLine] : []), blank, ...head, ...(head.length ? [blank] : [])]
+    : [bar.line, tabs, ...(pillsLine ? [pillsLine] : []), ...head];
   const bottomRows = roomy ? 2 : 1;
   const height = Math.max(3, rows - top.length - bottomRows);
   const most = Math.max(0, lines.length - height);
@@ -440,9 +473,18 @@ export function App({root, interactive, mouseDebug = false}: Props) {
     setReaderPath(file);
     // Asked for a line: show the file as written, where line numbers mean something.
     setRaw(line > 0);
+    // Without a line, the cursor lands on the first line of the file once it
+    // has been read; the effect below does it, because nothing is loaded yet.
     setSel(s => ({...s, reader: line > 0 ? lineId(line) : null}));
     setScroll(s => ({...s, reader: Math.max(0, line - 4)}));
   };
+
+  // The reader opens on the file, not on the "Changed by" rows above it.
+  useEffect(() => {
+    if (!readerPath || sel.reader || !readFile.view) return;
+    const id = firstReadId({view: readFile.view, formatted});
+    if (id) setSel(s => ({...s, reader: id}));
+  }, [readerPath, readFile.view, formatted, sel.reader]);
 
   const reveal = (file: string) => {
     const next = new Set(expanded);
@@ -454,31 +496,36 @@ export function App({root, interactive, mouseDebug = false}: Props) {
     setMenu(null);
     switch (command.do) {
       case 'view':
-        setReaderPath(null);
+        // The reader is kept when you look at something else, so coming back
+        // to Files returns to the file you were reading. Choosing Files while
+        // already there is the way out of it.
+        if (command.view === 'files' && view === 'files') setReaderPath(null);
         return setView(command.view);
       case 'group':
+        // No notice: the pill under the tabs already says which grouping.
         setView('changes');
-        setGroup(command.group);
-        return setNotice(command.group === 'flat' ? 'Showing every change since the last commit.' : `Grouped ${GROUP_NOTE[command.group]}.`);
+        return setGroup(command.group);
       case 'chat': {
         const ids = [...new Set(history.changes.map(c => c.chatId))];
-        if (ids.length < 2) return setNotice('Only one chat has touched this project.');
-        const next = ids[(chat ? ids.indexOf(chat) : -1) + 1] ?? null;
-        setChat(next);
-        return setNotice(next ? `Showing "${history.changes.find(c => c.chatId === next)?.chat}".` : 'Showing every chat.');
+        if (command.to !== undefined) return setChat(command.to);
+        if (ids.length < 2) return refuse('Only one chat has touched this project.');
+        return setChat(ids[(chat ? ids.indexOf(chat) : -1) + 1] ?? null);
       }
 
       case 'whitespace':
         setHideSpace(!hideSpace);
-        return setNotice(hideSpace ? 'Showing whitespace changes.' : 'Hiding whitespace-only changes.');
+        return say(hideSpace ? 'Showing whitespace changes.' : 'Hiding whitespace-only changes.');
       case 'changedOnly':
-        if (!git) return setNotice('Not a git repo, so there are no changes to filter by.');
+        if (!git) return refuse('Not a git repo, so there are no changes to filter by.');
         setView('files');
-        return setChangedOnly(!changedOnly);
+        return setChangedOnly(command.on ?? !changedOnly);
+      case 'raw':
+        if (!readerPath || !isMarkdown(readerPath)) return refuse('Only a markdown file can be read as written.');
+        return setRaw(!raw);
       case 'foldAll': {
         const owner = [current?.id, ...(current?.pins ?? [])].find(id => id?.startsWith('f:'))?.slice(2);
         const groups = owner ? diffs.get(owner) : undefined;
-        if (!owner || !groups) return setNotice('Move into an open diff first.');
+        if (!owner || !groups) return refuse('Move into an open diff first.');
         const all = groups.flatMap(g => (g.file?.hunks ?? []).map((_, i) => `${owner}#${g.key}:${i}`));
         const every = all.every(key => folded.has(key));
         const next = new Set(folded);
@@ -489,13 +536,13 @@ export function App({root, interactive, mouseDebug = false}: Props) {
       case 'mouse':
         stdout.write(mouse ? MOUSE_OFF : MOUSE_ON);
         setMouse(!mouse);
-        return setNotice(mouse ? 'Mouse off. Select and copy freely. Press M to turn it back on.' : 'Mouse on.');
+        return say(mouse ? 'Mouse off. Select and copy freely.' : 'Mouse on.');
       case 'quit':
         return exit();
     }
   };
 
-  const perform = (act: Act | undefined, how: 'key' | 'click' = 'key') => {
+  const perform = (act: Act | undefined) => {
     if (!act) return;
     switch (act.type) {
       case 'view':
@@ -504,8 +551,13 @@ export function App({root, interactive, mouseDebug = false}: Props) {
         return setMenu(menu?.open === act.menu ? null : {open: act.menu, item: firstItem(act.menu)});
       case 'item': {
         const item = list[act.menu]?.items[act.item];
-        return item && item !== 'rule' ? run(item.command) : undefined;
+        return item && isAction(item) ? run(item.command) : undefined;
       }
+
+      case 'group':
+        return run({do: 'group', group: act.group});
+      case 'filter':
+        return act.what === 'chat' ? run({do: 'chat', to: act.on ? chat : null}) : run({do: 'changedOnly', on: act.on});
 
       case 'turn':
         return setOpen(o => ({...o, turns: flipped(o.turns, act.key)}));
@@ -524,9 +576,10 @@ export function App({root, interactive, mouseDebug = false}: Props) {
       }
 
       case 'node':
-        if (act.dir) return changedOnly ? undefined : setExpanded(flipped(expanded, act.path));
-        // Enter walks forward: closed, peek, the whole file. A click toggles.
-        if (peekPath === act.path) return how === 'key' ? openReader(act.path) : setPeekPath(null);
+        if (act.dir) return setExpanded(flipped(expanded, act.path));
+        // A row is a toggle, by key or by click: the peek opens and closes
+        // under it. `o` is what reads the whole file.
+        if (peekPath === act.path) return setPeekPath(null);
         return setPeekPath(act.path);
       case 'read':
         return openReader(act.path, act.line);
@@ -552,7 +605,7 @@ export function App({root, interactive, mouseDebug = false}: Props) {
     }
   };
 
-  const firstItem = (index: number): number => Math.max(0, (list[index]?.items ?? []).findIndex(item => item !== 'rule'));
+  const firstItem = (index: number): number => Math.max(0, (list[index]?.items ?? []).findIndex(isAction));
 
   const step = (dir: 1 | -1, by = 1) => {
     let index = cursor;
@@ -581,13 +634,18 @@ export function App({root, interactive, mouseDebug = false}: Props) {
         if (lines[i]!.rail && !lines[i - 1]!.rail && lines[i]!.pick) return moveTo(lines[i]!.id);
       }
 
-      return setNotice('No more changes in this file.');
+      return refuse('No more changes in this file.');
     }
 
     if (slot === 'files' && peekPath && peekFile.view?.kind === 'text') {
       const places = changedPlaces(peekFile.marks, peekFile.view.lines.length);
       if (places.length === 0) return;
-      const to = places.find(n => n > peekFrom + PEEK_ROWS) ?? places[0]!;
+      // A peek shows fourteen lines, so forward means the first change below
+      // them and back means the last change above the one we are anchored on.
+      const to =
+        dir > 0
+          ? (places.find(n => n > peekFrom + PEEK_ROWS) ?? places[0]!)
+          : ([...places].reverse().find(n => n < peekFrom + 4) ?? places[places.length - 1]!);
       return setPeekFrom(Math.max(0, to - 4));
     }
   };
@@ -597,10 +655,10 @@ export function App({root, interactive, mouseDebug = false}: Props) {
   const dragging = useRef(false);
   const lastClick = useRef({x: -1, y: -1, at: 0});
   const menuLines = menu ? menuBox(list[menu.open]!, menu.open, menu.item) : [];
-  const menuLeft = menu ? Math.min(bar.starts[menu.open] ?? 0, Math.max(0, cols - 30)) : 0;
+  const menuLeft = menu ? Math.min(bar.starts[menu.open] ?? 0, Math.max(0, cols - MENU_WIDTH)) : 0;
 
   const onMouse = (event: MouseEvent) => {
-    if (mouseDebug) setNotice(`${event.kind} ${event.button} col ${event.x} row ${event.y}`);
+    if (mouseDebug) say(`${event.kind} ${event.button} col ${event.x} row ${event.y}`);
     const inStream = event.y >= top.length && event.y < top.length + height;
 
     if (event.kind === 'wheel') {
@@ -621,19 +679,19 @@ export function App({root, interactive, mouseDebug = false}: Props) {
     const clickedAt = Date.now();
     const twice = clickedAt - lastClick.current.at < DOUBLE_CLICK_MS && lastClick.current.x === event.x && lastClick.current.y === event.y;
     lastClick.current = {x: event.x, y: event.y, at: clickedAt};
-    if (notice && !mouseDebug) setNotice('');
+    if (notice && !mouseDebug) setNotice(null);
 
     const zoneOf = (line: Line | undefined): Act | undefined => line?.zones?.find(z => event.x >= z.from && event.x < z.to)?.act;
 
     if (menu) {
       const row = menuLines[event.y - 1];
-      const inside = row && event.x >= menuLeft && event.x < menuLeft + 28;
-      if (inside) return perform(row.act, 'click');
-      if (event.y === 0 && zoneOf(bar.line)?.type === 'menu') return perform(zoneOf(bar.line), 'click');
+      const inside = row && event.x >= menuLeft && event.x < menuLeft + MENU_WIDTH;
+      if (inside) return perform(row.act);
+      if (event.y === 0 && zoneOf(bar.line)?.type === 'menu') return perform(zoneOf(bar.line));
       return setMenu(null);
     }
 
-    if (event.y < top.length) return perform(zoneOf(top[event.y]), 'click');
+    if (event.y < top.length) return perform(zoneOf(top[event.y]));
     if (!inStream) return;
 
     if (event.x >= cols - 1 && lines.length > height) {
@@ -658,7 +716,7 @@ export function App({root, interactive, mouseDebug = false}: Props) {
     } else if (line.pick) moveTo(line.id);
 
     if (twice && line.at) return openReader(line.at.path, line.at.line);
-    perform(act, 'click');
+    perform(act);
   };
 
   // ---- keys ---------------------------------------------------------------------
@@ -667,18 +725,19 @@ export function App({root, interactive, mouseDebug = false}: Props) {
     (input, key) => {
       const event = parseMouse(input);
       if (event) return mouse ? onMouse(event) : undefined;
-      if (notice) setNotice('');
+      if (notice) setNotice(null);
 
       if (menu) {
         const items = list[menu.open]!.items;
         const move = (dir: 1 | -1) => {
           let next = menu.item;
+          // A rule and a heading are read, not chosen: the cursor steps past.
           do next = (next + dir + items.length) % items.length;
-          while (items[next] === 'rule');
+          while (!isAction(items[next]!));
           setMenu({...menu, item: next});
         };
 
-        if (key.escape || input === 'm') return setMenu(null);
+        if (key.escape || input === 'm' || input === '?') return setMenu(null);
         if (key.upArrow || input === 'k') return move(-1);
         if (key.downArrow || input === 'j') return move(1);
         if (key.leftArrow || key.rightArrow) {
@@ -692,7 +751,8 @@ export function App({root, interactive, mouseDebug = false}: Props) {
       }
 
       if (input === 'q') return exit();
-      if (input === 'm') return setMenu({open: 1, item: firstItem(1)});
+      // `?` is where people look for help, and the menus are the help.
+      if (input === 'm' || input === '?') return setMenu({open: 1, item: firstItem(1)});
       if (input === 'M') return run({do: 'mouse'});
       if (input === '1') return run({do: 'view', view: 'changes'});
       if (input === '2') return run({do: 'view', view: 'files'});
@@ -722,7 +782,7 @@ export function App({root, interactive, mouseDebug = false}: Props) {
         if (slot === 'files') {
           if (peekPath) return setPeekPath(null);
           const node = nodes.find(n => nodeId(n.path) === current?.id);
-          if (node?.isDir && node.open && !changedOnly) return setExpanded(flipped(expanded, node.path));
+          if (node?.isDir && node.open) return setExpanded(flipped(expanded, node.path));
           const parent = node ? nodes.slice(0, nodes.indexOf(node)).reverse().find(n => n.depth < node.depth) : undefined;
           return moveTo(parent ? nodeId(parent.path) : null);
         }
@@ -748,17 +808,25 @@ export function App({root, interactive, mouseDebug = false}: Props) {
         if (input === 's') return run({do: 'chat'});
         if (input === 'w') return run({do: 'whitespace'});
         if (input === 'z') return run({do: 'foldAll'});
-        if (input === 'n') return jump(1, line => line.act?.type === 'hunk');
-        if (input === 'N') return jump(-1, line => line.act?.type === 'hunk');
         if (input === 'o') {
-          if (!current?.at) return setNotice('Move onto a line of a diff first.');
+          if (!current?.at) return refuse('Move onto a line of a diff first.');
           reveal(current.at.path);
           return openReader(current.at.path, current.at.line);
         }
       }
 
-      if (slot === 'reader' && input === 'r' && readerPath && isMarkdown(readerPath)) return setRaw(!raw);
-      if (view === 'files' && input === 'c') return run({do: 'changedOnly'});
+      // The tree's own keys. Neither means anything inside the reader, where
+      // `c` would filter a tree you cannot see.
+      if (slot === 'files') {
+        if (input === 'c') return run({do: 'changedOnly'});
+        if (input === 'o') {
+          if (peekPath) return openReader(peekPath);
+          const node = nodes.find(n => nodeId(n.path) === current?.id);
+          return node && !node.isDir ? openReader(node.path) : refuse('Move onto a file first.');
+        }
+      }
+
+      if (slot === 'reader' && input === 'r') return run({do: 'raw'});
     },
     {isActive: interactive},
   );
@@ -772,30 +840,47 @@ export function App({root, interactive, mouseDebug = false}: Props) {
 
   // ---- draw ---------------------------------------------------------------------
 
-  const hints: [string, string][] =
+  // What this row does first, then the way back out, then the menu that holds
+  // everything else. A narrow pane keeps the ones at the front.
+  const hints: Hint[] =
     slot === 'changes'
-      ? current?.pins?.some(id => id.startsWith('f:'))
-        ? [['↑↓', 'line'], ['n', 'hunk'], ['enter', 'fold'], ['o', 'open'], ['esc', 'back'], ['z', 'fold all'], ['m', 'menu']]
-        : [['↑↓', 'move'], ['enter', 'open'], ['v', 'group'], [']', 'next'], ['m', 'menu'], ['q', 'quit']]
+      ? inDiff
+        ? [['enter', 'fold'], ['esc', 'back'], ['m', 'menu'], ['↑↓', 'line'], [']', 'hunk'], ['o', 'open'], ['z', 'fold all']]
+        : [['enter', 'open'], ['m', 'menu'], ['↑↓', 'move'], [']', 'next'], ['v', 'group'], ['q', 'quit']]
       : slot === 'files'
         ? peekPath
-          ? [['enter', 'read all'], [']', 'next change'], ['esc', 'close'], ['m', 'menu']]
-          : [['↑↓', 'move'], ['enter', 'peek'], ['c', 'changed'], ['m', 'menu'], ['q', 'quit']]
+          ? [['o', 'read all'], ['esc', 'close'], ['m', 'menu'], [']', 'next change']]
+          : [['enter', 'peek'], ['m', 'menu'], ['↑↓', 'move'], ['o', 'read'], ['c', 'changed'], ['q', 'quit']]
         : slot === 'reader'
-          ? [['↑↓', 'line'], [']', 'change'], ['space', 'page'], ...(readerPath && isMarkdown(readerPath) ? [['r', raw ? 'formatted' : 'raw'] as [string, string]] : []), ['esc', 'back']]
+          ? [['↑↓', 'line'], ['esc', 'back'], ['m', 'menu'], [']', 'change'], ['space', 'page'], ...(markdown ? [['r', raw ? 'formatted' : 'raw'] as Hint] : [])]
           : slot === 'agents'
-            ? [['↑↓', 'move'], ['enter', 'open'], ['m', 'menu'], ['q', 'quit']]
+            ? [['enter', 'open'], ['m', 'menu'], ['↑↓', 'move'], ['q', 'quit']]
             : [['↑↓', 'scroll'], ['m', 'menu'], ['q', 'quit']];
 
-  const where = git?.branch ? `${project} ${glyph.bullet} ${git.branch}` : project;
+  // The last column is a minimap. The thumb is a background, so a change mark
+  // can sit on top of it, and the marks are spread over the whole track by
+  // where their row falls in the whole list.
   const track = thumb(lines.length, height, at);
-  const stream: Line[] = Array.from({length: height}, (_, i) => {
-    const line = visible[i];
-    const mark = line?.rail ? seg(glyph.rail, line.rail) : track && i >= track.from && i < track.to ? seg(glyph.rail, theme.thumb) : sp(1);
-    return {segs: [...(line?.segs ?? [sp(cols - 1)]), mark]};
+  const marks = new Map<number, string>();
+  lines.forEach((line, i) => {
+    if (!line.rail) return;
+    const y = lines.length <= height ? i : Math.round((i / (lines.length - 1)) * (height - 1));
+    marks.set(y, line.rail);
   });
 
-  let screen: Line[] = [...top, ...stream, ...(roomy ? [blank] : []), footer(cols, hints, notice, where)];
+  const stream: Line[] = Array.from({length: height}, (_, i) => {
+    const onThumb = Boolean(track && i >= track.from && i < track.to);
+    const rail = marks.get(i);
+    const mark = rail ? seg(glyph.rail, rail, onThumb ? {bg: theme.thumb} : {}) : sp(1, onThumb ? theme.thumb : undefined);
+    return {segs: [...(visible[i]?.segs ?? [sp(cols - 1)]), mark]};
+  });
+
+  let screen: Line[] = [
+    ...top,
+    ...stream,
+    ...(roomy ? [blank] : []),
+    footer(cols, hints, notice, {project, branch: git?.branch ?? null}, !mouse),
+  ];
   if (menu) {
     screen = screen.map((line, y) => {
       const under = y === 0 ? line : dimmed(line);

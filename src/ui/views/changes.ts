@@ -4,7 +4,7 @@ import type {DiffLine, FileDiff, FileStatus} from '../../core/diff';
 import {modelName} from '../../core/usage';
 import type {ChangedFile, FileHistory, TurnChange} from '../../core/turns';
 import {
-  blankRow, counts, INDENT, INDENT2, pageRow, RIGHT_PAD, seg, sp, span, spineRow, tokens, widthOf,
+  blankRow, chevron, counts, INDENT, INDENT2, pageRow, RIGHT_PAD, seg, sp, span, spineRow, tokens, widthOf,
   type Group, type Line, type Seg,
 } from '../cells';
 import {diffLines, viewRows, type DiffGroup} from '../diffrows';
@@ -23,7 +23,10 @@ export type Open = {
   more: ReadonlySet<string>;
   steps: ReadonlySet<string>;
   says: ReadonlySet<string>;
+  // Agent rows whose detail is open, keyed by agent id.
   agents: ReadonlySet<string>;
+  // Rows that fold a crowd of agents away, keyed by turn.
+  folded: ReadonlySet<string>;
   hists: ReadonlySet<string>;
 };
 
@@ -57,10 +60,6 @@ const DAY = 86_400_000;
 export const turnKey = (change: TurnChange): string => `${change.chatId}:${change.turn.id}`;
 export const fileKey = (scope: string, rel: string): string => `${scope}|${rel}`;
 export const spinner = (frame: number): string => glyph.spinner[frame % glyph.spinner.length]!;
-
-// A chevron means one thing everywhere: accent when the cursor is on the row,
-// dim otherwise. Whether it is open is the glyph's job, not the colour's.
-const chevron = (isOpen: boolean, here: boolean): Seg => seg(isOpen ? glyph.open : glyph.closed, here ? theme.accent : theme.dim);
 
 // The one separator between facts on a row.
 const sep = (): Seg => seg(`  ${glyph.sep}  `, theme.faint);
@@ -104,6 +103,19 @@ export const agentLabel = (index: number): string => `A${index + 1}`;
 export const agentColour = (index: number): string => agentColours[index % agentColours.length]!;
 
 function pathSegs(rel: string, bright: boolean): Seg[] {
+  // A file outside the project arrives as a chain of `../`, which says nothing
+  // and eats the row. The last two segments and a tag say the same thing.
+  if (rel.startsWith('../')) {
+    const parts = rel.split('/').filter(part => part !== '..');
+    const tail = parts.slice(-2);
+    return [
+      seg(`${glyph.ellipsis}/`, theme.faint),
+      ...(tail.length > 1 ? [seg(`${tail[0]}/`, theme.dim)] : []),
+      seg(tail[tail.length - 1] ?? rel, bright ? theme.ink : theme.text),
+      seg(' outside', theme.faint),
+    ];
+  }
+
   const dir = path.posix.dirname(rel);
   return [...(dir === '.' ? [] : [seg(`${dir}/`, theme.dim)]), seg(path.posix.basename(rel), bright ? theme.ink : theme.text)];
 }
@@ -300,12 +312,12 @@ function openTurn(ctx: Ctx, change: TurnChange, agents: AgentRun[]): void {
     const rollId = `ga:${key}`;
     const rollKey = `roll:${key}`;
     const crowd = agents.length > AGENTS_SHOWN;
-    const rolled = crowd && !open.agents.has(rollKey);
+    const rolled = crowd && !open.folded.has(rollKey);
     const hereRoll = rollId === sel;
     if (crowd) {
       ctx.out.push(
         spineRow(cols, [chevron(!rolled, hereRoll), sp(1), ...agentSummary(agents, now)], [], {
-          ...rail, id: rollId, pick: true, bg: hereRoll ? theme.surface2 : undefined, act: {type: 'toggle', set: 'agents', key: rollKey},
+          ...rail, id: rollId, pick: true, bg: hereRoll ? theme.surface2 : undefined, act: {type: 'toggle', set: 'folded', key: rollKey},
         }),
       );
     }
@@ -584,25 +596,18 @@ export function changesLines(input: ChangesInput): Line[] {
   else if (input.group === 'file') byFile(ctx);
   else flat(ctx);
 
+  // An empty view has to say what to do next, in one sentence.
   if (ctx.out.length === 0) {
     const message =
       input.group === 'flat'
         ? input.flat === null
-          ? 'This folder is not a git repo, so there is no last commit to compare with.'
-          : 'Nothing has changed since the last commit.'
+          ? 'This folder is not a git repo, so there is no last commit to compare with. "By turn" still works.'
+          : 'Nothing has changed since the last commit. Every turn is still there under "By turn".'
         : input.changes.length === 0
-          ? 'No Claude chats have touched this project yet.'
-          : 'Nothing changed in these turns.';
+          ? 'No Claude chats have touched this project yet. Start Claude Code in this folder.'
+          : 'Nothing changed in these turns. Press v for everything since the last commit.';
     for (const text of wrap(message, input.cols - 4)) ctx.out.push(pageRow(input.cols, [seg(text, theme.dim)]));
   }
 
   return ctx.out;
-}
-
-// The little summary on the right of the tab row.
-export function changesSummary(changes: TurnChange[]): Seg[] {
-  const newest = changes[changes.length - 1];
-  if (!newest || newest.files.length === 0) return [];
-  const n = newest.files.length;
-  return [seg(`${n} file${n === 1 ? '' : 's'}`, theme.dim), ...(newest.measured ? [seg(`  +${newest.added}`, theme.add), seg(` ${glyph.minus}${newest.removed}`, theme.del)] : [])];
 }

@@ -2,16 +2,17 @@ import type {Kind} from '../core/highlight';
 
 // One place for every colour and glyph, so the pane keeps one look.
 //
-// The pane never paints its own background. A card is a slightly lighter fill
-// with half-block edges, and those edge glyphs only set a foreground colour,
-// so cards float on whatever terminal theme is underneath.
+// The pane never paints its own background. A block of rows is held together
+// by a left line, not by a box, and a well's top and bottom are half blocks
+// that only set a foreground colour, so the pane floats on whatever terminal
+// theme is underneath. Accent belongs to the cursor, to something live and to
+// the brand mark; everything else is one of the four greys.
 export const theme = {
   accent: '#E58C64',
   ink: '#ECEAE6',
   text: '#BDBAB4',
   dim: '#928F89',
   faint: '#5F5C58',
-  rule: '#2E2C2A',
   add: '#4ADE80',
   del: '#F87171',
   warn: '#E5C07B',
@@ -63,7 +64,8 @@ const digits: Record<string, string> = {
   k: '100101110101101',
   M: '101111111101101',
   '.': '000000000000010',
-  '~': '000100111001000',
+  // A wave across the middle band: the outer pixels low, the middle one high.
+  '~': '000000010101000',
   ' ': '000000000000000',
 };
 
@@ -79,8 +81,6 @@ export const glyph = {
   // The one separator between facts on a row, with two spaces either side.
   sep: '·',
   rule: '─',
-  heavy: '━',
-  heavyHalf: '╸',
   dot: '●',
   bullet: '•',
   diamond: '◆',
@@ -98,13 +98,10 @@ export const glyph = {
   cross: '✗',
   warn: '⚠',
   square: '■',
-  // Half blocks and quadrants: the whole card look is these six characters.
+  // The two half blocks every fill in the pane is made of: a well's top and
+  // bottom edge, a meter, and the big numbers in the Usage view.
   lower: '▄',
   upper: '▀',
-  cornerTL: '▗',
-  cornerTR: '▖',
-  cornerBL: '▝',
-  cornerBR: '▘',
   columns: [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'],
   spinner: ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'],
   digits,
@@ -119,8 +116,10 @@ export const syntax: Record<Kind, Style> = {
   comment: {color: theme.dim, italic: true},
   title: {color: theme.link},
   meta: {color: theme.dim},
-  section: {color: theme.accent, bold: true},
-  bullet: {color: theme.accent},
+  // A heading is weight, not colour: accent is saved for the cursor, live
+  // state and the brand mark, so a page of markdown does not shout.
+  section: {color: theme.ink, bold: true},
+  bullet: {color: theme.dim},
   code: {color: theme.warn},
   strong: {bold: true},
   emphasis: {italic: true},

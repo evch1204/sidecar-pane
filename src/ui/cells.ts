@@ -5,6 +5,9 @@ import {glyph, theme} from './theme';
 // coloured segments exactly as wide as the pane. Views build lines, the screen
 // draws them, the cursor indexes them and a click maps onto them. Because
 // there is only one list, those can never disagree.
+//
+// There are three row shapes and nothing else: a page row, a row hanging off a
+// block's left line (`spineRow`), and a row inside a well. Nothing is a box.
 
 export type Group = 'turn' | 'file' | 'flat';
 export type View = 'changes' | 'files' | 'agents' | 'usage';
@@ -16,12 +19,16 @@ export type Act =
   | {type: 'item'; menu: number; item: number}
   | {type: 'turn'; key: string}
   | {type: 'file'; key: string}
-  | {type: 'toggle'; set: 'more' | 'steps' | 'says' | 'agents' | 'hists'; key: string}
+  | {type: 'toggle'; set: 'more' | 'steps' | 'says' | 'agents' | 'hists' | 'folded'; key: string}
   | {type: 'hunk'; key: string}
   | {type: 'gap'; file: string; group: number; hunk: number}
   | {type: 'node'; path: string; dir: boolean}
   | {type: 'read'; path: string; line?: number}
   | {type: 'goTurn'; key: string}
+  // The pills under the tabs: how the Changes view is grouped, and the filters
+  // that can be cleared from where they are shown.
+  | {type: 'group'; group: Group}
+  | {type: 'filter'; what: 'chat' | 'changedOnly'; on: boolean}
   | {type: 'back'}
   | {type: 'none'};
 
@@ -85,8 +92,9 @@ export function clip(segs: Seg[], max: number): Seg[] {
 export function fit(left: Seg[], right: Seg[], total: number, bg?: string): Seg[] {
   const rightFits = clip(right, total);
   const room = total - widthOf(rightFits);
-  // Only a left side that has to be cut keeps a column clear of the right.
-  const crowded = widthOf(left) > room && rightFits.some(s => s.text.trim());
+  // A left side that fills the room gives up one column, so its last word can
+  // never run into the first word of the right side.
+  const crowded = widthOf(left) >= room && rightFits.some(s => s.text.trim());
   const leftFits = clip(left, Math.max(0, room - (crowded ? 1 : 0)));
   const gap = total - widthOf(leftFits) - widthOf(rightFits);
   return [...leftFits, sp(gap), ...rightFits].map(s => ({...s, bg: s.bg ?? bg}));
@@ -104,16 +112,16 @@ export const INDENT = 2;
 export const INDENT2 = 4;
 
 // Every line is `cols - 1` wide: the last column belongs to the scrollbar.
-// Column 0 is the margin. A card runs from column 1 to the scrollbar.
+// Column 0 is the margin, so a row's own content runs from column 1.
 export function pageRow(cols: number, left: Seg[] = [], right: Seg[] = [], more: RowMore = {}): Line {
   const {bg, ...rest} = more;
   return {...rest, segs: [sp(1), ...fit(left, right, cols - 2 - RIGHT_PAD, bg), sp(RIGHT_PAD, bg)]};
 }
 
-export function cardRow(cols: number, left: Seg[] = [], right: Seg[] = [], more: RowMore = {}): Line {
-  const {bg, ...rest} = more;
-  return {...rest, segs: [sp(1), ...fit([sp(1), ...left], [...right, sp(1)], cols - 2, bg ?? theme.surface)]};
-}
+// A chevron means one thing everywhere: accent when the cursor is on the row,
+// dim otherwise. Whether it is open is the glyph's job, not the colour's.
+export const chevron = (isOpen: boolean, here: boolean): Seg =>
+  seg(isOpen ? glyph.open : glyph.closed, here ? theme.accent : theme.dim);
 
 // The left line. Column 1 carries a block's own mark on its header row and the
 // rail on every row under it, blank rows included, so the line never breaks.
@@ -137,37 +145,23 @@ export function spineRow(
   };
 }
 
-// A well is the dark inset a diff or a file sits in: one column inside a card,
-// or at the content column of a railed block.
-export const wellWidth = (cols: number, spine = false): number => cols - (spine ? 4 + RIGHT_PAD : 4);
+// A well is the dark inset a diff or a file sits in. It always hangs off a
+// left line, so it starts at the content column and ends where every other
+// row ends.
+export const wellWidth = (cols: number): number => cols - 4 - RIGHT_PAD;
 
-type WellMore = RowMore & {spine?: boolean; live?: boolean};
+type WellMore = RowMore & {live?: boolean};
 
 export function wellRow(cols: number, left: Seg[] = [], right: Seg[] = [], more: WellMore = {}): Line {
-  const {bg, spine, live, ...rest} = more;
-  const inner = fit(left, right, wellWidth(cols, spine), bg ?? theme.well);
-  return {
-    ...rest,
-    segs: spine
-      ? [sp(1), spineMark(live), sp(1), ...inner, sp(RIGHT_PAD)]
-      : [sp(1), sp(1, theme.surface), ...inner, sp(1, theme.surface)],
-  };
-}
-
-export function cardTop(cols: number): Line {
-  return {segs: [sp(1), seg(glyph.cornerTL + glyph.lower.repeat(Math.max(0, cols - 4)) + glyph.cornerTR, theme.surface)]};
-}
-
-export function cardBottom(cols: number): Line {
-  return {segs: [sp(1), seg(glyph.cornerBL + glyph.upper.repeat(Math.max(0, cols - 4)) + glyph.cornerBR, theme.surface)]};
+  const {bg, live, ...rest} = more;
+  const inner = fit(left, right, wellWidth(cols), bg ?? theme.well);
+  return {...rest, segs: [sp(1), spineMark(live), sp(1), ...inner, sp(RIGHT_PAD)]};
 }
 
 // Half a row of breathing room where the page meets a well.
 function wellEdge(cols: number, half: string, more: WellMore): Line {
-  const {spine, live, bg, ...rest} = more;
-  return spine
-    ? {...rest, segs: [sp(1), spineMark(live), sp(1), seg(half.repeat(wellWidth(cols, true)), theme.well), sp(RIGHT_PAD)]}
-    : {...rest, segs: [sp(1), sp(1, theme.surface), seg(half.repeat(wellWidth(cols)), theme.well, {bg: theme.surface}), sp(1, theme.surface)]};
+  const {live, bg, ...rest} = more;
+  return {...rest, segs: [sp(1), spineMark(live), sp(1), seg(half.repeat(wellWidth(cols)), theme.well), sp(RIGHT_PAD)]};
 }
 
 export function wellTop(cols: number, more: WellMore = {}): Line {
@@ -188,7 +182,7 @@ export function overlay(base: Seg[], at: number, over: Seg[], total: number): Se
 
 // A run of block glyphs is a fill painted as a foreground, so it has to dim
 // like a fill. Greying it would leave bright strips behind an open menu.
-const BLOCKS = /^[▄▀█▎▐▗▖▝▘▁▂▃▅▆▇]+$/;
+const BLOCKS = /^[▄▀█▎▐▁▂▃▅▆▇]+$/;
 
 // What sits behind an open menu: same shapes, no colour.
 export function dimmed(line: Line): Line {
@@ -203,19 +197,9 @@ export function dimmed(line: Line): Line {
   };
 }
 
-// A thin meter: heavy line for what is used, light for what is left. The
-// half-width heavy glyph gives it half-cell precision.
-export function meter(n: number, part: number, color: string): Seg[] {
-  const halves = Math.round(Math.max(0, Math.min(1, part)) * n * 2);
-  const full = Math.floor(halves / 2);
-  const half = halves % 2;
-  return [
-    seg(glyph.heavy.repeat(full) + (half ? glyph.heavyHalf : ''), color),
-    seg(glyph.rule.repeat(Math.max(0, n - full - half)), theme.rule),
-  ];
-}
-
-export const meterTone = (part: number): string => (part >= 0.9 ? theme.del : part >= 0.75 ? theme.warn : theme.accent);
+// A meter is only worth a colour when it is worth worrying about: plain text
+// until three quarters are gone, then warn, then the colour of a deletion.
+export const meterTone = (part: number): string => (part >= 0.9 ? theme.del : part >= 0.75 ? theme.warn : theme.text);
 
 // A thick meter: a half-block bar, the used part in `color` and the rest left
 // faint, so it reads as one bar rather than a bar next to a rule.

@@ -19,7 +19,7 @@ export type AgentsInput = {
   root: string;
   changes: TurnChange[];
   agents: AgentRun[];
-  open: Pick<Open, 'agents'>;
+  open: Pick<Open, 'agents' | 'folded'>;
   sel: string | null;
 };
 
@@ -72,7 +72,7 @@ export function agentsLines(input: AgentsInput): Line[] {
     // toggles like an agent row: no chevron, the cursor carries it.
     const foldKey = `fold:${key}`;
     const crowd = agents.length > FOLD_OVER;
-    const folded = crowd && !open.agents.has(foldKey);
+    const folded = crowd && !open.folded.has(foldKey);
     const tree = agentTree(agents, agent => !folded || statusOf(agent, now) !== 'done');
     const finished = agents.filter(a => statusOf(a, now) === 'done');
     if (crowd && finished.length) {
@@ -82,7 +82,7 @@ export function agentsLines(input: AgentsInput): Line[] {
       out.push(
         spineRow(cols, [seg(glyph.check, theme.add), sp(1), seg(`${finished.length} finished`, theme.dim), seg(`  ${glyph.sep}  `, theme.faint), seg(tokens(spent), theme.dim)], [], {
           id: foldId, pick: true, pins: [id], mark: agentBranch([tree.length > 0]).mark, bg: onIt ? theme.surface2 : undefined,
-          act: {type: 'toggle', set: 'agents', key: foldKey},
+          act: {type: 'toggle', set: 'folded', key: foldKey},
         }),
       );
     }

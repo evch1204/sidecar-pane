@@ -8,7 +8,11 @@ import {render} from 'ink';
 import {App} from '../src/ui/App';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const target = process.argv[2] ? path.resolve(process.argv[2]) : repo;
+const args = process.argv.slice(2).filter(arg => !arg.startsWith('--cols'));
+const target = args[0] ? path.resolve(args[0]) : repo;
+// `--cols 40` drives a narrow pane, which is where the chrome has to give way.
+const colsArg = process.argv.slice(2).find(arg => arg.startsWith('--cols'));
+const COLS = Number(colsArg?.split('=')[1] ?? process.argv[process.argv.indexOf(colsArg ?? '') + 1]) || 72;
 const DOWN = '\u001B[B';
 const ESC = '\u001B';
 const ENTER = '\r';
@@ -26,7 +30,7 @@ const stdin = Object.assign(new PassThrough(), {
 });
 
 const frames: string[] = [];
-const stdout = Object.assign(new PassThrough(), {columns: 72, rows: 40, isTTY: true});
+const stdout = Object.assign(new PassThrough(), {columns: COLS, rows: 40, isTTY: true});
 stdout.on('data', chunk => frames.push(String(chunk)));
 
 const app = render(<App root={target} interactive />, {
@@ -50,7 +54,7 @@ const show = async (label: string) => {
 };
 
 await wait(1800); // first git, transcript and snapshot read
-await show('changes: the stream, newest turn open');
+await show('changes: the bar, the tabs, the pills and the stream');
 
 await press(DOWN, DOWN, ENTER);
 await show('changes: a row of the open turn, entered');
@@ -67,7 +71,7 @@ await press(ENTER);
 await wait(600);
 await show('changes: everything since the last commit, first file opened in place');
 
-await press('n', ENTER);
+await press(']', ENTER);
 await show('changes: jumped to a hunk and folded it');
 
 await press(wheelDown(20, 14), wheelDown(20, 14));
@@ -79,11 +83,14 @@ await press(DOWN, DOWN, ENTER, DOWN, DOWN, ENTER, DOWN, DOWN, ENTER);
 await wait(500);
 await show('files: a folder opened, then a file peeked in place');
 
-await press(ENTER);
+await press('o');
 await wait(400);
-await show('files: the reader, full height');
+await show('files: o read the whole file, cursor on its first line');
 
-await press(ESC, '3');
+await press('m');
+await show("the View menu in Files: only this view's options");
+
+await press(ESC, ESC, '3');
 await show('agents: every subagent, under the prompt that started it');
 
 await press(DOWN, ENTER);
@@ -91,7 +98,11 @@ await show('agents: one agent opened');
 
 await press('4');
 await wait(1200);
-await show('usage');
+await show('usage: the Agents tab is hidden again unless something runs');
+
+await press('M', DOWN);
+await show('the mouse turned off: the footer keeps saying so');
+await press('M');
 
 stdin.write('q');
 await app.waitUntilExit();

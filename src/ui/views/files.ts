@@ -6,7 +6,7 @@ import type {MdLine} from '../../core/markdown';
 import type {TreeNode} from '../../core/tree';
 import type {FileHistory} from '../../core/turns';
 import {
-  counts, pageRow, RIGHT_PAD, seg, sp, spineRow, wellBottom, wellRow, wellTop, wellWidth, widthOf,
+  chevron, counts, pageRow, RIGHT_PAD, seg, sp, spineRow, wellBottom, wellRow, wellTop, wellWidth, widthOf,
   type Line, type Seg,
 } from '../cells';
 import {glyph, syntax, theme} from '../theme';
@@ -38,10 +38,6 @@ const LANGUAGE: Record<string, string> = {
 };
 
 const isMarked = (marks: Marks, n: number): boolean => marks === 'all' || marks.has(n);
-
-// The same chevron rule as the Changes view: accent when the cursor is on the
-// row, dim otherwise. Whether it is open is the glyph's job, not the colour's.
-const chevron = (isOpen: boolean, here: boolean): Seg => seg(isOpen ? glyph.open : glyph.closed, here ? theme.accent : theme.dim);
 
 // The one separator between facts on a row.
 const sep = (): Seg => seg(`  ${glyph.sep}  `, theme.faint);
@@ -107,10 +103,10 @@ function peekLines(cols: number, root: string, peek: Peek, owner: string): Line[
 
   const lines = peek.view.lines;
   const digits = Math.max(3, String(lines.length).length);
-  const room = wellWidth(cols, true) - digits - 3;
+  const room = wellWidth(cols) - digits - 3;
   const places = changedPlaces(peek.marks, lines.length);
   const end = Math.min(lines.length, peek.from + PEEK_ROWS);
-  const well = {pins, spine: true};
+  const well = {pins};
 
   out.push(wellTop(cols, well));
   if (places.length) {
@@ -207,11 +203,15 @@ export function filesLines(input: FilesInput): Line[] {
 
     // Folders and files both open, so both carry a chevron; a folder is bold
     // and ends in a slash, so the two can never be read as the same thing.
-    const mark = chevron(node.isDir ? node.open : peeking, here);
+    // With "changed only" on the tree is already open all the way down to
+    // every changed file: a folder is then a heading, not a control, so it
+    // gets no chevron rather than one that does nothing.
+    const fixed = input.changedOnly && node.isDir;
+    const mark = fixed ? sp(1) : chevron(node.isDir ? node.open : peeking, here);
     const colour = node.isDir || change ? theme.ink : node.name.startsWith('.') ? theme.faint : theme.text;
     out.push(
       pageRow(cols, [...guides, mark, sp(1), seg(node.isDir ? `${node.name}/` : node.name, colour, {bold: node.isDir})], right, {
-        bg, id, pick: true, act: {type: 'node', path: node.path, dir: node.isDir},
+        bg, id, pick: true, act: fixed ? {type: 'none'} : {type: 'node', path: node.path, dir: node.isDir},
       }),
     );
     if (peeking && peek) out.push(...peekLines(cols, input.root, peek, id));
@@ -255,14 +255,17 @@ export function readerHead(input: Pick<ReaderInput, 'cols' | 'root' | 'path' | '
 }
 
 // The whole file, full height, with the turns that wrote it on top.
+// The columns a turn row's crumb takes, so the header's counts sit above the rows'.
+const CRUMB_TAIL = 3;
+
 export function readerLines(input: ReaderInput): Line[] {
   const {cols, view, history, sel} = input;
   const out: Line[] = [];
 
   if (history && history.touches.length) {
     const n = history.touches.length;
-    out.push(pageRow(cols, [seg(`Changed by ${n} turn${n === 1 ? '' : 's'}`, theme.ink, {bold: true})], history.measured ? counts(history.added, history.removed) : []));
-    out.push(wellTop(cols, {spine: true}));
+    out.push(pageRow(cols, [seg(`Changed by ${n} turn${n === 1 ? '' : 's'}`, theme.ink, {bold: true})], history.measured ? [...counts(history.added, history.removed), sp(CRUMB_TAIL)] : []));
+    out.push(wellTop(cols, {}));
     for (const touch of [...history.touches].reverse().slice(0, 4)) {
       const id = `p:${turnKey(touch.change)}`;
       const here = id === sel;
@@ -273,14 +276,14 @@ export function readerLines(input: ReaderInput): Line[] {
           [
             ...(touch.change.measured ? counts(touch.added, touch.removed) : [seg('not recorded', theme.faint, {italic: true})]),
             // The crumb says this row leaves the reader for the Changes view.
-            sp(2), seg(glyph.crumb, here ? theme.accent : theme.faint),
+            sp(CRUMB_TAIL - 1), seg(glyph.crumb, here ? theme.accent : theme.faint),
           ],
-          {id, pick: true, spine: true, bg: here ? theme.surface2 : undefined, act: {type: 'goTurn', key: turnKey(touch.change)}},
+          {id, pick: true, bg: here ? theme.surface2 : undefined, act: {type: 'goTurn', key: turnKey(touch.change)}},
         ),
       );
     }
 
-    out.push(wellBottom(cols, {spine: true}), pageRow(cols));
+    out.push(wellBottom(cols, {}), pageRow(cols));
   }
 
   if (view.kind === 'notice') {

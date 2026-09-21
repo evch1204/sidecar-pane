@@ -162,12 +162,12 @@ type Draw = {
 export function diffLines(rows: ViewRow[], groups: DiffGroup[], draw: Draw): Line[] {
   const {cols, fileKey, sel, pins} = draw;
   // Every row of the well sits on the same left line.
-  const rail = {spine: true, live: draw.live} as const;
+  const rail = {live: draw.live} as const;
   const out: Line[] = [wellTop(cols, {pins, ...rail})];
   const digits = digitsOf(rows);
   // change bar, line number, space, sign, space
   const gutter = 1 + digits + 3;
-  const room = wellWidth(cols, true) - gutter;
+  const room = wellWidth(cols) - gutter;
 
   rows.forEach((row, index) => {
     const id = `${fileKey}#${index}`;

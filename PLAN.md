@@ -104,6 +104,15 @@ Sidecar pane ──watches──▶ events.jsonl      (what is Claude doing righ
 - Done: Agents and Usage views, a menu bar, formatted markdown in the reader.
 - Done: sidecar records when it was watching, so a turn is only called
   measured when it really was (see "Where the history comes from").
+- Done: the left line replaces the card, and a toggled row keeps its place
+  under the pointer.
+- Done: Usage rebuilt — honest numbers, a big reading per section, and the
+  window estimated from transcripts when no feed is installed.
+- Done: Agents as a tree with real parent ids, folding for a crowd, and a tab
+  that only appears when there are subagents.
+- Done: the chrome — two menus, pills under the tabs, each end of the bar its
+  own button, a footer that puts the hints before the branch name, and a
+  scrollbar that doubles as a minimap.
 - Not yet: launchers for anything but Windows Terminal, follow mode, a
   "waiting for you" state (the transcripts do not say when Claude is blocked on
   a permission prompt).
@@ -120,26 +129,27 @@ create mode), where a turn is a block and a diff opens under the row you
 clicked.
 
 ```
- ◆ Sidecar  View  Group       5h ━━━╸── 58%  wk 23%   ⠴ working
+ ◆ Sidecar  View        5h ▄▄▄▄▄▄ 58% · 1h 52m  wk 23%   ⠴ working
 
-  Changes 5   Files   Agents 2   Usage      by turn  ·  3 files
+  Changes   Files   Agents ⠴ 2   Usage
+  By turn  ·  By file  ·  All                      5 uncommitted
 
- Day 3 launchers                                          today
- ▗▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▖
-  ⠴ build the rest of the day 3 launchers in parallel.   19:31
-    one agent per terminal: wezterm, iterm2, kitty
-    running  ·  3 files  +18 −1  ·  3 agents  ·  3m 16s
+ Day 3 launchers                                            today
+ ⠴ build the rest of the day 3 launchers in parallel.       19:31
+ │ one agent per terminal: wezterm, iterm2, kitty
+ │ running  ·  3 files  +18 −1  ·  3 agents  ·  3m 16s
+ │
+ │ ▸ Edited   src/launch/index.ts  A1 A2 ⚠               +2    −1
+ │ ▸ Created  src/launch/kitty.ts  A3                    +8
+ │ ▸ Created  src/launch/wezterm.ts  A1                  +8
+ ├─ ✓ A1 Write the WezTerm launcher                 1m 45s   73k
+ ├─ ⠴ A2 Try the AppleScript split                  3m 01s   98k
+ │  │    Bash  osascript split.scpt
+ ├─ ⠴ A3 Write kitty.ts                             3m 01s   93k
+ │ ⠴ Bash     Wait for the agents                        4 steps
 
-  ▸ Edited   src/launch/index.ts  A1 A2 ⚠             +2    −1
-  ▸ Created  src/launch/kitty.ts  A3                  +8
-  ▸ Created  src/launch/wezterm.ts  A1                +8
-  ▸ A1 Write the WezTerm launcher              ✓  1m 45s   73k
-  ▸ A2 Bash Try the AppleScript split          ⠴  3m 01s   98k
-  ▸ A3 Write kitty.ts                          ⠴  3m 01s   93k
-  ⠴ Bash     Wait for the agents                       4 steps
- ▝▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▘
- ▸ add a tmux launcher and wire it into the launcher list
-   19:00  ·  3 files  +12 −3  ·  3m 30s
+ ▸ add a tmux launcher and wire it into the launcher list   19:00
+   3 files  +12 −3  ·  3m 30s
 ```
 
 Decisions, and why:
@@ -147,7 +157,7 @@ Decisions, and why:
 - **One list per view.** A view builds lines. The screen draws them, the cursor
   indexes them, a click maps onto them. There is one array, so the three cannot
   disagree. `src/ui/cells.ts` is that model; nothing else draws.
-- **A turn is a card, and your prompt is its title.** Not a summary: the words
+- **A turn is a block, and your prompt is its title.** Not a summary: the words
   you typed are the reason the files moved. The newest turn starts open, the
   rest are two quiet lines each.
 - **Things open where they are.** A file's diff opens under its row, a file's
@@ -155,10 +165,19 @@ Decisions, and why:
   ← walks back up to the row that owns what you are in.
 - **The rows that own what you are reading stay pinned** at the top while a
   long diff scrolls under them, so "which file, which turn" is never lost.
-- **A card is a fill, not a box.** Its edges are half blocks (`▗▄▖` and
-  `▝▀▘`) that only set a foreground colour. No columns are lost to borders,
-  and because the pane never paints its own background, cards float on any
-  terminal theme.
+- **A left line, not a card.** The first build drew a card: a fill with
+  half-block edge rows and quadrant corners. Two things were wrong with it.
+  The edge row above the header meant opening a turn pushed its own header
+  down a line, so the next click missed the row you had just aimed at. And the
+  four corners read as a glitch rather than as an edge. Now column 1 carries
+  the turn's own mark (`▾`, `▸`, or the spinner while it runs) and a `│` on
+  every row under it, blank rows included. Same columns, no edge rows, nothing
+  moves, and the line of a running turn is the one accent on screen.
+- **A toggled row keeps its place on screen.** A click or Enter remembers the
+  row's id and the screen row it was on, and after the lines are rebuilt the
+  scroll is set so that id is still there. Without it, opening a long diff
+  slid the row out from under the pointer, so a second click landed on
+  whatever had moved into its place.
 - **A running turn says less.** The conversation is on screen right beside the
   pane, so while Claude works the card is the prompt, one status line, the
   files so far and the step in progress. What Claude said, and how long it
@@ -175,7 +194,17 @@ Decisions, and why:
   this file?), and everything since the last commit.
 - **A menu bar, not a legend.** Everything a key can do is also in a menu, and
   the right end of the bar holds what you glance at: usage and whether Claude
-  is working. Tabs stay, because switching view should be one click.
+  is working, each its own button. Tabs stay, because switching view should be
+  one click.
+- **Two menus, and the second one is about where you are.** `Sidecar` and
+  `View`. `View` lists the four views and then, under a rule, only the options
+  of the view you are in, so nothing on it is ever dead. A "Group" menu that
+  belonged to one view had no business sitting on the bar in the other three.
+- **State is a row of pills, not a dim sentence.** Under the tabs, `By turn ·
+  By file · All` for Changes and `All · Changed N` for Files: each one says
+  what is showing and sets it in one click. A filter that is on is a pill too,
+  and clicking it clears it. A narrow pane keeps only the lit pill and cycles
+  through the rest on a click.
 - **No restore, no hover.** Sidecar is a viewer; and hover needs a mouse report
   per cell crossed.
 
@@ -205,13 +234,31 @@ against three real runs.
 | Shown | Where it comes from | How good |
 |---|---|---|
 | Kind, task, model, steps, tokens, report | the agent's own transcript | Exact |
-| Running or done | the last reply ended the agent's turn, or it did not | Exact; "stopped" after five quiet minutes is a guess and is labelled as one |
+| Running or done | the last reply ended the agent's turn, or it did not | Exact; "stopped" is a guess and is labelled as one |
+| Who started whom | the child's meta names the tool call; the parent's steps carry that call's id | Exact when both files are there, otherwise the shallower agent that was running when it started |
 | Files an agent wrote | its own Edit and Write calls | A hint: a shell command can write without naming a file |
 | Lines changed per agent | nothing | Not available. Snapshots are per turn, so an agent's row shows the turn's counts for that file |
 
 An overlap (two agents wrote the same file) is flagged on the file's row.
 Waiting on a permission prompt is not recorded anywhere, so the pane cannot
 show it. Workflows and background agents are the same files on disk.
+
+Decisions, and why:
+
+- **The turn is the root and the agents are branches** off the same left line,
+  with `├─` and `└─`. The status glyph comes first, then the label, then the
+  job; elapsed time and tokens are in fixed columns on the right. A running
+  agent gets one dim second line: the step it is on.
+- **Quiet is not the same as stopped.** An agent that is inside a tool call, or
+  waiting on a child agent, writes nothing to its own transcript while it is
+  plainly alive. Five quiet minutes with no tool call open still means
+  "stopped"; quiet inside a call is given an hour.
+- **A crowd folds.** More than eight agents in a turn and the finished ones
+  become one row you can open. In the Changes view more than three become one
+  row, because the whole story belongs to this view.
+- **The tab only exists when there is something on it:** an agent running, or
+  an agent that belongs to the chat this pane is following. It never vanishes
+  while you are looking at it, and `3` always opens it.
 
 ## Usage
 
@@ -220,13 +267,28 @@ Two sources, and the view keeps them apart.
 - **Tokens** are counted from the transcripts: every reply carries its own
   count and the model that wrote it. Pace, share by model and the context
   window need no setup, and cover every project, subagents included.
+- **One reply is several lines.** Claude Code writes a reply's usage more than
+  once and only the last line carries the final `output_tokens`. Keeping the
+  first undercounted every reply, so replies are held by message id and each
+  count grows to the largest one seen.
+- **The window is a rolling seven days,** so it is labelled "Last 7 days".
+  "This week" would be a claim about a reset only a feed knows.
 - **Limits** (how much of the 5 hour and weekly allowance is used) are only
   ever handed to a status line script. `hooks/statusline.mjs` saves what it is
-  given to `~/.sidecar/usage.json`. It is not installed for the owner: adding
-  it to `~/.claude/settings.json` is their call, and it sits beside their
-  hooks without touching them. Without it the view says "not connected".
+  given to `~/.sidecar/usage.json`. There is exactly one `statusLine` slot in
+  `~/.claude/settings.json` and the owner's is already taken, so the script
+  cannot sit beside anything: it **chains**. Name the previous command in
+  `~/.sidecar/statusline-chain.json` and it feeds it the same stdin and prints
+  its output, so both work. Installing it stays the owner's call.
+- **Without a feed, nothing is a percentage.** The session number becomes the
+  window's own new tokens, estimated from the transcripts and written `~209k`,
+  and the same estimate is what the menu bar shows.
 - **There is no per-model limit** in what Claude Code exposes. "By model" is a
-  share of the week's tokens, and says so.
+  share of the seven days' tokens, and says so. A share that rounds to nothing
+  reads `<1%`, never `0%`.
+- **No per-agent breakdown.** One line — `Subagents 66% · 3.5M of 5.4M · main
+  thread 1.8M` — is the whole story, and a list of agents belongs to the
+  Agents view.
 
 ## Where the history comes from
 
@@ -280,7 +342,9 @@ Every line carries what a click on it does, so a row is a button.
 |---|---|---|---|
 | A menu title | open or close that menu | | |
 | The usage meters | go to Usage | | |
+| `working` / `idle` | go to Changes | | |
 | A tab | switch view | | |
+| A pill | show that grouping, or clear that filter | | |
 | A turn, a file, an agent, "more", Steps | open or close it in place | scroll | |
 | A hunk header | fold or unfold | scroll | |
 | A gap | open it | scroll | |
@@ -288,6 +352,13 @@ Every line carries what a click on it does, so a row is a button.
 | A file in the tree | peek it in place; click again to close | scroll | |
 | `‹ Files` in the reader | back to the tree | | |
 | The last column | jump there | scroll | drag the thumb |
+
+The last column is also a minimap: the thumb is a background, and the change
+marks are spread over the whole track by where their row falls in the list, so
+a mark and the thumb can share a cell instead of hiding each other. A click on
+a row that has nothing to open walks up to the nearest row that does, and
+nothing a click cannot reach keeps a click zone: a menu title, a tab or a
+meter that had to be cut at a narrow width loses its zone with its text.
 
 ## 4. The build, day by day
 

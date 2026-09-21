@@ -111,7 +111,7 @@ fs.writeFileSync(path.join(process.env.SIDECAR_HOME, 'usage.json'), JSON.stringi
 // --- draw it --------------------------------------------------------------
 const stdin = Object.assign(new PassThrough(), {isTTY: true, setRawMode: () => stdin, ref: () => stdin, unref: () => stdin});
 const frames: string[] = [];
-const stdout = Object.assign(new PassThrough(), {columns: 76, rows: 34, isTTY: true});
+const stdout = Object.assign(new PassThrough(), {columns: Number(process.env.SMOKE_COLS) || 64, rows: 34, isTTY: true});
 stdout.on('data', c => frames.push(String(c)));
 
 const app = render(<App root={project} interactive />, {
@@ -152,9 +152,13 @@ await press('4');
 await wait(1200);
 await show('usage: limits from the feed, tokens from the transcripts');
 
-await press('2', '\u001B[B', '\r', '\r');
+await press('2', '\u001B[B', '\r', 'o');
 await wait(1500);
 await show('files: README.md in the reader, formatted');
+
+await press('\u001B', 'c');
+await wait(600);
+await show('files: changed files only, so the folders are headings');
 
 stdin.write('q');
 await app.waitUntilExit();
