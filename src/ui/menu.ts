@@ -17,6 +17,7 @@ export type Command =
   | {do: 'changedOnly'; on?: boolean}
   | {do: 'raw'}
   | {do: 'foldAll'}
+  | {do: 'follow'}
   | {do: 'mouse'}
   | {do: 'quit'};
 
@@ -43,6 +44,8 @@ export type MenuState = {
   // A markdown file is open in the reader, so it can be read as written.
   markdown: boolean;
   raw: boolean;
+  // The pane is opening the files of the running turn as they are touched.
+  follow: boolean;
   mouse: boolean;
 };
 
@@ -85,6 +88,7 @@ export function menus(state: MenuState): Menu[] {
     {
       title: 'Sidecar',
       items: [
+        {label: 'Follow', key: 'f', checked: state.follow, command: {do: 'follow'}},
         {label: 'Mouse', key: 'M', checked: state.mouse, command: {do: 'mouse'}},
         'rule',
         {label: 'Quit', key: 'q', command: {do: 'quit'}},

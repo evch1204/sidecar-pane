@@ -17,14 +17,14 @@ import {newUsageState, readLimits, readSpends, type Limits, type Spend} from '..
 import {readWorktrees, type WorktreeRun} from '../core/worktrees';
 import {brief, cut, dimmed, overlay, seg, sp, widthOf, type Act, type Group, type Line, type Seg, type View} from './cells';
 import type {DiffGroup} from './diffrows';
-import {follow, scrollFromThumb, thumb} from './layout';
+import {follow as keepInView, scrollFromThumb, thumb} from './layout';
 import {footer, isAction, MENU_WIDTH, menuBar, menuBox, menus, pillRow, tabRow, type Command, type Hint, type Pill} from './menu';
 import {DOUBLE_CLICK_MS, MOUSE_OFF, MOUSE_ON, parseMouse, type MouseEvent} from './mouse';
 import {splashLines, type Counts} from './splash';
 import {Screen} from './Screen';
 import {glyph, theme} from './theme';
 import {agentsBadge, agentsLines, agentsTabVisible, runningAgents} from './views/agents';
-import {changesLines, spinner, turnKey, type Open} from './views/changes';
+import {changesLines, fileKey, spinner, turnKey, type Open} from './views/changes';
 import {
   changedPlaces, filesLines, firstReadId, MORE_ROWS, nodeId, paperMeasure, peekEnd, readerHead, readerIdAt,
   readerLineOf, readerLines, type Marks,
@@ -60,6 +60,11 @@ const NONE: ReadonlySet<string> = new Set();
 const CLOSED: Open = {turns: NONE, files: NONE, more: NONE, steps: NONE, says: NONE, agents: NONE, folded: NONE, hists: NONE};
 
 type Notice = {text: string; warn?: boolean};
+
+// Follow mode: while a turn is running the pane opens each file it touches, as
+// it touches it. Anything you do with the keyboard or the mouse pauses it —
+// the page is yours the moment you reach for it — and `f` hands it back.
+type Follow = 'on' | 'paused' | 'off';
 
 // Acts that add or remove lines. The row they were aimed at has to stay where
 // it was, or the next click lands on something else.
@@ -261,6 +266,7 @@ export function App({root, interactive, mouseDebug = false}: Props) {
   const [view, setView] = useState<View>('changes');
   const [notice, setNotice] = useState<Notice | null>(null);
   const [mouse, setMouse] = useState(true);
+  const [follow, setFollow] = useState<Follow>('on');
   const [menu, setMenu] = useState<{open: number; item: number} | null>(null);
   const [frame, setFrame] = useState(0);
   const [sel, setSel] = useState<Record<Slot, string | null>>({changes: null, files: null, agents: null, usage: null, reader: null});
@@ -534,7 +540,7 @@ export function App({root, interactive, mouseDebug = false}: Props) {
   const chatName = chat ? (history.changes.find(c => c.chatId === chat)?.chat ?? 'one chat') : null;
   const inDiff = Boolean(current?.pins?.some(id => id.startsWith('f:')));
   const markdown = slot === 'reader' && Boolean(readerPath && isMarkdown(readerPath));
-  const list = menus({view, group, hideSpace, changedOnly, chat: chatName, folders: worktrees.length, scope, inDiff, markdown, raw, mouse});
+  const list = menus({view, group, hideSpace, changedOnly, chat: chatName, folders: worktrees.length, scope, inDiff, markdown, raw, follow: follow === 'on', mouse});
   // The card, and not the stream, on the two occasions there is no stream: the
   // first frames, and a folder Claude Code has never been run in. Files is left
   // alone — the tree is worth looking at whether or not anything was ever typed
@@ -659,7 +665,7 @@ export function App({root, interactive, mouseDebug = false}: Props) {
     // Leave room above the cursor for the rows pinned over it.
     const pinned = current?.pins?.length ?? 0;
     setScroll(s => {
-      const next = follow(s[slot], cursor, height, lines.length);
+      const next = keepInView(s[slot], cursor, height, lines.length);
       const lifted = cursor - next < pinned ? Math.max(0, cursor - pinned) : next;
       return lifted === s[slot] ? s : {...s, [slot]: lifted};
     });
@@ -678,6 +684,46 @@ export function App({root, interactive, mouseDebug = false}: Props) {
 
     return [...pinned, ...lines.slice(at + pinned.length, at + height)];
   }, [lines, at, height]);
+
+  // ---- follow mode ---------------------------------------------------------------
+
+  // The files the running turn was known to have touched at the last poll, and
+  // the one diff this opened. The set is remembered whether or not follow is
+  // on, so resuming shows what happens next rather than everything that
+  // happened while you were reading something else.
+  const touched = useRef<{turn: string; files: ReadonlySet<string>} | null>(null);
+  const showing = useRef<string | null>(null);
+  useEffect(() => {
+    if (!newest?.running) return;
+    const turn = turnKey(newest);
+    // The snapshot's list, not the transcript's: a file a shell command
+    // changed without naming it counts exactly as much as an edit.
+    const files = new Set(newest.files.filter(file => file.known).map(file => file.rel));
+    const was = touched.current;
+    touched.current = {turn, files};
+    if (follow !== 'on' || slot !== 'changes' || group !== 'turn') return;
+    // Nothing is new about a turn this is seeing for the first time.
+    if (!was || was.turn !== turn) return;
+    const fresh = [...files].find(rel => !was.files.has(rel));
+    if (!fresh) return;
+
+    // One followed diff at a time: the one before it closes as this opens, so
+    // the block does not grow a tail of everything the turn has ever touched.
+    const want = fileKey(turn, fresh);
+    setOpen(o => {
+      const next = new Set(o.files);
+      if (showing.current) next.delete(showing.current);
+      next.add(want);
+      return {...o, files: next};
+    });
+    showing.current = want;
+    anchor.current = {id: `f:${want}`, y: 3, slot: 'changes'};
+    setSel(s => ({...s, changes: `f:${want}`}));
+  }, [history.version]);
+
+  // Anything you do with the keyboard or the mouse, `f` aside, hands the page
+  // back to you until you ask for it again.
+  const pause = () => setFollow(f => (f === 'on' ? 'paused' : f));
 
   // ---- doing things -------------------------------------------------------------
 
@@ -776,6 +822,10 @@ export function App({root, interactive, mouseDebug = false}: Props) {
         return setFolded(next);
       }
 
+      // No notice: the footer says `following` or `follow` either way, and a
+      // message there would cover the hints it is one of.
+      case 'follow':
+        return setFollow(follow === 'on' ? 'off' : 'on');
       case 'mouse':
         stdout.write(mouse ? MOUSE_OFF : MOUSE_ON);
         setMouse(!mouse);
@@ -929,6 +979,7 @@ export function App({root, interactive, mouseDebug = false}: Props) {
 
   const onMouse = (event: MouseEvent) => {
     if (mouseDebug) say(`${event.kind} ${event.button} col ${event.x} row ${event.y}`);
+    pause();
     const inStream = event.y >= top.length && event.y < top.length + height;
 
     if (event.kind === 'wheel') {
@@ -996,6 +1047,7 @@ export function App({root, interactive, mouseDebug = false}: Props) {
       const event = parseMouse(input);
       if (event) return mouse ? onMouse(event) : undefined;
       if (notice) setNotice(null);
+      if (input !== 'f') pause();
 
       if (menu) {
         const items = list[menu.open]!.items;
@@ -1023,6 +1075,7 @@ export function App({root, interactive, mouseDebug = false}: Props) {
       if (input === 'q') return exit();
       // `?` is where people look for help, and the menus are the help.
       if (input === 'm' || input === '?') return setMenu({open: 1, item: firstItem(1)});
+      if (input === 'f') return follow === 'paused' ? setFollow('on') : run({do: 'follow'});
       if (input === 'M') return run({do: 'mouse'});
       if (input === '1') return run({do: 'view', view: 'changes'});
       if (input === '2') return run({do: 'view', view: 'files'});
@@ -1124,13 +1177,16 @@ export function App({root, interactive, mouseDebug = false}: Props) {
   // row inside something that is open is the one that has pins.
   const verb: Hint = ['enter', current?.hint ?? 'open'];
   const back: Hint[] = current?.pins?.length ? [['esc', 'back']] : [];
+  // Follow mode says which it is where it is turned on and off: lit while the
+  // pane is opening the running turn's files, quiet while the page is yours.
+  const trail: Hint = follow === 'on' ? ['f', 'following', theme.accent] : ['f', 'follow'];
   const hints: Hint[] =
     slot === 'changes'
       ? inDiff
         ? [verb, ...back, ['m', 'menu'], ['↑↓', 'line'], [']', 'hunk'], ['o', 'open'], ['z', 'fold all']]
         : agentsRunning
-          ? [verb, ...back, ['3', 'agents'], ['m', 'menu'], ['↑↓', 'move']]
-          : [verb, ...back, ['m', 'menu'], ['↑↓', 'move'], [']', 'next'], ['v', 'group']]
+          ? [verb, ...back, ['3', 'agents'], ['m', 'menu'], ['↑↓', 'move'], trail]
+          : [verb, ...back, ['m', 'menu'], ['↑↓', 'move'], trail, [']', 'next'], ['v', 'group']]
       : slot === 'files'
         ? peekPath
           ? [verb, ...back, ['o', 'read all'], ['m', 'menu'], [']', 'next change']]
