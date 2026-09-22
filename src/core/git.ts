@@ -257,6 +257,24 @@ export async function defaultBranch(root: string): Promise<string | null> {
   return name;
 }
 
+const branches = new Map<string, string | null>();
+
+// Which branch this folder is on, or null for a detached head. `loadGit` reads
+// the same thing, but the rule for "merged" has to hold on the very first poll,
+// before any of that has reached the pane.
+export async function branchOf(root: string): Promise<string | null> {
+  const head = await headSha(root);
+  if (!head) return null;
+  const key = `${pathKey(root)}\0${head}`;
+  const hit = branches.get(key);
+  if (hit !== undefined) return hit;
+
+  const name = (await git(root, ['symbolic-ref', '--short', 'HEAD']))?.trim() || null;
+  if (branches.size >= KEEP_LOGS) branches.clear();
+  branches.set(key, name);
+  return name;
+}
+
 const upstreams = new Map<string, string | null>();
 
 // The branch this one tracks, when it has one. On the trunk itself that is the

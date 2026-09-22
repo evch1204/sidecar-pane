@@ -114,6 +114,11 @@ Sidecar pane ──watches──▶ events.jsonl      (what is Claude doing righ
 - Done: the chrome — two menus, pills under the tabs, each end of the bar its
   own button, a footer that puts the hints before the branch name, and a
   scrollbar that doubles as a minimap.
+- Done: Version 4 of the look — a past turn is one row with its size as five
+  cells and where it stands in git, an open turn groups its files by folder,
+  agents are named and charted the way Claude Code prints them, lanes on a
+  clock in the Agents view, and worktrees as a map and a scope (see
+  "Worktrees").
 - Not yet: launchers for anything but Windows Terminal, follow mode, a
   "waiting for you" state (the transcripts do not say when Claude is blocked on
   a permission prompt).
@@ -130,27 +135,38 @@ create mode), where a turn is a block and a diff opens under the row you
 clicked.
 
 ```
- ◆ Sidecar  View        5h ▄▄▄▄▄▄ 58% · 1h 52m  wk 23%   ⠴ working
+ ◆ Sidecar  View        5h ▄▄▄▄▄▄ 58%  1h 52m · wk 23%   ● idle
 
-  Changes   Files   Agents ⠴ 2   Usage
-  By turn  ·  By file  ·  All                      5 uncommitted
+  Changes   Files   Agents   Usage
+  By turn  ·  By file  ·  Uncommitted           in jiaolong ▾
 
- Day 3 launchers                                            today
- ⠴ build the rest of the day 3 launchers in parallel.       19:31
- │ one agent per terminal: wezterm, iterm2, kitty
- │ running  ·  3 files  +18 −1  ·  3 agents  ·  3m 16s
+ TODAY   Layout polish, usage and agents   11 turns  ·  5h 40m
+         ▄▄ ▄▄ ▄▄ ▄▄ ▄▄ ▄▄ ▄▄ ▄▄ ▄▄ ▄▄ ▄▄        +4,180 −1,630
+
+ ●  i think option 3 is exactly what i want. and when i… 13:05
+ │  ▐8 files▌ ▐+310▌ ▐−76▌  14m · 1 agent        ▐✓ merged▌
+ │  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+ │  ■ src/core 58%   ■ src/ui 31%   ■ docs 11%
  │
- │ ▸ Edited   src/launch/index.ts  A1 A2 ⚠               +2    −1
- │ ▸ Created  src/launch/kitty.ts  A3                    +8
- │ ▸ Created  src/launch/wezterm.ts  A1                  +8
- ├─ ✓ A1 Write the WezTerm launcher                 1m 45s   73k
- ├─ ⠴ A2 Try the AppleScript split                  3m 01s   98k
- │  │    Bash  osascript split.scpt
- ├─ ⠴ A3 Write kitty.ts                             3m 01s   93k
- │ ⠴ Bash     Wait for the agents                        4 steps
+ │  src/core
+ │   M  turns.ts                          ▄▄▄▄▄   +114   −12
+ │   M  git.ts                            ▄▄▄▄▄    +96
+ │  src/ui
+ │   M  views/changes.ts                  ▄▄▄▄▄    +17    −5
+ │  docs
+ │   A  scratch-notes.md   not recorded   ▄▄▄▄▄
+ │
+ │  ▸ 40 steps   Read 14  Edit 11  Bash 9           1 agent
+ │  ✦ Turns the pane did not watch now read their files
+ │    from the commits made before your next prompt. more
+ │
+ │  ◆ 2fa351d  Fill a turn nobody watched from commits  13:19
+ │  ✓ bffa4d9  merged into improve-pane-layout-polish   13:20
 
- ▸ add a tmux launcher and wire it into the launcher list   19:00
-   3 files  +12 −3  ·  3m 30s
+ ●  wait im not sure about the new…   no file changes   12:58
+ ●  so i currently dont see any cha… 4 files ▄▄▄▄▄ ✓    12:41
+ ●  sorry i forgot to pull from mai… 20 files ▄▄▄▄▄ ◆3   11:21
+ ●  try running orchestrating agent…         4 agents   11:14
 ```
 
 Decisions, and why:
@@ -159,8 +175,34 @@ Decisions, and why:
   indexes them, a click maps onto them. There is one array, so the three cannot
   disagree. `src/ui/cells.ts` is that model; nothing else draws.
 - **A turn is a block, and your prompt is its title.** Not a summary: the words
-  you typed are the reason the files moved. The newest turn starts open, the
-  rest are two quiet lines each.
+  you typed are the reason the files moved. The newest turn starts open.
+- **A past turn is one row.** It used to be two, and the second one was a dim
+  sentence of facts you could not compare across turns. Now the row is your
+  prompt, cut in the same column on every row, and then a fixed right side:
+  how many files, how big it was, where it stands in git, the time. A list of
+  twenty turns reads down its columns.
+- **Numbers as shapes.** A size is five cells — `▄▄▄▄▄` — lit by the lines the
+  turn changed: one cell under ten, two under fifty, three under a hundred and
+  fifty, four under five hundred, five above. The red part is the share that
+  was removed, and a turn that removed anything keeps at least one red cell
+  and one green, so neither side is ever rounded away. This is on purpose
+  imprecise: "small, medium, big, huge" is what a glance wants, and the exact
+  `+114 −12` is one row further in, on the file it belongs to. Chips do the
+  same for the open turn: a figure on a little ground reads as a badge, and
+  `+310` in green on green is a number you can find without reading the row.
+- **Files by folder.** A turn's files are grouped under the first two segments
+  of their path — `src/ui/views/changes.ts` is `src/ui` — biggest folder
+  first, each file named relative to its folder. Eight file rows all starting
+  `src/ui/views/` were eight rows of the same eleven characters.
+- **Where it landed.** Above the files, one bar split by folder and a legend
+  that names the parts with their share. Only drawn when there are two or
+  more folders, because one folder is already the heading under it. It answers
+  "did this turn touch the thing I care about?" before you read a single path.
+- **The day's skyline.** A day heads the stream with its name, the chat's
+  title, the turn count and how long the day ran, and under that one column
+  pair per turn in time order, its height the same size rule. Where the big
+  turns of the day were is a shape, and each pair is a click that goes to
+  that turn.
 - **Things open where they are.** A file's diff opens under its row, a file's
   contents under its name in the tree, an agent's steps under the agent. Esc or
   ← walks back up to the row that owns what you are in. So a peek's last row
@@ -200,6 +242,29 @@ Decisions, and why:
   build, for the same reasons: columns are scarce and syntax colour matters.
 - **Every tool call is one folded row.** In auto mode a turn is sixty shell
   commands. The list is there when you want it and one line when you do not.
+- **Where a turn stands in git.** Every turn, watched or not, gets the commits
+  whose time falls inside its window, and those commits are the receipt: one
+  row each at the end of the block — `◆ 2fa351d  Fill a turn nobody watched`,
+  or `✓ bffa4d9  merged into improve-pane-layout-polish` for a merge — and one
+  chip on the open turn saying where it all got to. A past turn carries the
+  same news as a mark in its right side: `✓` merged, `◆3` three commits and
+  not merged yet, nothing at all for a turn that never left the working tree.
+
+  The rule, exactly:
+
+  | Chip | When |
+  |---|---|
+  | `✓ merged` | the newest of its commits is an ancestor of the default branch (`origin/HEAD`, else `main`, else `master`) and HEAD is **not** that branch. Sitting on the trunk itself, merged can only mean pushed, so it is measured against the branch the trunk tracks |
+  | `◆ committed` | it has commits, and they have not arrived there — including on a trunk with no upstream, where there is nothing to arrive at |
+  | `● uncommitted` | no commits, and a file it changed is dirty in git right now |
+  | nothing | no commits and nothing dirty: a turn that only read, or whose work is long gone |
+
+  What it cannot know: which of a turn's commits was "the" commit (it names
+  them all), whether a squash or a rebase carried the work in under another
+  sha (a rewritten commit is not an ancestor of anything, so it reads
+  `committed` for good), and which branch a merge brought in — the name on the
+  merge row is the branch it landed **on**, which is the branch the pane is
+  sitting on, because that is whose history the commits were read from.
 - **Three groupings, one key (`v`):** by turn, by file (which prompts touched
   this file?), and everything since the last commit.
 - **A menu bar, not a legend.** Everything a key can do is also in a menu, and
@@ -211,10 +276,13 @@ Decisions, and why:
   of the view you are in, so nothing on it is ever dead. A "Group" menu that
   belonged to one view had no business sitting on the bar in the other three.
 - **State is a row of pills, not a dim sentence.** Under the tabs, `By turn ·
-  By file · All` for Changes and `All · Changed N` for Files: each one says
-  what is showing and sets it in one click. A filter that is on is a pill too,
-  and clicking it clears it. A narrow pane keeps only the lit pill and cycles
-  through the rest on a click.
+  By file · Uncommitted` for Changes and `All · Changed N` for Files: each one
+  says what is showing and sets it in one click. A filter that is on is a pill
+  too, and clicking it clears it. A narrow pane keeps only the lit pill and
+  cycles through the rest on a click. The right end of that row is the scope
+  pill, `in jiaolong ▾`, in a repository that has more than one folder; it
+  replaces the `N uncommitted` count there, and at forty columns it gives way
+  to the grouping pills, which say what the list itself is.
 - **No restore, no hover.** Sidecar is a viewer; and hover needs a mouse report
   per cell crossed.
 
@@ -255,10 +323,22 @@ show it. Workflows and background agents are the same files on disk.
 
 Decisions, and why:
 
+- **An agent is its job, not a label.** It used to be `A1`, `A2`, `A3`, and the
+  label was dead weight: nobody thinks "what is A2 doing". An agent is the few
+  words Claude gave it — `Write the WezTerm launcher` — with a `■` in front in
+  its own hue. The hue comes from the order it started inside its turn, so the
+  same agent is the same colour in its row, on the files it wrote and in its
+  lane. The same squares mark the files: two of them on one file row, plus
+  `⚠ two agents`, is the one thing a list of agents cannot say.
+- **A chip only for what is not the default.** A `general-purpose` agent on the
+  chat's own model says nothing worth two columns, so it gets no chip; a kind
+  Claude chose (`Explore`) or a model that differs (`Opus 4.5`) does.
 - **The turn is the root and the agents are branches** off the same left line,
-  with `├─` and `└─`. The status glyph comes first, then the label, then the
-  job; elapsed time and tokens are in fixed columns on the right. A running
-  agent gets one dim second line: the step it is on.
+  with `├─` and `└─`, under a head row that counts them: `⠹ 3 agents · 2
+  running · 1 done` with the tokens on the right. The count comes first
+  because it is the thing you are looking for. Under a running agent hangs
+  `⎿ Bash  npx tsc --noEmit` and how many calls it has made; under a finished
+  one, the calls and the files it left behind.
 - **Quiet is not the same as stopped.** An agent that is inside a tool call, or
   waiting on a child agent, writes nothing to its own transcript while it is
   plainly alive. The notification answers it outright, so the timers only cover
@@ -272,6 +352,96 @@ Decisions, and why:
 - **The tab only exists when there is something on it:** an agent running, or
   an agent that belongs to the chat this pane is following. It never vanishes
   while you are looking at it, and `3` always opens it.
+
+### The Agents view: lanes on a clock
+
+The Changes view answers "what did this turn do". The Agents view answers
+"who was working, when, and where", and that is a chart, not a list.
+
+```
+ ●  i think right now there is overall needs to have a…  11:21
+ │  9 agents  ·  at most 3 at once  ·  1h 18m
+ │
+ │                        11:21       12:00      12:39
+ │  in jiaolong   the folder you are in              read only
+ │  Audit Usage view      ▄                          ✓  2m 39s
+ │  Audit Agents view     ▄                          ● stopped
+ │  Phase 1 · left line        ▄▄▄▄▄▄                ✓ 18m 02s
+ │
+ │  in three worktrees   one agent in each          ✓ 3 merged
+ │  Phase 2a · Usage                  ▄▄▄▄           ✓ 12m 50s
+ │  Phase 2b · Agents                 ▄▄▄▄▄▄         ✓ 18m 35s
+```
+
+- **One clock a turn.** Every agent of a turn is a bar on the same 26 cell
+  axis, its start and end mapped onto the span the turn's agents cover, and a
+  running one stretches that span to now. Four short bars at the left and one
+  long bar after them is "it thought, then it worked". Three bars in a column
+  is work that really happened at once — and `at most 3 at once` says so in
+  words, because three bars in a column and three bars in a row look more
+  alike than they should.
+- **The bar's colour is what the agent did**: its own hue when it wrote files,
+  dim when it only read, accent while it runs, faint when it was stopped.
+- **Grouped by the folder it worked in**, with a heading per group: `in
+  jiaolong`, or `in agent-a764` for a worktree, or `in three worktrees` when
+  Claude gave each of three agents one of its own. The heading carries the
+  state of that folder on the right — `✓ 3 merged`, `read only` — which is the
+  other thing a list of rows cannot show: whose changes are in your folder and
+  whose are not.
+- **Exact, and guessed.** The bars are exact: every agent's transcript carries
+  the time of its first and last line, and the notification says when it
+  ended. What it wrote is a hint, as everywhere: Edit and Write calls name
+  their file, a shell command does not. Below 56 columns there is no room for
+  a lane, so the rows fall back to the branch form of the Changes view.
+
+## Worktrees
+
+Claude Code gives a background agent a git worktree of its own: the same
+repository checked out into another folder, on its own branch, so several
+agents can edit the same files at once without meeting. The pane's folder is
+one of those folders too.
+
+That broke the pane's one promise. An agent would work for twenty minutes and
+the pane showed nothing: no files changed here, because nothing changed here.
+Then the branch was merged and forty files appeared at once, with no turn to
+hang them on.
+
+- **How they are found.** `git worktree list --porcelain` from the pane's
+  folder gives every folder, its branch and its head. Which agent is in which
+  comes from the agent's own meta file (`worktreePath`, `worktreeBranch`) and,
+  for an agent without one, from the `cwd` every transcript line carries.
+  `src/core/worktrees.ts` answers two questions per folder: how far it has
+  gone (dirty, `↑N` ahead) and whether it has arrived here (merged, and when).
+- **Scope: mine or all.** `mine` is the pane's folder plus every worktree an
+  agent of its chats is working in, or worked in today. `all` is every
+  worktree of the repository. `w`, or the scope pill, switches. With more than
+  one folder in scope the WORKTREES map heads the stream — one row a folder,
+  filled node for active, `↑N`, and what it is doing — every block's title
+  carries its folder's chip, and a worktree an agent is working in is a block
+  of its own, saying the truth on its right: `not in your folder until it is
+  merged`.
+- **`all` really does widen the data.** A chat is keyed by the folder it was
+  typed in, so a chat that ran in another worktree has a transcript directory
+  of its own that is invisible from here. In `all`, `src/core/folders.ts`
+  reads each folder's transcripts, subagents and git the same way the pane
+  reads its own, and the turns are interleaved by time and tagged with their
+  folder. There are no snapshots there — sidecar only ever watched the folder
+  it runs in — so those turns are filled in from that folder's own commits.
+- **Remembered heads.** A merged agent worktree is usually deleted the moment
+  it lands, which is exactly when you want to know it landed. So while the
+  pane runs it writes each worktree's head into
+  `~/.sidecar/<project>/worktrees.json`. A head we remember that is now an
+  ancestor of this folder's head reads `✓ merged HH:MM` — the time of the
+  commit that brought it in — even after the folder is gone. One that is gone
+  and never arrived reads `removed`. **If the pane was not running when it
+  existed, nothing wrote its head down**, and then the row says `not
+  recorded`: the branch and the folder are both gone and there is nothing left
+  to measure.
+- **Cost.** A folder somebody is working in is read every poll, like the rest
+  of the pane; an idle one every thirty seconds. Per folder that is a `git
+  status`, a `rev-list --count` and a `diff --numstat`, all cached by its head
+  and its status text, so a folder nothing moved in costs nothing. Only `all`
+  reads other folders' transcripts, and at most eight folders.
 
 ## Usage
 
@@ -445,6 +615,9 @@ Every line carries what a click on it does, so a row is a button.
 | `working` / `idle` | go to Changes | | |
 | A tab | switch view | | |
 | A pill | show that grouping, or clear that filter | | |
+| `in <folder> ▾` at the right of the pills | widen the Changes view to every worktree, or back to this folder (`w`) | | |
+| A column of the day's skyline | jump to that turn | | |
+| The WORKTREES header | fold or unfold the map | | |
 | A turn, a file, an agent, "more", Steps | open or close it in place | scroll | |
 | A hunk header | fold or unfold | scroll | |
 | A gap | open it | scroll | |

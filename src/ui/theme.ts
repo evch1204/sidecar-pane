@@ -61,9 +61,6 @@ export const theme = {
   tintDel: '#33161A',
 } as const;
 
-// Subagents are told apart by a label first and a colour second.
-export const agentColours = [theme.link, theme.string, theme.warn, theme.keyword] as const;
-
 // Models are told apart by colour alone — the same hue carries a model's own
 // line, its slice of the stacked bar and its chip in the legend — so this list
 // keeps clear of the colours that already mean something: `accent` is the
@@ -111,6 +108,12 @@ export const glyph = {
   guide: '│',
   branch: '├─',
   branchLast: '└─',
+  // The same two joints in one column, for a map whose rows are three columns
+  // wide and cannot spend two of them on a rule.
+  tee: '├',
+  teeLast: '└',
+  // How far ahead of where it is going a folder is: `↑22`.
+  ahead: '↑',
   // The one separator between facts on a row, with two spaces either side.
   sep: '·',
   rule: '─',

@@ -1,8 +1,8 @@
 import path from 'node:path';
 import {buildDiff, type FileDiff, type FileStatus} from './diff';
 import {
-  commitsSince, defaultBranch, EMPTY_TREE, isAncestor, patchBetweenCommits, pathKey, statBetweenCommits, upstreamOf,
-  type Commit, type GitState,
+  branchOf, commitsSince, defaultBranch, EMPTY_TREE, isAncestor, patchBetweenCommits, pathKey, statBetweenCommits,
+  upstreamOf, type Commit, type GitState,
 } from './git';
 import type {Session, Turn} from './sessions';
 import {after, before, covered, patchFile, statBetween, type Store} from './snapshot';
@@ -28,6 +28,10 @@ export type TurnChange = {
   turn: Turn;
   chat: string;
   chatId: string;
+  // The folder this turn was typed in. The pane's own folder for everything it
+  // reads itself; another worktree of the same repository when the stream is
+  // covering all of them.
+  folder: string;
   files: ChangedFile[];
   added: number;
   removed: number;
@@ -140,10 +144,14 @@ async function fromCommits(root: string, matched: Map<TurnChange, Commit[]>): Pr
 // project's trunk, or, when the pane is sitting on the trunk itself, whatever
 // that trunk tracks — there "merged" can only mean pushed. Null when there is
 // nothing to compare with, and then `committed` is the most a turn can say.
+//
+// Which branch we are on is read from git rather than taken from `state`,
+// which is null until the pane's second poll: without that, a repo sitting on
+// its own trunk called its every commit merged for one frame.
 async function trunkOf(root: string, state: GitState | null): Promise<string | null> {
   const branch = await defaultBranch(root);
   if (!branch) return null;
-  const here = state?.branch ?? '';
+  const here = state?.branch ?? (await branchOf(root)) ?? '';
   if (here && (here === branch || `origin/${here}` === branch)) return upstreamOf(root);
   return branch;
 }
@@ -196,6 +204,7 @@ export async function loadTurns(
         turn,
         chat: session.title || 'Untitled chat',
         chatId: session.id,
+        folder: root,
         files: [],
         added: 0,
         removed: 0,

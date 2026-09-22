@@ -4,6 +4,7 @@ import {useApp, useInput, useStdout} from 'ink';
 import {newAgentState, readAgents, type AgentRun} from '../core/agents';
 import {expandGap, loadDiff, type DiffLine, type DiffState} from '../core/diff';
 import {readFileView, type FileView} from '../core/file';
+import {loadFolders} from '../core/folders';
 import {changedLines, loadGit, pathKey, type GitState} from '../core/git';
 import {highlightLines} from '../core/highlight';
 import {formatMarkdown, isMarkdown} from '../core/markdown';
@@ -26,7 +27,7 @@ import {
   changedPlaces, filesLines, firstReadId, MORE_ROWS, nodeId, paperMeasure, peekEnd, readerHead, readerIdAt,
   readerLineOf, readerLines, type Marks,
 } from './views/files';
-import {usageExtras, usageLines, type ExtrasRoom} from './views/usage';
+import {METERS_MIN, usageExtras, usageLines} from './views/usage';
 
 type Props = {
   root: string;
@@ -47,7 +48,7 @@ const SLOW_MS = 30_000;
 const SPIN_MS = 250;
 const WHEEL_ROWS = 3;
 const GROUPS: Group[] = ['turn', 'file', 'flat'];
-const GROUP_PILL: Record<Group, string> = {turn: 'By turn', file: 'By file', flat: 'All'};
+const GROUP_PILL: Record<Group, string> = {turn: 'By turn', file: 'By file', flat: 'Uncommitted'};
 
 const NONE: ReadonlySet<string> = new Set();
 const CLOSED: Open = {turns: NONE, files: NONE, more: NONE, steps: NONE, says: NONE, agents: NONE, folded: NONE, hists: NONE};
@@ -173,6 +174,25 @@ function useWorktrees(root: string, agents: AgentRun[], git: GitState | null, li
   return trees;
 }
 
+// The chats of the repository's other folders. A chat is keyed by the folder it
+// was typed in, so an agent working in its own worktree has a whole history of
+// its own that is invisible from here. Only read while the stream is covering
+// every folder, and `loadFolders` itself leaves an idle folder alone between
+// slow polls.
+function useFolders(paths: string[], on: boolean, live: boolean) {
+  const key = paths.join('\0');
+  const latest = useRef(paths);
+  latest.current = paths;
+  const [state, setState] = useState<{changes: TurnChange[]; agents: AgentRun[]}>({changes: [], agents: []});
+  usePolling(async () => {
+    const read = await loadFolders(latest.current, Date.now());
+    setState({changes: read.flatMap(one => one.changes), agents: read.flatMap(one => one.agents)});
+  }, [key], on && paths.length > 0, live);
+  // Nothing of theirs is on screen while the scope is this folder, and a stale
+  // list would come back the moment it widened again.
+  return on ? state : {changes: [], agents: []};
+}
+
 // The tokens and the limits are read in every view, because the right end of
 // the menu bar shows them everywhere. Only the Usage view needs them fresh.
 function useUsage(showing: boolean, live: boolean) {
@@ -231,6 +251,9 @@ export function App({root, interactive, mouseDebug = false}: Props) {
   // Changes.
   const [group, setGroup] = useState<Group>('turn');
   const [chat, setChat] = useState<string | null>(null);
+  // How much of the repository the stream covers: this folder and wherever its
+  // agents are working, or every worktree of it.
+  const [scope, setScope] = useState<'mine' | 'all'>('mine');
   const [open, setOpen] = useState<Open>(CLOSED);
   const [diffs, setDiffs] = useState<ReadonlyMap<string, DiffGroup[]>>(new Map());
   const [folded, setFolded] = useState<ReadonlySet<string>>(NONE);
@@ -267,6 +290,24 @@ export function App({root, interactive, mouseDebug = false}: Props) {
   const working = Boolean(newest?.running);
   const agentsRunning = runningAgents(history.agents, now);
   const worktrees = useWorktrees(root, history.agents, git, interactive, working || agentsRunning > 0);
+  // Every other folder of this repository that is still on disk. Its own chats
+  // are only read while the stream is covering all of them.
+  const elsewhere = useMemo(
+    () => worktrees.filter(wt => !wt.here && !wt.gone).map(wt => wt.path).sort(),
+    [worktrees],
+  );
+  const others = useFolders(elsewhere, scope === 'all', interactive);
+  // One stream, in the order it all happened. The pane's own turns keep every
+  // other job they had: the diffs, the file histories and the Agents view are
+  // about the folder you are in.
+  const timeline = useMemo(
+    () => (others.changes.length ? [...mine, ...others.changes].sort((a, b) => a.turn.at - b.turn.at) : mine),
+    [mine, others.changes],
+  );
+  const streamAgents = useMemo(
+    () => (others.agents.length ? [...history.agents, ...others.agents] : history.agents),
+    [history.agents, others.agents],
+  );
   // The chat's own model. An agent is only worth a model chip when its model
   // is not this one, and a turn still waiting for its first reply has none.
   const chatModel = useMemo(
@@ -288,7 +329,7 @@ export function App({root, interactive, mouseDebug = false}: Props) {
     let alive = true;
     const load = async (key: string): Promise<DiffGroup[]> => {
       const at = key.indexOf('|');
-      const scope = key.slice(0, at);
+      const owner = key.slice(0, at);
       const rel = key.slice(at + 1);
       // `dead` is what to say when there is nothing left to show at all.
       const fromGit = (note?: string, dead?: string): DiffGroup[] => {
@@ -298,8 +339,15 @@ export function App({root, interactive, mouseDebug = false}: Props) {
           : [{key: 'none', band: null, file: null, note: dead ?? 'Nothing to show: this file matches the last commit.'}];
       };
 
-      if (scope === 'git') return fromGit();
-      const change = history.changes.find(c => turnKey(c) === scope);
+      if (owner === 'git') return fromGit();
+      const change = timeline.find(c => turnKey(c) === owner);
+      // A turn typed in another worktree: its lines are in that folder's own
+      // history, and this folder's git knows nothing about them.
+      if (change && change.folder !== root) {
+        settled.current.add(key);
+        return [{key: 'none', band: null, file: null, note: `That turn happened in ${path.basename(change.folder)}. Its diff lives in that folder.`}];
+      }
+
       // Snapshots or commits, whichever recorded this turn; a file only the
       // transcript named has neither, so it falls through.
       if (change?.measured && change.files.find(f => f.rel === rel)?.known) {
@@ -388,8 +436,9 @@ export function App({root, interactive, mouseDebug = false}: Props) {
       return {
         head: [],
         lines: changesLines({
-          cols, now, frame, root, group, changes: mine, histories, flat: diff ? diff.files : null, agents: history.agents,
-          open, diffs, folded, opened, hideSpace, sel: at, worktrees, scope: 'mine', chatModel,
+          cols, now, frame, root, group, changes: timeline, histories, flat: diff ? diff.files : null, agents: streamAgents,
+          open, diffs, folded, opened, hideSpace, sel: at, worktrees, scope, chatModel,
+          branch: git?.branch ?? '', working,
         }),
       };
     }
@@ -398,7 +447,7 @@ export function App({root, interactive, mouseDebug = false}: Props) {
       return {
         head: [],
         lines: agentsLines({
-          cols, now, frame, root, changes: history.changes, agents: history.agents, open, sel: at, worktrees, chatModel,
+          cols, now, frame, root, changes: history.changes, agents: history.agents, open, sel: at, worktrees, scope, chatModel,
         }),
       };
     }
@@ -444,7 +493,8 @@ export function App({root, interactive, mouseDebug = false}: Props) {
 
     return {...made, index};
   }, [
-    slot, sel, cols, now, frame, group, mine, histories, diff, history.agents, worktrees, chatModel, open, diffs, folded, opened, hideSpace,
+    slot, sel, cols, now, frame, group, scope, timeline, streamAgents, histories, diff, history.agents, worktrees, chatModel, working,
+    open, diffs, folded, opened, hideSpace,
     nodes, git, changedOnly, peekPath, peekFile.view, peekFile.segments, peekFile.marks, peekFrom, peekRows,
     readerPath, readFile.view, readFile.segments, readFile.marks, formatted, spends, limits, root,
   ]);
@@ -465,19 +515,20 @@ export function App({root, interactive, mouseDebug = false}: Props) {
   const chatName = chat ? (history.changes.find(c => c.chatId === chat)?.chat ?? 'one chat') : null;
   const inDiff = Boolean(current?.pins?.some(id => id.startsWith('f:')));
   const markdown = slot === 'reader' && Boolean(readerPath && isMarkdown(readerPath));
-  const list = menus({view, group, hideSpace, changedOnly, chat: chatName, inDiff, markdown, raw, mouse});
-  const status: Seg[] = working
-    ? [seg(spinner(frame), theme.accent), seg(' working', theme.ink)]
-    : agentsRunning
-      ? [seg(spinner(frame), theme.accent), seg(` ${agentsRunning} agent${agentsRunning === 1 ? '' : 's'}`, theme.ink)]
+  const list = menus({view, group, hideSpace, changedOnly, chat: chatName, folders: worktrees.length, scope, inDiff, markdown, raw, mouse});
+  // Agents come first: while a fan-out is running, how many of them there are
+  // is the news, and the turn they belong to is working by definition.
+  const status: Seg[] = agentsRunning
+    ? [seg(spinner(frame), theme.accent), seg(` ${agentsRunning} agent${agentsRunning === 1 ? '' : 's'}`, theme.ink)]
+    : working
+      ? [seg(spinner(frame), theme.accent), seg(' working', theme.ink)]
       : [seg(glyph.dot, theme.faint), seg(' idle', theme.dim)];
   // What is left of the bar once the menus and the status have had their
   // columns. The meters shrink in steps and then go, so the menus always fit.
   const barLeft = 2 + list.reduce((n, m) => n + m.title.length + 2, 0);
   const metersRoom = cols - barLeft - 2 - widthOf(status) - 3;
-  const room: ExtrasRoom = metersRoom >= 30 ? 'full' : metersRoom >= 24 ? 'noWeek' : 'plain';
-  const extras = usageExtras(limits, now, {spends, room});
-  const bar = menuBar(cols, list, menu?.open ?? null, {meters: widthOf(extras) <= metersRoom ? extras : [], status});
+  const extras = metersRoom >= METERS_MIN ? usageExtras(limits, now, {spends, room: metersRoom}) : [];
+  const bar = menuBar(cols, list, menu?.open ?? null, {meters: extras, status});
 
   const uncommitted = git ? [...git.changes.values()].filter(c => c.status !== 'D').length : 0;
   const showAgents = agentsTabVisible(history.changes, history.agents, now) || view === 'agents';
@@ -497,8 +548,25 @@ export function App({root, interactive, mouseDebug = false}: Props) {
             {label: uncommitted ? `Changed ${uncommitted}` : 'Changed', on: changedOnly, act: {type: 'filter', what: 'changedOnly', on: true}},
           ]
         : [];
-  const note: Seg[] = view === 'changes' && uncommitted ? [seg(`${uncommitted} uncommitted`, theme.dim)] : [];
-  const pillsLine = pills.length ? pillRow(cols, pills, note) : null;
+  // The right end of the pills row. A repository with more than one folder has
+  // something to say there that a count of dirty files cannot: which folders
+  // this stream is covering, and one click to widen it.
+  const folders = worktrees.length;
+  const scopePill: Seg[] =
+    view === 'changes' && folders > 1
+      ? [
+          seg('in ', theme.faint),
+          seg(scope === 'all' ? `all ${folders} worktrees` : project, scope === 'all' ? theme.accent : theme.text, {bold: true}),
+          seg(` ${glyph.open}`, theme.dim),
+        ]
+      : [];
+  const note: Seg[] = scopePill.length
+    ? scopePill
+    : view === 'changes' && uncommitted
+      ? [seg(`${uncommitted} uncommitted`, theme.dim)]
+      : [];
+  const scopeAct: Act | undefined = scopePill.length ? {type: 'scope', scope: scope === 'all' ? 'mine' : 'all'} : undefined;
+  const pillsLine = pills.length ? pillRow(cols, pills, note, scopeAct) : null;
   const blank: Line = {segs: [sp(cols)]};
   const top: Line[] = roomy
     ? [bar.line, blank, tabs, ...(pillsLine ? [pillsLine] : []), blank, ...head, ...(head.length ? [blank] : [])]
@@ -615,6 +683,14 @@ export function App({root, interactive, mouseDebug = false}: Props) {
         return setChat(ids[(chat ? ids.indexOf(chat) : -1) + 1] ?? null);
       }
 
+      case 'scope': {
+        // No notice: the pill at the right of the pills row says which.
+        if (worktrees.length < 2) return refuse('This repository has one folder, so there is nothing else to show.');
+        setView('changes');
+        setGroup('turn');
+        return setScope(command.to ?? (scope === 'all' ? 'mine' : 'all'));
+      }
+
       case 'whitespace':
         setHideSpace(!hideSpace);
         return say(hideSpace ? 'Showing whitespace changes.' : 'Hiding whitespace-only changes.');
@@ -674,6 +750,8 @@ export function App({root, interactive, mouseDebug = false}: Props) {
         return run({do: 'group', group: act.group});
       case 'filter':
         return act.what === 'chat' ? run({do: 'chat', to: act.on ? chat : null}) : run({do: 'changedOnly', on: act.on});
+      case 'scope':
+        return run({do: 'scope', to: act.scope});
 
       case 'turn':
         return setOpen(o => ({...o, turns: flipped(o.turns, act.key)}));
@@ -712,6 +790,16 @@ export function App({root, interactive, mouseDebug = false}: Props) {
 
       case 'goTurn': {
         const isNewest = newest ? turnKey(newest) === act.key : false;
+        const id = `t:${act.key}`;
+        // A click on the day's skyline is a click on a turn: its row opens and
+        // has to stay where it is, exactly as if the row itself was clicked.
+        // The row may be anywhere in the stream, or off screen entirely, so the
+        // anchor uses the screen row it is on now and otherwise the top.
+        if (slot === 'changes') {
+          const y = visible.findIndex(line => line.id === id);
+          anchor.current = {id, y: Math.max(0, y), slot: 'changes'};
+        }
+
         setReaderPath(null);
         setView('changes');
         setGroup('turn');
@@ -918,13 +1006,15 @@ export function App({root, interactive, mouseDebug = false}: Props) {
           return moveTo(parent ? nodeId(parent.path) : null);
         }
 
-        // On a row that is open: close it.
+        // On a row that is open: close it. A turn's own title row closes the
+        // turn whatever Enter does there — on a prompt too long for one line
+        // Enter shows the rest of it, and Esc still has to be the way out.
         const id = current?.id ?? '';
         const act = current?.act;
+        if (id.startsWith('t:') && lines[cursor + 1]?.pins?.includes(id)) return perform({type: 'turn', key: id.slice(2)});
         const isOpen =
           (act?.type === 'file' && open.files.has(act.key)) ||
-          (act?.type === 'toggle' && open[act.set].has(act.key)) ||
-          (act?.type === 'turn' && id.startsWith('t:') && lines[cursor + 1]?.pins?.includes(id) === true);
+          (act?.type === 'toggle' && open[act.set].has(act.key));
         return isOpen ? perform(act) : undefined;
       }
 
@@ -937,7 +1027,10 @@ export function App({root, interactive, mouseDebug = false}: Props) {
       if (slot === 'changes') {
         if (input === 'v') return run({do: 'group', group: GROUPS[(GROUPS.indexOf(group) + 1) % GROUPS.length]!});
         if (input === 's') return run({do: 'chat'});
-        if (input === 'w') return run({do: 'whitespace'});
+        // `w` is worth more on the folders than on whitespace: one of them is
+        // work you cannot see at all, the other is noise in a diff.
+        if (input === 'w') return run({do: 'scope'});
+        if (input === 'W') return run({do: 'whitespace'});
         if (input === 'z') return run({do: 'foldAll'});
         if (input === 'o') {
           if (!current?.at) return refuse('Move onto a line of a diff first.');
@@ -973,11 +1066,16 @@ export function App({root, interactive, mouseDebug = false}: Props) {
 
   // What this row does first, then the way back out, then the menu that holds
   // everything else. A narrow pane keeps the ones at the front.
+  // A running fan-out changes what the row under the cursor is for, and a
+  // repository with more than one folder has one more key worth knowing.
+  const wtHint: Hint[] = worktrees.length > 1 ? [['w', 'worktree']] : [];
   const hints: Hint[] =
     slot === 'changes'
       ? inDiff
         ? [['enter', 'fold'], ['esc', 'back'], ['m', 'menu'], ['↑↓', 'line'], [']', 'hunk'], ['o', 'open'], ['z', 'fold all']]
-        : [['enter', 'open'], ['m', 'menu'], ['↑↓', 'move'], [']', 'next'], ['v', 'group'], ['q', 'quit']]
+        : agentsRunning
+          ? [...wtHint, ['enter', 'open an agent'], ['3', 'agents'], ['m', 'menu'], ['↑↓', 'move']]
+          : [...wtHint, ['enter', 'open'], ['esc', 'back'], ['m', 'menu'], ['↑↓', 'move'], [']', 'next'], ['v', 'group']]
       : slot === 'files'
         ? peekPath
           ? [['o', 'read all'], ['esc', 'close'], ['m', 'menu'], [']', 'next change']]
@@ -985,7 +1083,7 @@ export function App({root, interactive, mouseDebug = false}: Props) {
         : slot === 'reader'
           ? [['↑↓', 'line'], ['esc', 'back'], ['m', 'menu'], [']', 'change'], ['space', 'scroll'], ...(markdown ? [['r', raw ? 'page' : 'source'] as Hint] : [])]
           : slot === 'agents'
-            ? [['enter', 'open'], ['m', 'menu'], ['↑↓', 'move'], ['q', 'quit']]
+            ? [['enter', 'open an agent'], ['esc', 'back'], ['m', 'menu'], ['↑↓', 'move']]
             : [['↑↓', 'scroll'], ['m', 'menu'], ['q', 'quit']];
 
   // The last column is a minimap. The thumb is a background, so a change mark

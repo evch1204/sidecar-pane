@@ -6,7 +6,7 @@ import {isMarkdown, type MdKind, type MdLine} from '../../core/markdown';
 import type {TreeNode} from '../../core/tree';
 import type {FileHistory} from '../../core/turns';
 import {
-  chevron, counts, pageRow, RIGHT_PAD, seg, slice, sp, spineRow, wellBottom, wellRow, wellTop, wellWidth, widthOf,
+  chevron, counts, pageRow, RIGHT_PAD, seg, slice, sp, STREAM_PREFIX, streamRow, wellBottom, wellRow, wellTop, wellWidth, widthOf,
   type Line, type Seg, type Zone,
 } from '../cells';
 import {glyph, syntax, theme} from '../theme';
@@ -103,21 +103,23 @@ function lastTouch(history: FileHistory | null): Seg[] {
 function peekLines(cols: number, root: string, peek: Peek, owner: string, sel: string | null): Line[] {
   const pins = [owner];
   const rail = {pins};
-  const out: Line[] = [spineRow(cols, crumbs(root, peek.path), [seg(kindOf(peek.path, peek.view), theme.dim)], rail)];
+  const out: Line[] = [streamRow(cols, crumbs(root, peek.path), [seg(kindOf(peek.path, peek.view), theme.dim)], rail)];
   const touched = lastTouch(peek.history);
-  if (touched.length) out.push(spineRow(cols, touched, [], rail));
+  if (touched.length) out.push(streamRow(cols, touched, [], rail));
 
   if (peek.view.kind === 'notice') {
-    for (const text of wrap(deadEnd(peek.view.message), cols - 6)) out.push(spineRow(cols, [seg(text, theme.dim)], [], rail));
+    for (const text of wrap(deadEnd(peek.view.message), cols - 6)) out.push(streamRow(cols, [seg(text, theme.dim)], [], rail));
     return out;
   }
 
   const lines = peek.view.lines;
   const digits = Math.max(3, String(lines.length).length);
-  const room = wellWidth(cols) - digits - 3;
+  const room = wellWidth(cols, true) - digits - 3;
   const places = changedPlaces(peek.marks, lines.length);
   const end = peekEnd(lines.length, peek.from, peek.extra);
-  const well = {pins};
+  // The peek hangs off the same three column prefix the Changes view uses, so
+  // the four views line up.
+  const well = {pins, wide: true};
 
   out.push(wellTop(cols, well));
   if (places.length) {
@@ -148,7 +150,7 @@ function peekLines(cols: number, root: string, peek: Peek, owner: string, sel: s
     const what = below ? 'enter jumps' : `enter shows ${Math.min(MORE_ROWS, left)}`;
     const label = [seg(`${glyph.gap} ${rest}`, here ? theme.accent : theme.faint, {bg}), seg(`  ${glyph.sep}  ${what}`, theme.faint, {bg})];
     // The hint is the first thing to go in a narrow pane: the count matters more.
-    const room = wellWidth(cols) - digits - 3;
+    const room = wellWidth(cols, true) - digits - 3;
     out.push(
       wellRow(cols, [sp(digits + 3, bg), ...(widthOf(label) <= room ? label : [label[0]!])], [], {
         ...well, bg, id, pick: true, act: {type: 'more', path: peek.path},
@@ -164,10 +166,10 @@ function peekLines(cols: number, root: string, peek: Peek, owner: string, sel: s
   const close = [seg('esc', theme.text), seg(' close', theme.dim)];
   const rightEnd = cols - 1 - RIGHT_PAD;
   out.push(
-    spineRow(cols, hint, close, {
+    streamRow(cols, hint, close, {
       pins,
       zones: [
-        {from: 3, to: 3 + widthOf(hint), act: {type: 'read', path: peek.path}},
+        {from: STREAM_PREFIX, to: STREAM_PREFIX + widthOf(hint), act: {type: 'read', path: peek.path}},
         {from: rightEnd - widthOf(close), to: rightEnd, act: {type: 'node', path: peek.path, dir: false}},
       ],
     }),

@@ -400,10 +400,16 @@ let wanted = 0;
 for (let n = 0; n < 40 && !wanted; n++) {
   const row = b.cursorRow();
   wanted = diffNo(row);
-  // A closed file row or a folded hunk opens; anything else steps on.
-  if (!wanted) await b.press(row.trimStart().startsWith('▸') ? ENTER : DOWN);
+  // A closed file row or a folded hunk opens; anything else steps on. A file
+  // row is a chevron in the flat grouping and a bold status letter in the
+  // other two, so either shape counts — but only while it is still closed,
+  // or Enter would shut again what the press before it opened.
+  const head = row.trimStart();
+  const opens = head.startsWith('▸') || (/^[AMDR?]\s/.test(head) && !/\d+ hunks?/.test(head));
+  if (!wanted) await b.press(opens ? ENTER : DOWN);
 }
 
+if (!wanted) await b.show('changes: the cursor never reached a line of the diff');
 check(wanted > 0, 'the cursor should have reached a changed line of the diff');
 if (wanted) {
   await b.press('o');

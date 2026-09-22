@@ -156,18 +156,21 @@ type Draw = {
   // The well hangs off the left line of the row that opened it, in `accent`
   // while that turn is still running.
   live?: boolean;
+  // The well under a stream row, one column further in, so a diff lines up
+  // under the three column prefix the rest of the block uses.
+  wide?: boolean;
 };
 
 // A file's diff as lines of the stream, sitting in a well under its own row.
 export function diffLines(rows: ViewRow[], groups: DiffGroup[], draw: Draw): Line[] {
   const {cols, fileKey, sel, pins} = draw;
   // Every row of the well sits on the same left line.
-  const rail = {live: draw.live} as const;
+  const rail = {live: draw.live, wide: draw.wide} as const;
   const out: Line[] = [wellTop(cols, {pins, ...rail})];
   const digits = digitsOf(rows);
   // change bar, line number, space, sign, space
   const gutter = 1 + digits + 3;
-  const room = wellWidth(cols) - gutter;
+  const room = wellWidth(cols, draw.wide) - gutter;
 
   rows.forEach((row, index) => {
     const id = `${fileKey}#${index}`;

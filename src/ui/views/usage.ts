@@ -3,8 +3,8 @@ import {
   type Limits, type Share, type Spend, type SubSplit, type Window,
 } from '../../core/usage';
 import {
-  bigDigits, bigWidth, lowerMeter, meterTone, pageRow, panelInner, panelRow, panelTitle,
-  seg, sp, span, thinMeter, tokens, width, widthOf, type Line, type Seg,
+  bigDigits, bigWidth, brief, lowerMeter, meterTone, pageRow, panelInner, panelRow, panelTitle,
+  seg, sep, sp, span, thinMeter, tokens, width, widthOf, type Line, type Seg,
 } from '../cells';
 import {glyph, modelColours, theme} from '../theme';
 import {fit as fitText, wrap} from '../util';
@@ -39,9 +39,6 @@ const STALE_MS = 15 * 60_000;
 // Four columns for a percentage, so `9%` and `100%` end in the same column and
 // a column of values reads as a column.
 const PCT_W = 4;
-
-// The one separator between facts on a row.
-const sep = (): Seg => seg(`  ${glyph.sep}  `, theme.faint);
 
 // The right-hand value: the figure is the one thing on a body row allowed any
 // weight, and the word after it says what the figure is a share of.
@@ -423,40 +420,66 @@ export function usageLines(input: UsageInput): Line[] {
   return panels.flatMap((rows, i) => (i ? [gap, ...rows] : rows));
 }
 
-// How much of the bar the meters may have. Phase 3 shrinks them in steps.
-export type ExtrasRoom = 'full' | 'noWeek' | 'plain';
+// The number of columns the meters may have at the right end of the menu bar.
+export const METERS_MIN = 8;
 
-// The meters at the right end of the menu bar. With a feed they are the real
-// allowance; without one they are the window counted from the transcripts,
-// marked `~` so it never reads as a limit.
+// The meters at the right end of the menu bar, in one of three states.
+//
+// With a fresh feed they are the real allowance: `5h ▄▄▄▄▁▁ 58%  1h 52m · wk
+// 23%`, the meter and the figure taking the same tone so the bar and the
+// number always say the same thing. Without a feed there is no percentage to
+// show, so the figure is the window counted from the transcripts, marked `~`,
+// and the last words are the way to a real one. With a feed that has gone
+// quiet the reading is still drawn, because it was true when it was taken, but
+// nothing about it is bright and the last words say how to get it back.
+//
+// Each state gives way in the same order: the week, then the reset, then the
+// hint, then the meter cells. Whatever is left has to fit in `room` columns or
+// the bar drops the meters entirely and keeps the status.
 export function usageExtras(
   limits: Limits | null,
   now: number,
-  more: {spends?: Spend[] | null; room?: ExtrasRoom} = {},
+  more: {spends?: Spend[] | null; room?: number} = {},
 ): Seg[] {
-  const room = more.room ?? 'full';
+  const room = more.room ?? 999;
   const feed = feedOf(limits, now);
   const five = feed ? live(feed.limits.fiveHour, now) : null;
   const thin = (): Seg => seg(` ${glyph.sep} `, theme.faint);
+  // The first of these that fits. Each is the one before it with its last
+  // part taken off.
+  const widest = (steps: Seg[][]): Seg[] => steps.find(segs => widthOf(segs) <= room) ?? [];
+
   if (feed && five) {
     const part = five.usedPercentage / 100;
-    const ink = feed.stale ? theme.dim : theme.text;
-    const out: Seg[] = [seg('5h ', theme.dim)];
-    if (room !== 'plain') out.push(...lowerMeter(6, part, feed.stale ? theme.dim : meterTone(part)), sp(1));
-    out.push(seg(pct(part), ink), thin(), seg(span(five.resetsAt - now), ink));
+    const head = seg('5h ', feed.stale ? theme.faint : theme.dim);
+    const figure = pct(part);
+    if (feed.stale) {
+      // A tool took the status line back. `feed quiet 40m` is the warning; the
+      // link is what to do about it.
+      const quiet: Seg[] = [seg(`feed quiet ${brief(now - feed.limits.at)}`, theme.warn)];
+      const fix: Seg[] = [thin(), seg('reconnect', theme.link, {underline: true})];
+      const plain: Seg[] = [head, seg(figure, theme.faint)];
+      return widest([[...plain, sp(2), ...quiet, ...fix], [...plain, sp(2), ...quiet], plain]);
+    }
+
+    const tone = meterTone(part);
+    const meter: Seg[] = [...lowerMeter(6, part, tone), sp(1)];
+    const figures: Seg[] = [seg(figure, theme.ink, {bold: true})];
+    const reset: Seg[] = [sp(2), seg(span(five.resetsAt - now), theme.dim)];
     const week = live(feed.limits.sevenDay, now);
-    if (week && room === 'full') out.push(sp(2), seg('wk ', theme.dim), seg(pct(week.usedPercentage / 100), ink));
-    return out;
+    const wk: Seg[] = week ? [thin(), seg('wk ', theme.dim), seg(pct(week.usedPercentage / 100), theme.text)] : [];
+    return widest([
+      [head, ...meter, ...figures, ...reset, ...wk],
+      [head, ...meter, ...figures, ...reset],
+      [head, ...meter, ...figures],
+      [head, ...figures],
+    ]);
   }
 
   const win = windowOf(more.spends ?? [], now);
   if (!win) return [];
-  return [
-    seg('5h ', theme.dim),
-    seg('~', theme.faint),
-    seg(tokens(win.tokens), theme.dim),
-    thin(),
-    seg('~', theme.faint),
-    seg(`${span(win.resetsAt - now)} left`, theme.dim),
-  ];
+  const counted: Seg[] = [seg('5h ', theme.dim), seg('~', theme.faint), seg(tokens(win.tokens), theme.text)];
+  const left: Seg[] = [sp(2), seg(`${span(win.resetsAt - now)} left`, theme.dim)];
+  const hint: Seg[] = [thin(), seg('connect for %', theme.link, {underline: true})];
+  return widest([[...counted, ...left, ...hint], [...counted, ...hint], counted]);
 }

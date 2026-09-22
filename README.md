@@ -6,11 +6,16 @@ Four views, a menu bar, a mouse, and no editing.
 
 - **Changes** is one stream. Every prompt you sent is a block on a left line:
   what Claude said about it, the files it changed, and the diff, which opens
-  under its own row.
+  under its own row. A past turn is one row: its size as five cells, green and
+  red, and `✓` when its commits are merged or `◆N` when they are only
+  committed. The day has a skyline, one column a turn.
 - **Files** is the tree. Enter peeks a file in place, starting at the first
   thing that changed. `o` reads the whole file; markdown is formatted.
-- **Agents** shows the subagents Claude started: for which prompt, doing what
-  right now, and what they handed back.
+- **Agents** shows the subagents Claude started, named as Claude named them,
+  each on a lane of a shared clock and grouped by the folder it worked in;
+  the same coloured square marks the files it wrote. When agents work in git
+  worktrees of their own, `w` widens Changes to every worktree, with a map on
+  top and `✓ merged` on each one that has landed.
 - **Usage** shows where the tokens went, and your 5 hour and weekly limits if
   you connect the status line script.
 
@@ -18,27 +23,31 @@ See [PLAN.md](PLAN.md) for why it is built this way, and [design/](design) for
 the design canvas.
 
 ```
- ◆ Sidecar  View        5h ▄▄▄▄▄▄ 58% · 1h 52m  wk 23%   ⠴ working
+ ◆ Sidecar  View        5h ▄▄▄▄▄▄ 58%  1h 52m · wk 23%   ⠴ 3 agents
 
   Changes   Files   Agents ⠴ 2   Usage
-  By turn  ·  By file  ·  All                      5 uncommitted
+  By turn  ·  By file  ·  Uncommitted           in launchers ▾
 
- Day 3 launchers                                            today
- ⠴ build the rest of the day 3 launchers in parallel.       19:31
- │ one agent per terminal: wezterm, iterm2, kitty
- │ running  ·  3 files  +18 −1  ·  3 agents  ·  3m 16s
+ TODAY   Day 3 launchers                        3 turns  ·  41m
+         ▂▂ ▃▃ ██                                       +38 −5
+
+ ⠴  build the rest of the day 3 launchers in parallel    19:31
+ │  running 3m 16s   ▐3 files▌ ▐+18▌ ▐−1▌
  │
- │ ▸ Edited   src/launch/index.ts  A1 A2 ⚠               +2    −1
- │ ▸ Created  src/launch/kitty.ts  A3                    +8
- │ ▸ Created  src/launch/wezterm.ts  A1                  +8
- ├─ ✓ A1 Write the WezTerm launcher                 1m 45s   73k
- ├─ ⠴ A2 Try the AppleScript split                  3m 01s   98k
- │  │    Bash  osascript split.scpt
- └─ ⠴ A3 Write kitty.ts                             3m 01s   93k
- │ ⠴ Bash     Wait for the agents                        4 steps
+ │  ⠴ 3 agents  ·  2 running  ·  1 done            264k tokens
+ │  ├─ ■ Write the WezTerm launcher            ✓  1m 45s   73k
+ │  │       12 tool uses  ·  wrote wezterm.ts, index.ts
+ │  ├─ ■ Try the AppleScript split             ⠴  3m 01s   98k
+ │  │    ⎿  Bash  osascript split.scpt
+ │  └─ ■ Write kitty.ts                        ⠴  3m 01s   93k
+ │
+ │  src/launch
+ │   M  index.ts   ■■ ⚠ two agents          ▄▄▄▄▄     +2    −1
+ │   A  kitty.ts   ■                        ▄▄▄▄▄     +8
+ │   A  wezterm.ts   ■                      ▄▄▄▄▄     +8
 
- ▸ add a tmux launcher and wire it into the launcher list   19:00
-   3 files  +12 −3  ·  3m 30s
+ ○  add a tmux launcher and wire it…  3 files ▄▄▄▄▄ ✓    19:00
+ ○  fix the wt launcher so the spli…  2 files ▄▄▄▄▄ ◆1   18:40
 ```
 
 The prompts, the chats, the steps and the subagents come from Claude Code's own
@@ -104,13 +113,14 @@ Everywhere: `1` Changes, `2` Files, `3` Agents, `4` Usage, `m` or `?` menu,
 | `space` / `b` | page down / up |
 | `g` / `G` | top / bottom |
 | `]` / `[` | Changes: next / previous turn, file or hunk. Files: next / previous change |
-| `v` | group by turn, by file, or everything since the last commit |
+| `v` | group by turn, by file, or everything uncommitted |
+| `w` | this folder only, or every worktree of the repository |
 | `s` | one chat at a time, or all of them |
 | `z` | fold or unfold every hunk of this file |
-| `w` | hide changes that are only whitespace |
+| `W` | hide changes that are only whitespace |
 | `o` | read the whole file: the one under the cursor, or the one this diff line belongs to |
 | `c` | Files: changed files only |
-| `r` | reader: markdown formatted or as written |
+| `r` | reader: a markdown file as a page, or as written |
 
 ## Mouse
 

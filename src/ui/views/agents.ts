@@ -5,8 +5,8 @@ import type {TurnChange} from '../../core/turns';
 import {modelName} from '../../core/usage';
 import type {WorktreeRun} from '../../core/worktrees';
 import {
-  blankRow, chip, fit, INDENT, pageRow, RIGHT_PAD, seg, sizeCells, sp, span, tokens, width, widthOf,
-  type Line, type Seg,
+  blankRow, brief, chip, countWord, cut, INDENT, padTo, pageRow, RIGHT_PAD, seg, sep, sizeCells, sp, span,
+  streamRoom, streamRow, tokens, width, widthOf, type Line, type Seg,
 } from '../cells';
 import {glyph, hues, theme} from '../theme';
 import {wrap} from '../util';
@@ -66,47 +66,12 @@ const DAY_RULE_LEFT = 0.43;
 // prompts of the past all cut at the same place.
 const PAST_RIGHT = 26;
 
-// The three column prefix: the margin, the block's own mark, then two spaces,
-// so a row's content starts at column 4. `streamRow` in cells.ts draws this
-// shape one column too wide (it returns `cols`, not `cols - 1`), so the view
-// keeps its own until that is fixed.
-const PREFIX = 4;
-const gapFor = (mark: number): number => Math.max(1, PREFIX - 1 - mark);
-const room = (cols: number, mark = 1): number => cols - 2 - mark - gapFor(mark) - RIGHT_PAD;
+// A block's rows hang on its own line under the three column prefix
+// `streamRow` draws: the margin, the mark, then the air. `room` is what is
+// left for a row's own content.
+const room = (cols: number, mark = 1): number => streamRoom(cols, mark);
 // The same for a row with no mark at all: the summary and the day's rule.
 const pageWide = (cols: number): number => cols - 2 - RIGHT_PAD;
-
-type RowMore = Omit<Line, 'segs'> & {mark?: Seg; bg?: string; live?: boolean};
-
-function blockRow(cols: number, left: Seg[] = [], right: Seg[] = [], more: RowMore = {}): Line {
-  const {bg, mark, live, ...rest} = more;
-  const first = mark ?? seg(glyph.spine, live ? theme.accent : theme.spine);
-  // A two column mark (a tree branch) takes its column back from the air after
-  // it, so every row in a block starts its text in the same place.
-  const w = width(first.text);
-  return {
-    ...rest,
-    segs: [sp(1), {...first, bg: first.bg ?? bg}, sp(gapFor(w), bg), ...fit(left, right, room(cols, w), bg), sp(RIGHT_PAD, bg)],
-  };
-}
-
-const sep = (): Seg => seg(`  ${glyph.sep}  `, theme.faint);
-const cut = (text: string, max: number): string =>
-  width(text) <= max ? text : `${[...text].slice(0, Math.max(0, max - 1)).join('').trimEnd()}${glyph.ellipsis}`;
-const padTo = (text: string, n: number): string => text + ' '.repeat(Math.max(0, n - width(text)));
-
-// A coarse duration: what a headline says. `span` keeps the seconds, which a
-// row about one agent wants and a row about a whole turn does not.
-function brief(ms: number): string {
-  const secs = Math.max(0, Math.round(ms / 1000));
-  if (secs < 60) return `${secs}s`;
-  const mins = Math.round(secs / 60);
-  if (mins < 60) return `${mins}m`;
-  return `${Math.floor(mins / 60)}h ${String(mins % 60).padStart(2, '0')}m`;
-}
-
-const LANE_WORDS = ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'];
-const countWord = (n: number): string => LANE_WORDS[n] ?? String(n);
 
 // ---- the rows the whole view is built from ---------------------------------
 
@@ -159,7 +124,7 @@ function axisRow(cols: number, lane: number, from: number, to: number, pins: str
     col = put + width(tick.text);
   });
 
-  return blockRow(cols, left, [], {pins});
+  return streamRow(cols, left, [], {pins});
 }
 
 // ---- who worked where -----------------------------------------------------
@@ -255,7 +220,8 @@ function groupState(group: Group, agents: AgentRun[]): Seg[] {
   if (wt.merged) return [seg(wt.mergedAt ? `${glyph.check} merged ${clock(wt.mergedAt)}` : `${glyph.check} merged`, theme.add)];
   if (wt.removed) return [seg('removed', theme.faint)];
   if (!wt.gone && wt.ahead === 0 && wt.dirty === 0) return [seg('clean', theme.faint)];
-  return wt.ahead ? [seg(`${wt.ahead} ahead`, theme.dim)] : [];
+  // The same `↑N` the worktree map uses: how far ahead of your folder it is.
+  return wt.ahead ? [seg(`${glyph.ahead}${wt.ahead}`, theme.dim)] : [];
 }
 
 // ---- an agent ---------------------------------------------------------------
@@ -301,7 +267,7 @@ function agentUnder(ctx: Ctx, slot: Slot, group: Group, pins: string[], isOpen: 
   const {agent} = slot;
   const status = statusOf(agent, now);
   const inset = INDENT + slot.depth * INDENT;
-  const row = (left: Seg[], right: Seg[] = []) => ctx.out.push(blockRow(cols, [sp(inset), ...left], right, {pins}));
+  const row = (left: Seg[], right: Seg[] = []) => ctx.out.push(streamRow(cols, [sp(inset), ...left], right, {pins}));
 
   if (isOpen) {
     const model = modelName(agent.model);
@@ -365,7 +331,7 @@ function agentUnder(ctx: Ctx, slot: Slot, group: Group, pins: string[], isOpen: 
     const tail = i === shown.length - 1 ? '”' : '';
     const more = !whole && all.length > shown.length && i === shown.length - 1;
     ctx.out.push(
-      blockRow(cols, [sp(inset), seg(`${head}${text}${tail}${more ? ' ' : ''}`, theme.text), ...(more ? [seg('more', theme.link, {underline: true})] : [])], [], {pins, act}),
+      streamRow(cols, [sp(inset), seg(`${head}${text}${tail}${more ? ' ' : ''}`, theme.text), ...(more ? [seg('more', theme.link, {underline: true})] : [])], [], {pins, act}),
     );
   });
 }
@@ -381,7 +347,7 @@ function laneRow(ctx: Ctx, slot: Slot, group: Group, lane: number, from: number,
   const status = statusOf(agent, now);
   const nested = Math.min(slot.depth, NEST_MAX) * INDENT;
   ctx.out.push(
-    blockRow(
+    streamRow(
       cols,
       [
         sp(nested),
@@ -422,7 +388,7 @@ function branchRow(ctx: Ctx, slot: Slot, group: Group, pins: string[]): void {
   if (nameRoom(right, tag) < NAME_MIN) tag = '';
   const nameWide = Math.max(6, nameRoom(right, tag));
   ctx.out.push(
-    blockRow(
+    streamRow(
       cols,
       [
         sp(nested),
@@ -462,7 +428,7 @@ function closedBlock(input: AgentsInput, change: TurnChange, agents: AgentRun[])
   // The prompts of the past line up under each other, so the row cuts at its
   // own column rather than wherever the note happens to end.
   const wide = Math.max(12, Math.min(room(cols) - width(note) - 5, room(cols) - PAST_RIGHT));
-  return blockRow(cols, [seg(cut(change.turn.prompt, wide), theme.text)], right, {
+  return streamRow(cols, [seg(cut(change.turn.prompt, wide), theme.text)], right, {
     id,
     pick: true,
     mark: seg(glyph.ring, theme.faint),
@@ -490,7 +456,7 @@ function openBlock(input: AgentsInput, out: Line[], change: TurnChange, agents: 
   const {from, to} = spanOf(agents, now);
 
   out.push(
-    blockRow(cols, [seg(cut(change.turn.prompt, room(cols) - 7), theme.ink, {bold: true})], [seg(clock(change.turn.at), theme.dim)], {
+    streamRow(cols, [seg(cut(change.turn.prompt, room(cols) - 7), theme.ink, {bold: true})], [seg(clock(change.turn.at), theme.dim)], {
       id,
       pick: true,
       mark: seg(glyph.dot, live ? theme.accent : theme.text),
@@ -506,8 +472,8 @@ function openBlock(input: AgentsInput, out: Line[], change: TurnChange, agents: 
   const count = seg(`${agents.length} agent${agents.length === 1 ? '' : 's'}`, theme.text);
   const took = seg(brief(to - from), theme.dim);
   const stats: Seg[] = [count, sep(), seg(`at most ${most} at once`, theme.dim), sep(), took];
-  out.push(blockRow(cols, most > 1 && widthOf(stats) <= room(cols) ? stats : [count, sep(), took], [], {pins: [id]}));
-  out.push(blockRow(cols, [], [], {pins: [id]}));
+  out.push(streamRow(cols, most > 1 && widthOf(stats) <= room(cols) ? stats : [count, sep(), took], [], {pins: [id]}));
+  out.push(streamRow(cols, [], [], {pins: [id]}));
 
   // A crowd folds its finished read-only agents away: they are the ones whose
   // rows say the least. The row that says so toggles like an agent's.
@@ -521,7 +487,7 @@ function openBlock(input: AgentsInput, out: Line[], change: TurnChange, agents: 
     const foldId = `gf:${key}`;
     const spent = away.reduce((n, a) => n + a.tokens, 0);
     out.push(
-      blockRow(
+      streamRow(
         cols,
         [seg(glyph.check, theme.add), sp(1), seg(`${away.length} finished`, theme.dim), sep(), seg(tokens(spent), theme.dim)],
         [],
@@ -556,7 +522,7 @@ function openBlock(input: AgentsInput, out: Line[], change: TurnChange, agents: 
 
   const noted = new Set<string>();
   groups.forEach((group, i) => {
-    if (i) out.push(blockRow(cols, [], [], {pins: [id]}));
+    if (i) out.push(streamRow(cols, [], [], {pins: [id]}));
     const note = group.here
       ? noted.has(group.key)
         ? ''
@@ -569,7 +535,7 @@ function openBlock(input: AgentsInput, out: Line[], change: TurnChange, agents: 
     const name = [seg('in ', theme.faint), seg(group.label, theme.text, {bold: true})];
     // The note is the first thing to go: the folder and its state are the row.
     const keep = note && widthOf(name) + width(note) + 3 + widthOf(state) + 2 <= room(cols);
-    out.push(blockRow(cols, keep ? [...name, seg(`   ${note}`, theme.dim)] : name, state, {pins: [id]}));
+    out.push(streamRow(cols, keep ? [...name, seg(`   ${note}`, theme.dim)] : name, state, {pins: [id]}));
     for (const slot of group.slots) {
       if (lanes) laneRow(ctx, slot, group, lane, from, to, [id]);
       else branchRow(ctx, slot, group, [id]);

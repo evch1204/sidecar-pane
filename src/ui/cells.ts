@@ -7,7 +7,7 @@ import {glyph, theme} from './theme';
 // there is only one list, those can never disagree.
 //
 // There are three row shapes and nothing else: a page row, a row hanging off a
-// block's left line (`spineRow`), and a row inside a well. Nothing is a box.
+// block's left line (`streamRow`), and a row inside a well. Nothing is a box.
 
 export type Group = 'turn' | 'file' | 'flat';
 export type View = 'changes' | 'files' | 'agents' | 'usage';
@@ -132,25 +132,7 @@ export const chevron = (isOpen: boolean, here: boolean): Seg =>
 
 // The left line. Column 1 carries a block's own mark on its header row and the
 // rail on every row under it, blank rows included, so the line never breaks.
-// Column 2 is a space and the content starts at column 3.
 const spineMark = (live?: boolean): Seg => seg(glyph.spine, live ? theme.accent : theme.spine);
-
-export function spineRow(
-  cols: number,
-  left: Seg[] = [],
-  right: Seg[] = [],
-  more: RowMore & {mark?: Seg; live?: boolean} = {},
-): Line {
-  const {bg, mark, live, ...rest} = more;
-  const first = mark ?? spineMark(live);
-  // A two column mark (a tree branch, `├─`) pushes the content one column in
-  // and takes that column from the middle, so the right edge never moves.
-  const w = width(first.text);
-  return {
-    ...rest,
-    segs: [sp(1), {...first, bg: first.bg ?? bg}, sp(1, bg), ...fit(left, right, cols - 3 - w - RIGHT_PAD, bg), sp(RIGHT_PAD, bg)],
-  };
-}
 
 // Column 0 is the margin, the mark is column 1, and a stream row's content
 // starts at column 4.
@@ -184,6 +166,50 @@ export function streamRow(
     ],
   };
 }
+
+// The room a stream row's own content has: the margin and the prefix are
+// taken, and the last column belongs to the scrollbar. A two column mark takes
+// its column back from the air after it, so the answer is the same either way.
+export const streamRoom = (cols: number, mark = 1): number =>
+  cols - 2 - mark - Math.max(1, STREAM_PREFIX - 1 - mark) - RIGHT_PAD;
+
+// The one separator between facts on a row, with two spaces either side.
+export const sep = (): Seg => seg(`  ${glyph.sep}  `, theme.faint);
+
+// Cut to the columns there are, ending in an ellipsis in the text's own colour
+// rather than in the faint one `clip` uses: here the cut words are the content.
+export function cut(text: string, room: number): string {
+  if (room <= 0) return '';
+  if (width(text) <= room) return text;
+  let out = '';
+  for (const char of text) {
+    if (width(out + char) > room - 1) break;
+    out += char;
+  }
+
+  return out.trimEnd() + glyph.ellipsis;
+}
+
+export const padTo = (text: string, n: number): string => text + ' '.repeat(Math.max(0, n - width(text)));
+
+// How long, in the units a headline uses. `span` keeps the seconds, which a row
+// about one agent wants and a row about a whole turn or a whole folder does not.
+export function brief(ms: number): string {
+  const secs = Math.max(0, Math.round(ms / 1000));
+  if (secs < 60) return `${secs}s`;
+  const mins = Math.round(secs / 60);
+  if (mins < 60) return `${mins}m`;
+  return `${Math.floor(mins / 60)}h ${String(mins % 60).padStart(2, '0')}m`;
+}
+
+// A total that is read as a size, so it carries its thousands.
+export const num = (n: number): string => String(n).replace(/\B(?=(\d{3})+$)/g, ',');
+
+export const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`;
+
+// Small counts read better as words: "one agent in each", "two agents".
+const WORDS = ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'];
+export const countWord = (n: number): string => WORDS[n] ?? String(n);
 
 // A well is the dark inset a diff or a file sits in. It always hangs off a
 // left line, so it starts at the content column and ends where every other

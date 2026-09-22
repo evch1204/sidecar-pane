@@ -10,6 +10,9 @@ export type Command =
   | {do: 'view'; view: View}
   | {do: 'group'; group: Group}
   | {do: 'chat'; to?: string | null}
+  // How much of the repository the Changes view covers: this folder, or every
+  // worktree of it.
+  | {do: 'scope'; to?: 'mine' | 'all'}
   | {do: 'whitespace'}
   | {do: 'changedOnly'; on?: boolean}
   | {do: 'raw'}
@@ -31,6 +34,10 @@ export type MenuState = {
   changedOnly: boolean;
   // The chat the Changes view is filtered to, by name, or null for all of them.
   chat: string | null;
+  // How many folders this repository has, and how many of them the stream is
+  // covering. One folder and there is nothing to switch, so no item is shown.
+  folders: number;
+  scope: 'mine' | 'all';
   // The cursor is inside a diff, so folding every hunk means something.
   inDiff: boolean;
   // A markdown file is open in the reader, so it can be read as written.
@@ -58,7 +65,12 @@ export function menus(state: MenuState): Menu[] {
           {label: 'By file', key: '', checked: state.group === 'file', command: {do: 'group', group: 'file'}},
           {label: 'Since the last commit', key: '', checked: state.group === 'flat', command: {do: 'group', group: 'flat'}},
           {label: state.chat ? `Chat: ${state.chat}` : 'Chat: all', key: 's', checked: Boolean(state.chat), command: {do: 'chat'}},
-          {label: 'Hide whitespace', key: 'w', checked: state.hideSpace, command: {do: 'whitespace'}},
+          // Only a repository with more than one folder has anything to widen
+          // to, and then `w` is worth more here than it is on whitespace.
+          ...(state.folders > 1
+            ? [{label: state.scope === 'all' ? 'Worktrees: all' : 'Worktrees: mine', key: 'w', checked: state.scope === 'all', command: {do: 'scope'}} as Item]
+            : []),
+          {label: 'Hide whitespace', key: 'W', checked: state.hideSpace, command: {do: 'whitespace'}},
           ...(state.inDiff ? [{label: 'Fold every hunk', key: 'z', command: {do: 'foldAll'}} as Item] : []),
         ]
       : state.view === 'files'
@@ -200,10 +212,11 @@ export function tabRow(cols: number, view: View, badges: Partial<Record<View, Se
 export type Pill = {label: string; on: boolean; act: Act; tone?: string; clear?: boolean};
 
 // Under the tabs: what the view is showing, as pills you can click, and one
-// dim fact at the right end. A narrow pane keeps only the pill that is lit and
-// cycles through the rest on a click.
-export function pillRow(cols: number, pills: Pill[], note: Seg[] = []): Line {
-  const draw = (shown: Pill[], acts: Act[]): Line => {
+// fact at the right end — a dim count, or the scope pill, which is a button of
+// its own. A narrow pane keeps only the pill that is lit and cycles through the
+// rest on a click.
+export function pillRow(cols: number, pills: Pill[], note: Seg[] = [], noteAct?: Act): Line {
+  const draw = (shown: Pill[], acts: Act[], right: Seg[]): Line => {
     const left: Seg[] = [sp(1)];
     const zones: Zone[] = [];
     shown.forEach((pill, i) => {
@@ -216,14 +229,22 @@ export function pillRow(cols: number, pills: Pill[], note: Seg[] = []): Line {
       zones.push({from, to: widthOf(left), act: acts[i]!});
     });
 
-    return {segs: fit(left, [...note, sp(1 + RIGHT_PAD)], cols), zones};
+    // The note is right-aligned, so its own columns are known: the pane's
+    // width less the pad it leaves clear of the scrollbar.
+    const end = cols - 1 - RIGHT_PAD;
+    if (right.length && noteAct) zones.push({from: end - widthOf(right), to: end, act: noteAct});
+    return {segs: fit(left, [...right, sp(1 + RIGHT_PAD)], cols), zones};
   };
 
   // Measured, not guessed: a pill whose text had to be clipped would leave a
   // click zone over words that are not there any more.
-  const room = cols - 2 - RIGHT_PAD - widthOf(note) - (note.length ? 2 : 0);
+  const roomFor = (right: Seg[]) => cols - 2 - RIGHT_PAD - widthOf(right) - (right.length ? 2 : 0);
   const wide = pills.reduce((n, pill, i) => n + (i ? 3 : 0) + pill.label.length + 2 + (pill.clear ? 2 : 0), 0);
-  if (wide <= room) return draw(pills, pills.map(pill => pill.act));
+  const acts = pills.map(pill => pill.act);
+  if (wide <= roomFor(note)) return draw(pills, acts, note);
+  // The grouping pills win: they say what this list is, and the fact on the
+  // right is reachable from the menu either way.
+  if (wide <= roomFor([])) return draw(pills, acts, []);
 
   // No room: only the state you are in is drawn, and a click steps to the next.
   const cycle = pills.filter(pill => !pill.clear);
@@ -233,7 +254,7 @@ export function pillRow(cols: number, pills: Pill[], note: Seg[] = []): Line {
     return i < 0 ? pill.act : cycle[(i + 1) % cycle.length]!.act;
   };
 
-  return draw(lit, lit.map(next));
+  return draw(lit, lit.map(next), []);
 }
 
 export type Hint = [string, string];

@@ -1,7 +1,7 @@
 import path from 'node:path';
 import {statusOf, type AgentRun} from '../../core/agents';
 import type {DiffLine, FileDiff, FileStatus} from '../../core/diff';
-import type {FileStat} from '../../core/git';
+import {pathKey, type FileStat} from '../../core/git';
 import {
   daySummary, folderShares, groupByFolder,
   type ChangedFile, type DayGroup, type FileHistory, type TurnChange,
@@ -9,12 +9,12 @@ import {
 import {modelName} from '../../core/usage';
 import type {WorktreeRun} from '../../core/worktrees';
 import {
-  blankRow, chevron, chip, counts, INDENT, INDENT2, pageRow, RIGHT_PAD, seg, sizeCells, sizeLit, SIZE_CELLS,
-  skylineCol, sp, span, splitBar, spineRow, streamRow, STREAM_PREFIX, tokens, width, widthOf,
+  blankRow, brief, chevron, chip, counts, cut, INDENT2, num, pageRow, plural, sep, seg, sizeCells, sizeLit, SIZE_CELLS,
+  skylineCol, sp, span, splitBar, streamRoom, streamRow, tokens, width, widthOf,
   type Group, type Line, type Seg, type Zone,
 } from '../cells';
 import {diffLines, viewRows, type DiffGroup} from '../diffrows';
-import {agentColours, glyph, hues, theme} from '../theme';
+import {glyph, hues, theme} from '../theme';
 import {wrap} from '../util';
 
 // The Changes view is one stream. A day heads it with its own skyline; a turn
@@ -61,6 +61,12 @@ export type ChangesInput = {
   scope?: 'mine' | 'all';
   // The chat's own model, so an agent is only marked with one when it differs.
   chatModel?: string;
+  // The branch the pane's folder is on: the one a merge in this history landed
+  // on, and the name the commit rows use.
+  branch?: string;
+  // A turn of this folder's own chat is running, which is what makes the
+  // folder active in the map even when no agent is.
+  working?: boolean;
 };
 
 const FILES_SHOWN = 8;
@@ -90,18 +96,9 @@ const NARROW = 56;
 // `↑22  ✓ merged 13:20`: how far ahead a folder is, then where it has got to.
 const STATE_COL = 22;
 
-// Private, until Step 3 moves them: an arrow for "ahead by", and the two
-// single-cell tree joints, taken from the two-cell ones in the theme.
-const AHEAD = '↑';
-const TEE = glyph.branch[0]!;
-const TEE_LAST = glyph.branchLast[0]!;
-
 export const turnKey = (change: TurnChange): string => `${change.chatId}:${change.turn.id}`;
 export const fileKey = (scope: string, rel: string): string => `${scope}|${rel}`;
 export const spinner = (frame: number): string => glyph.spinner[frame % glyph.spinner.length]!;
-
-// The one separator between facts on a row.
-const sep = (): Seg => seg(`  ${glyph.sep}  `, theme.faint);
 
 export function dayLabel(at: number, now: number): string {
   const startOf = (ms: number) => new Date(new Date(ms).toDateString()).getTime();
@@ -116,38 +113,8 @@ export function clock(at: number): string {
   return new Date(at).toLocaleTimeString(undefined, {hour: '2-digit', minute: '2-digit', hour12: false});
 }
 
-// The room a stream row's own content has: the margin and the three column
-// prefix are taken, and the last column belongs to the scrollbar.
-const roomOf = (cols: number): number => cols - 1 - STREAM_PREFIX - RIGHT_PAD;
-
-// Cut to the columns there are, ending in an ellipsis in the text's own colour
-// rather than in the faint one `clip` uses: here the cut words are the content.
-function cut(text: string, room: number): string {
-  if (room <= 0) return '';
-  if (width(text) <= room) return text;
-  let out = '';
-  for (const char of text) {
-    if (width(out + char) > room - 1) break;
-    out += char;
-  }
-
-  return out.trimEnd() + glyph.ellipsis;
-}
-
-// How long, in one unit. The map's rows have no room for the seconds a `span`
-// carries, and on a folder somebody has been working in for half an hour they
-// say nothing anyway.
-function brief(ms: number): string {
-  const s = Math.max(0, Math.round(ms / 1000));
-  if (s < 60) return `${s}s`;
-  const m = Math.round(s / 60);
-  return m < 60 ? `${m}m` : `${Math.round(m / 60)}h`;
-}
-
-// A day's totals are read as a size, so they carry their thousands.
-const num = (n: number): string => String(n).replace(/\B(?=(\d{3})+$)/g, ',');
-
-const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`;
+// The room a stream row's own content has, under the three column prefix.
+const roomOf = (cols: number): number => streamRoom(cols);
 
 // What a tool call was aimed at: the words Claude gave it, or the file it
 // named, as a path in the project rather than a bare name.
@@ -201,11 +168,6 @@ function daysOf(changes: TurnChange[], now: number): DayGroup[] {
   dayMemo = {changes, now, days};
   return days;
 }
-
-// Kept for the label of an agent's colour column until Step 3 has taken the
-// last `A1` out of the Agents view. Nothing in this view draws one.
-export const agentLabel = (index: number): string => `A${index + 1}`;
-export const agentColour = (index: number): string => agentColours[index % agentColours.length]!;
 
 // One agent's own hue, by the order it was started in its turn.
 const hueOf = (index: number): string => hues[index % hues.length]!;
@@ -377,8 +339,12 @@ function landedRows(ctx: Ctx, change: TurnChange, rail: Rail): void {
   if (parts.length < 2) return;
   const bar = roomOf(cols);
   let used = 0;
+  // Every part is capped by what is left, and the last one takes the
+  // remainder: five parts that each round up must not push the bar past the
+  // row it has to fit in.
   const cells = parts.map((part, i) => {
-    const n = i === parts.length - 1 ? bar - used : Math.max(0, Math.round(part.share * bar));
+    const room = bar - used;
+    const n = i === parts.length - 1 ? room : Math.max(0, Math.min(room, Math.round(part.share * bar)));
     used += n;
     return n;
   });
@@ -427,14 +393,10 @@ function fileRow(ctx: Ctx, key: string, rel: string, abs: string | null, left: S
 
   const keyed = groups.map(group => ({...group, key: `${key}#${group.key}`}));
   const rows = viewRows(keyed, ctx.folded, ctx.opened, ctx.hideSpace);
-  // The well is drawn one column narrower and then pushed in, so it lines up
-  // under the three column prefix without `diffrows` having to know about it.
-  ctx.out.push(...diffLines(rows, keyed, {cols: cols - 1, fileKey: key, path: abs, sel, pins: [...pins, id], live}).map(widen));
+  // `wide` hangs the well off the three column prefix the rest of the block
+  // uses, so a diff lines up under the name of the file it belongs to.
+  ctx.out.push(...diffLines(rows, keyed, {cols, fileKey: key, path: abs, sel, pins: [...pins, id], live, wide: true}));
 }
-
-// A well row, moved one column in. Until Step 3 gives `diffLines` the `wide`
-// option the well rows already take, this is how a diff meets the new prefix.
-const widen = (line: Line): Line => ({...line, segs: [line.segs[0]!, line.segs[1]!, sp(1), ...line.segs.slice(2)]});
 
 // A file of a turn: the status letter, its path under the folder it is grouped
 // by, the squares of whoever wrote it, then how big the change was.
@@ -625,7 +587,10 @@ function openTurn(ctx: Ctx, change: TurnChange, agents: AgentRun[], o: Block): v
   if (says) saysRows(ctx, change, rail);
   if (change.landed.length) {
     gapRow(ctx, rail);
-    commitRows(ctx, change, ctx.worktrees?.find(wt => wt.here)?.branch ?? '', rail);
+    // A merge in this history landed ON the branch the pane is sitting on —
+    // that is whose first-parent log the commits came from — not on the branch
+    // that was merged in, which nothing here knows the name of.
+    commitRows(ctx, change, ctx.branch || ctx.worktrees?.find(wt => wt.here)?.branch || '', rail);
   }
 }
 
@@ -742,21 +707,6 @@ export function agentTree(agents: AgentRun[], shown?: (agent: AgentRun) => boole
 }
 
 export const agentsFlat = (nodes: AgentNode[]): AgentNode[] => nodes.flatMap(node => [node, ...agentsFlat(node.kids)]);
-
-// `4 agents  ·  3 running  ·  1 done  ·  276k tokens`
-export function agentSummary(agents: AgentRun[], now: number, unit = false): Seg[] {
-  const count = (status: string) => agents.filter(a => statusOf(a, now) === status).length;
-  const spent = agents.reduce((n, a) => n + a.tokens, 0);
-  const out: Seg[] = [seg(plural(agents.length, 'agent'), theme.dim)];
-  const running = count('running');
-  const done = count('done');
-  const stopped = count('stopped');
-  if (running) out.push(sep(), seg(`${running} running`, theme.accent));
-  if (done) out.push(sep(), seg(`${done} done`, theme.dim));
-  if (stopped) out.push(sep(), seg(`${stopped} stopped`, theme.warn));
-  out.push(sep(), seg(`${tokens(spent)}${unit ? ' tokens' : ''}`, theme.dim));
-  return out;
-}
 
 // How deep a tree is worth drawing: past this the indents cost more than the
 // nesting tells you.
@@ -883,92 +833,6 @@ function chartRow(ctx: Ctx, node: AgentNode, change: TurnChange, pins: string[],
   }
 }
 
-// ---------- the same agents, in the shape the Agents view still asks for ----------
-// Step 3 takes these out once `views/agents.ts` has stopped calling them.
-
-export function agentBranch(stack: boolean[]): {mark: Seg; lead: Seg[]} {
-  const depth = stack.length - 1;
-  const branch = seg(stack[depth] ? glyph.branch : glyph.branchLast, theme.spine);
-  if (depth === 0) return {mark: branch, lead: []};
-  return {mark: guide(stack[0] ?? false), lead: [sp(1), ...stack.slice(1, depth).flatMap(on => [guide(on), sp(2)]), branch, sp(1)]};
-}
-
-function agentUnder(stack: boolean[], gap: number): {mark: Seg; lead: Seg[]} {
-  const rails = stack.slice(1);
-  return {mark: guide(stack[0] ?? false), lead: [sp(1), ...rails.flatMap((on, i) => [guide(on), sp(i === rails.length - 1 ? gap : INDENT)])]};
-}
-
-type AgentCtx = Pick<Ctx, 'cols' | 'sel' | 'now' | 'frame' | 'root' | 'out'> & {open: Pick<Open, 'agents'>};
-
-export function agentRow(ctx: AgentCtx, node: AgentNode, change: TurnChange | null, pins: string[], stack: boolean[], pad: number): void {
-  const {cols, sel, now} = ctx;
-  const {agent, index} = node;
-  const id = `a:${agent.id}`;
-  const here = id === sel;
-  const isOpen = ctx.open.agents.has(agent.id);
-  const status = statusOf(agent, now);
-  const branch = agentBranch(stack);
-  const under = agentUnder([...stack, node.kids.length > 0], pad + 2);
-  const mine = [...pins, id];
-
-  ctx.out.push(
-    spineRow(
-      cols,
-      [
-        ...branch.lead,
-        ...agentStatus(agent, now, ctx.frame),
-        sp(1),
-        seg(glyph.square, hueOf(index)),
-        sp(1),
-        seg(agent.task, status === 'running' ? theme.ink : theme.text),
-      ],
-      [seg(span((status === 'running' ? now : agent.endedAt) - agent.startedAt).padStart(7), theme.dim), sp(1), seg(tokens(agent.tokens).padStart(5), theme.faint)],
-      {id, pick: true, pins, mark: branch.mark, bg: here ? theme.surface2 : undefined, act: {type: 'toggle', set: 'agents', key: agent.id}},
-    ),
-  );
-
-  const last = agent.steps[agent.steps.length - 1];
-  if (status === 'running' && last) {
-    ctx.out.push(
-      spineRow(cols, [...under.lead, seg(last.tool, theme.faint), sp(INDENT), seg(last.why || path.basename(last.file ?? ''), theme.dim)], [], {mark: under.mark, pins: mine}),
-    );
-  }
-
-  if (!isOpen) return;
-  const room = cols - 4 - RIGHT_PAD - widthOf(under.lead);
-  const row = (left: Seg[], right: Seg[] = []) => ctx.out.push(spineRow(cols, [...under.lead, ...left], right, {mark: under.mark, pins: mine}));
-  row([seg(`${agent.type}  ${glyph.sep}  ${modelName(agent.model)}  ${glyph.sep}  ${plural(agent.toolUses, 'tool use')}  ${glyph.sep}  ${tokens(agent.tokens)}`, theme.faint)]);
-  if (status === 'stopped') {
-    const why =
-      agent.ended === 'killed' ? 'Stopped before it handed back.' : agent.ended === 'failed' ? 'Failed before it handed back.' : 'Went quiet without handing back.';
-    row([seg(why, theme.warn)]);
-  }
-
-  for (const file of agent.wrote) {
-    const rel = path.relative(ctx.root, file).split(path.sep).join('/');
-    const stat = change?.files.find(f => f.path === file);
-    row([seg('Wrote'.padEnd(9), theme.dim), ...pathSegs(rel, false)], stat?.known ? counts(stat.added, stat.removed) : []);
-  }
-
-  for (const step of agent.steps.slice(-5)) row([seg(step.tool.padEnd(9), theme.faint), seg(step.why || path.basename(step.file ?? ''), theme.dim)], [seg(clock(step.at), theme.faint)]);
-  if (agent.says && status !== 'running') {
-    for (const text of wrap(agent.says.replace(/[*_`#>]/g, ''), Math.max(20, room - 8)).slice(0, 3)) row([seg(text, theme.text)]);
-  }
-}
-
-export function agentRows(ctx: AgentCtx, nodes: AgentNode[], change: TurnChange | null, pins: string[], tail = false): void {
-  const pad = Math.max(3, ...agentsFlat(nodes).map(() => 3));
-  const draw = (level: AgentNode[], stack: boolean[], under: string[]) => {
-    level.forEach((node, i) => {
-      const mine = [...stack, i < level.length - 1 || (stack.length === 0 && tail)];
-      agentRow(ctx, node, change, under, mine, pad);
-      if (node.kids.length && mine.length < TREE_MAX) draw(node.kids, mine, [...under, `a:${node.agent.id}`]);
-    });
-  };
-
-  draw(nodes, [], pins);
-}
-
 // ---------- the worktrees of the repository ----------
 
 type Folder = {wt: WorktreeRun; colour: string; label: string};
@@ -990,11 +854,18 @@ function foldersInScope(ctx: Ctx): Folder[] {
 
 const folderChip = (folder: Folder): Seg[] => chip(folder.label, theme.surface2, folder.colour);
 
+// The pane's own folder is active while its own chat is working, whether or
+// not an agent is; every other folder is active while an agent is in it.
+const isActive = (ctx: Ctx, wt: WorktreeRun): boolean => wt.active || (wt.here && Boolean(ctx.working));
+
 // Where a folder has got to, in one phrase on the right of its row.
 function folderState(ctx: Ctx, wt: WorktreeRun): Seg[] {
   const agent = [...wt.agents].reverse().find(run => statusOf(run, ctx.now) === 'running');
-  if (wt.here && (agent || ctx.changes.some(change => change.running))) {
-    return [seg(spinner(ctx.frame), theme.accent), seg(' you + Claude', theme.ink)];
+  if (wt.here) {
+    // You are in this one, so it is the one folder whose state is not about
+    // where the work has got to: it is what is happening in it right now.
+    if (agent || ctx.working) return [seg(spinner(ctx.frame), theme.accent), seg(' you + Claude', theme.ink)];
+    return wt.dirty ? [seg(`${wt.dirty} changed`, theme.dim)] : [seg('clean', theme.faint)];
   }
 
   if (agent) {
@@ -1017,7 +888,7 @@ function worktreeMap(ctx: Ctx, folders: Folder[]): void {
   const {cols, sel} = ctx;
   const id = 'wt';
   const here = id === sel;
-  const active = folders.filter(folder => folder.wt.active).length;
+  const active = folders.filter(folder => isActive(ctx, folder.wt)).length;
   ctx.out.push(
     pageRow(cols, [seg('WORKTREES', theme.faint, {bold: true}), seg(`   one repo, ${plural(folders.length, 'folder')}`, theme.dim)], active ? [seg(`${active} active`, theme.accent)] : [], {
       id, pick: true, bg: here ? theme.surface2 : undefined, act: {type: 'toggle', set: 'folded', key: id},
@@ -1043,8 +914,8 @@ function worktreeMap(ctx: Ctx, folders: Folder[]): void {
   const nameCol = Math.max(10, cols - 3 - whereCol - STATE_COL);
   for (const row of rows) {
     const {wt} = row.folder;
-    const node = seg(wt.active ? glyph.dot : glyph.ring, row.folder.colour);
-    const joint = seg(row.last ? TEE_LAST : TEE, theme.spine);
+    const node = seg(isActive(ctx, wt) ? glyph.dot : glyph.ring, row.folder.colour);
+    const joint = seg(row.last ? glyph.teeLast : glyph.tee, theme.spine);
     const prefix = row.depth === 0 ? [node, sp(1)] : row.depth === 1 ? [joint, node, sp(1)] : [guide(true), sp(1), joint, node, sp(1)];
     // A branch says more than a folder name; a detached head has only the name.
     const name = wt.branch || wt.name;
@@ -1061,7 +932,7 @@ function worktreeMap(ctx: Ctx, folders: Folder[]): void {
           seg(cut(name, nameCol - widthOf(prefix) - 1).padEnd(nameCol - widthOf(prefix)), wt.here ? theme.ink : theme.text, {bold: wt.here}),
           ...(whereCol ? [seg((width(where) <= whereCol ? where : wt.name).padEnd(whereCol), theme.faint)] : []),
         ],
-        [seg((wt.ahead ? `${AHEAD}${wt.ahead}` : '').padStart(4), theme.dim), sp(2), ...folderState(ctx, wt)],
+        [seg((wt.ahead ? `${glyph.ahead}${wt.ahead}` : '').padStart(4), theme.dim), sp(2), ...folderState(ctx, wt)],
       ),
     );
   }
@@ -1097,9 +968,11 @@ function worktreeBlock(ctx: Ctx, folder: Folder, id: string): void {
     left.push(sp(3), ...chip(plural(n, 'file'), theme.surface2, theme.text));
     if (wt.lines.added) left.push(sp(1), ...chip(`+${wt.lines.added}`, theme.tintAdd, theme.add));
     if (wt.lines.removed) left.push(sp(1), ...chip(`${glyph.minus}${wt.lines.removed}`, theme.tintDel, theme.del));
-  } else {
+  } else if (n) {
     left.push(seg(`   ${plural(n, 'file')} `, theme.dim), ...sizeCells(wt.lines.added, wt.lines.removed));
   }
+  // A folder that is gone has no diff left to count, so it says nothing about
+  // one rather than saying `0 files`.
 
   ctx.out.push(streamRow(cols, left, merged, rail));
   if (folded) return;
@@ -1237,9 +1110,12 @@ function manyFolders(ctx: Ctx, folders: Folder[]): void {
 
     const change = item.change!;
     const agents = byAgent.get(turnKey(change)) ?? [];
-    const block: Block = {colour: here?.colour, tag: here ? [...folderChip(here), sp(1)] : [], who: 'you'};
+    // Which folder it was typed in. A turn read from another worktree's own
+    // chats carries that folder, so its chip and its node are that folder's.
+    const folder = folders.find(f => pathKey(f.wt.path) === pathKey(change.folder)) ?? here;
+    const block: Block = {colour: folder?.colour, tag: folder ? [...folderChip(folder), sp(1)] : [], who: 'you'};
     if (!isOpen(change)) {
-      pastTurn(ctx, change, agents, {colour: here?.colour});
+      pastTurn(ctx, change, agents, {colour: folder?.colour});
       return;
     }
 
@@ -1331,8 +1207,8 @@ function flat(ctx: Ctx): void {
     const rows = viewRows(keyed, ctx.folded, ctx.opened, ctx.hideSpace);
     ctx.out.push(
       ...diffLines(rows, keyed, {
-        cols: cols - 1, fileKey: key, path: file.status === 'deleted' ? null : file.path, sel, pins: [`f:${key}`],
-      }).map(widen),
+        cols, fileKey: key, path: file.status === 'deleted' ? null : file.path, sel, pins: [`f:${key}`], wide: true,
+      }),
     );
   }
 }
