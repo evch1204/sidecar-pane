@@ -15,7 +15,7 @@ It has four views:
 | **Agents** | When Claude hands work to subagents, who is doing what right now? |
 | **Usage** | How much of the 5 hour and weekly allowance is gone, and where did the tokens go? |
 
-Plus a menu bar that says whether Claude is working or idle.
+Plus a menu bar that says which of you the pane is waiting on.
 
 ### What it is not
 
@@ -72,13 +72,14 @@ So **yes, it can work on a MacBook**: the app is plain Node and runs anywhere. O
 ## 3. Architecture
 
 ```
-Claude Code ──hooks──▶ hook.mjs ──append──▶ ~/.sidecar/<project>/events.jsonl
-                          │
-                          └── on prompt start / stop ──▶ snapshot into ~/.sidecar/<project>/shadow.git
+Claude Code ──writes──▶ ~/.claude/projects/<project>/<chat>.jsonl   (live)
+            ──asks───▶ attention.mjs ──▶ ~/.sidecar/<project>/attention.json
 
-Sidecar pane ──watches──▶ events.jsonl      (what is Claude doing right now)
+Sidecar pane ──reads────▶ the transcripts    (chat, prompts, tools, agents)
+             ──reads────▶ attention.json     (is it waiting on you)
              ──reads────▶ the project folder (tree, file contents)
              ──runs─────▶ git                (status, diff, shadow-repo diff per turn)
+             ──snapshots▶ ~/.sidecar/<project>/shadow.git  on prompt start and stop
 ```
 
 | Part | Job | Rules |
@@ -86,10 +87,10 @@ Sidecar pane ──watches──▶ events.jsonl      (what is Claude doing righ
 | `src/core` | Files, tree, git, diff parsing, markdown to styled lines, event reading. | Knows nothing about the screen. Has unit tests. |
 | `src/ui` | Draws the screen, handles keys and mouse. | Knows nothing about the file system except what `core` hands it. The only part to rewrite if the toolkit changes. |
 | `src/launch` | Detects the terminal and opens or closes the split. | One small file per terminal. |
-| `hooks/hook.mjs` | Runs when Claude fires an event. Appends one line, maybe takes a snapshot, exits. | No dependencies. Prints nothing (hook output can land in Claude's context). Marked `async` so Claude never waits. Exits 0 even when Sidecar is not running. |
+| `hooks/` | Two scripts, both optional and neither installed for you: `attention.mjs` writes down a permission prompt, `statusline.mjs` saves the usage numbers. | No dependencies. Print nothing (hook output can land in Claude's context). Marked `async` so Claude never waits. Exit 0 even when Sidecar is not running. |
 | `.claude-plugin`, `skills/` | Packaging so `/sidecar` and the hooks install in one step. | |
 
-**No background server.** The hook writes a file, the pane watches the file. Nothing to start, nothing to die, no ports.
+**No background server.** Claude Code writes files, the pane reads them. Nothing to start, nothing to die, no ports.
 
 **Per-turn diffs** come from a hidden git repo kept outside the project. Already tested on this machine: a snapshot took 139 ms, caught a change made through a shell command, and left the project's own `.git` untouched. This also makes it work in folders that are not git repos.
 
@@ -119,9 +120,23 @@ Sidecar pane ──watches──▶ events.jsonl      (what is Claude doing righ
   agents are named and charted the way Claude Code prints them, lanes on a
   clock in the Agents view, and worktrees as a map and a scope (see
   "Worktrees").
-- Not yet: launchers for anything but Windows Terminal, follow mode, a
-  "waiting for you" state (the transcripts do not say when Claude is blocked on
-  a permission prompt).
+- Done: one rule for every row that opens. A chevron in front of it, and the
+  footer names the verb Enter will use on the row under the cursor (see "One
+  stream").
+- Done: a worktree is where an agent worked, not a block of the stream. The
+  agent's own row says which folder and how far it has got (see "Worktrees").
+- Done: the bar says which of five things is true — agents running, the tool
+  Claude is inside, a question waiting on you, your turn, idle — and the pane
+  opens on a card with its own name on it instead of an empty stream (see "The
+  bar and the first frame").
+- Done: follow mode, on by default. While a turn runs the pane opens the file
+  it has just written; anything you press or click pauses it, `f` hands it
+  back.
+- Done: one hook, and only one. Claude Code asking to allow a tool call is the
+  one thing the transcript never records, so `hooks/attention.mjs` writes it
+  down and the pane reads `● asking you` off it (see "Where the history comes
+  from"). It is not installed for you: `npm run connect` does that.
+- Not yet: launchers for anything but Windows Terminal.
 - Design canvas: https://claude.ai/artifact/B8wcGJHEqSzm1Ubncr2M9s, and the
   same thing as files in `design/`. Page 3 of it is captured from the running
   pane, so it is never out of date by more than one `design/capture.tsx` run.
@@ -134,39 +149,34 @@ to read. The redesign borrows from the owner's own web app (deepdotspace,
 create mode), where a turn is a block and a diff opens under the row you
 clicked.
 
+This is the real thing, printed by `npx tsx scripts/smoke-history.tsx --cols
+62 --rows 34` over a fake day: a turn running with an agent in a worktree of
+its own, and four past turns under it.
+
 ```
- ◆ Sidecar  View        5h ▄▄▄▄▄▄ 58%  1h 52m · wk 23%   ● idle
+ ◆ Sidecar  View  5h ▄▄▄▄▄▄ 58%  1h 52m · wk 23%   ⠇ 1 agent
 
-  Changes   Files   Agents   Usage
-  By turn  ·  By file  ·  Uncommitted           in jiaolong ▾
+  Changes   Files   Agents ⠇ 1   Usage
+  By turn  ·  By file  ·  Uncommitted              in demo ▾
 
- TODAY   Layout polish, usage and agents   11 turns  ·  5h 40m
-         ▄▄ ▄▄ ▄▄ ▄▄ ▄▄ ▄▄ ▄▄ ▄▄ ▄▄ ▄▄ ▄▄        +4,180 −1,630
+ TODAY   Make greet friendlier           5 turns  ·  46m 01s
+         ▂▂ ▂▂ ▃▃ ▂▂ ▁▁                               +20 −3
 
- ●  i think option 3 is exactly what i want. and when i… 13:05
- │  ▐8 files▌ ▐+310▌ ▐−76▌  14m · 1 agent        ▐✓ merged▌
- │  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
- │  ■ src/core 58%   ■ src/ui 31%   ■ docs 11%
+ ⠇  hand the guide to an agent in its own worktree     14:35
+ │  running 10m 00s
  │
- │  src/core
- │   M  turns.ts                          ▄▄▄▄▄   +114   −12
- │   M  git.ts                            ▄▄▄▄▄    +96
- │  src/ui
- │   M  views/changes.ts                  ▄▄▄▄▄    +17    −5
- │  docs
- │   A  scratch-notes.md   not recorded   ▄▄▄▄▄
+ │  1 agent  ·  1 done                            12k tokens
+ │  ▸ ■ Write the guide                      ✓  6m 36s   12k
+ │      in agent-docs   1 file ▄▄▄▄▄    ↑1 · not in demo yet
  │
- │  ▸ 40 steps   Read 14  Edit 11  Bash 9           1 agent
- │  ✦ Turns the pane did not watch now read their files
- │    from the commits made before your next prompt. more
- │
- │  ◆ 2fa351d  Fill a turn nobody watched from commits  13:19
- │  ✓ bffa4d9  merged into improve-pane-layout-polish   13:20
+ │  ⠇ Read  Read what it wrote                       2 steps
 
- ●  wait im not sure about the new…   no file changes   12:58
- ●  so i currently dont see any cha… 4 files ▄▄▄▄▄ ✓    12:41
- ●  sorry i forgot to pull from mai… 20 files ▄▄▄▄▄ ◆3   11:21
- ●  try running orchestrating agent…         4 agents   11:14
+ ▸  add a farewell as well, then…   2 files ▄▄▄▄▄ ◆2   14:25
+ ▸  document greet and get a few…   2 files ▄▄▄▄▄      14:15
+ ▸  make greet friendlier and say…  1 file  ▄▄▄▄▄      14:05
+ ▸  mention the licence in the re…  2 files ▄▄▄▄▄ ✓    13:59
+
+ enter close  3 agents  m menu  ↑↓ move demo • improve-greet
 ```
 
 Decisions, and why:
@@ -215,9 +225,36 @@ Decisions, and why:
   The edge row above the header meant opening a turn pushed its own header
   down a line, so the next click missed the row you had just aimed at. And the
   four corners read as a glitch rather than as an edge. Now column 1 carries
-  the turn's own mark (`▾`, `▸`, or the spinner while it runs) and a `│` on
-  every row under it, blank rows included. Same columns, no edge rows, nothing
-  moves, and the line of a running turn is the one accent on screen.
+  the turn's own mark — the chevron every opening row carries, `▸` closed and
+  `▾` open, or the spinner while it runs, because what Claude is doing matters
+  more than the fact that the block is open — and a `│` on every row under it,
+  blank rows included. Same columns, no edge rows, nothing moves, and the line
+  of a running turn is the one accent on screen.
+- **One rule for a row that opens.** A row that opens or closes in place
+  starts with a chevron just left of its words: `▸` closed, `▾` open, column 1
+  for a block and column 4 for a row inside one, `dim`, `accent` under the
+  cursor, the folder's hue in the wider scope. A pill sets state. An underlined
+  word or a bar segment goes somewhere. Everything else is text, and a click on
+  text walks up to the nearest chevron above it. Before this, a turn was a
+  filled or hollow dot, an agent was a tree joint, a file in a turn was its
+  status letter and a hunk drew its own arrows: four shapes for one thing, and
+  none of them said what pressing Enter would do.
+
+  So the footer says it in words. A line carries a `hint` — set by the view
+  that built it, because only that view knows — and the first thing the footer
+  says is `enter <hint>`: `open`, `close`, `diff`, `close diff`, `steps`,
+  `agent`, `fold`, `unfold`, `jump`, `all files`, `all commits`, `peek`, or
+  `40 more lines`. `esc back` comes second, and only on a row that is inside
+  something. `w worktree` left the footer with it: the key, the `View` menu and
+  the scope pill all say that already, and those columns are worth more to the
+  row under the cursor.
+- **An open turn carries the whole prompt.** A closed turn cuts it to one row,
+  which is what makes the stream a list; an open one wraps it over as many rows
+  as it takes, and Enter on any of those rows closes the turn. You asked for
+  the work, so the words that asked for it are worth the room. It also took
+  away the one row in the view where Enter did something other than what the
+  row was for: the old `more` toggle showed the rest of the prompt, and the
+  turn only closed on the second press.
 - **A toggled row keeps its place on screen.** A click or Enter remembers the
   row's id and the screen row it was on, and after the lines are rebuilt the
   scroll is set so that id is still there. Without it, opening a long diff
@@ -286,6 +323,26 @@ Decisions, and why:
 - **No restore, no hover.** Sidecar is a viewer; and hover needs a mouse report
   per cell crossed.
 
+An open turn, from the same run, with every kind of row in it — the wrapped
+prompt, the chips, the folder bar, three agents, and the files:
+
+```
+ ▾  document greet and get a few agents to check it    14:15
+ │  over
+ │  ▐2 files▌ ▐+11▌  1m 30s                  ▐● uncommitted▌
+ │  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+ │  ■ root 73%   ■ src 27%
+ │
+ │  ⠧ 3 agents  ·  1 running  ·  1 done  ·  1 st… 43k tokens
+ │  ▸ ■ Check the README wording  ▐Explore▌  ✓     18s   18k
+ │  ▸ ■ Rewrite the example                  ●     12s   12k
+ │  ▸ ■ Polish the greeting  ▐Opus 4.5▌      ⠧ 28m 09s   12k
+ │       ⎿  Bash  Typecheck the greeting
+ │
+ │  root
+ │   ▸ M  README.md   ■■ ⚠ two agents     ▄▄▄▄▄     +8
+```
+
 Two other looks were drawn and not chosen, and are kept on the canvas: a
 painted "workbench" with a timeline spine, and parallel agents as git-graph
 lanes. The lanes cost ten columns and the owner found per-file "who is working
@@ -315,11 +372,11 @@ against three real runs.
 | Running, done or stopped | the task notification the chat writes when an agent ends (`<task-id>`, `<status>`), or the last reply ending its turn | Exact, including an agent the user stopped; only a run with no notification yet falls back to a quiet timer, and that guess is labelled as one |
 | Who started whom | the child's meta names the tool call; the parent's steps carry that call's id | Exact when both files are there, otherwise the shallower agent that was running when it started |
 | Files an agent wrote | its own Edit and Write calls | A hint: a shell command can write without naming a file |
+| Files an agent wrote **in a worktree of its own** | that folder's own git | Exact, and it does not depend on the agent naming anything |
 | Lines changed per agent | nothing | Not available. Snapshots are per turn, so an agent's row shows the turn's counts for that file |
 
 An overlap (two agents wrote the same file) is flagged on the file's row.
-Waiting on a permission prompt is not recorded anywhere, so the pane cannot
-show it. Workflows and background agents are the same files on disk.
+Workflows and background agents are the same files on disk.
 
 Decisions, and why:
 
@@ -333,12 +390,34 @@ Decisions, and why:
 - **A chip only for what is not the default.** A `general-purpose` agent on the
   chat's own model says nothing worth two columns, so it gets no chip; a kind
   Claude chose (`Explore`) or a model that differs (`Opus 4.5`) does.
-- **The turn is the root and the agents are branches** off the same left line,
-  with `├─` and `└─`, under a head row that counts them: `⠹ 3 agents · 2
-  running · 1 done` with the tokens on the right. The count comes first
-  because it is the thing you are looking for. Under a running agent hangs
-  `⎿ Bash  npx tsc --noEmit` and how many calls it has made; under a finished
-  one, the calls and the files it left behind.
+- **The turn is the root and the agents hang under it** on the same left line,
+  under a head row that counts them: `⠹ 3 agents · 2 running · 1 done` with the
+  tokens on the right. The count comes first because it is the thing you are
+  looking for. Under a running agent hangs `⎿ Bash  npx tsc --noEmit`; under a
+  finished one, the calls and the files it left behind.
+- **An agent row is a row that opens, not a branch of a tree.** It reads `▸ ■
+  task`, with the chevron every opening row has. The `├─` and `└─` joints are
+  gone: they said where an agent sat in a tree that is one level deep almost
+  every time, they cost the two columns the chevron and the square now use, and
+  they could not carry a chevron as well. Nesting is an indent with the parent's
+  `│` beside it, the way the Files tree draws what is inside a folder, and
+  everything that hangs under an agent starts where its task does. The model it
+  ran on is the first fact to go when an open row is too narrow to hold them
+  all: what it was and how much it did are why the row is there.
+- **An agent that worked somewhere else says so in one row.** Under its own
+  row, a fact row: `in agent-docs   1 file ▄▄▄▄▄` on the left, and on the
+  right the first of these that is true — `⠧ Opus 4.5 · 12m` while it runs, `✓
+  merged 11:56`, `removed`, `not recorded`, `↑1 · not in demo yet`, or `clean`.
+  One thing, because the first one that applies is the whole truth about that
+  folder. At 40 columns the count gives way and the right side reads `not
+  merged`: which folder it is not in is the part you already know. *Open: after
+  the folder is merged and deleted the left side still reads `0 files ▄▄▄▄▄`,
+  which is a count of a folder that is gone rather than a count of nothing.*
+- **Opening such an agent lists that folder's own files**, read from its git,
+  as text rather than as rows that open: the diff for them is over there and
+  nothing here could open it. The old `wrote …` line looked those files up in
+  this turn's changes, where a file written in another folder was never going
+  to be found.
 - **Quiet is not the same as stopped.** An agent that is inside a tool call, or
   waiting on a child agent, writes nothing to its own transcript while it is
   plainly alive. The notification answers it outright, so the timers only cover
@@ -359,18 +438,22 @@ The Changes view answers "what did this turn do". The Agents view answers
 "who was working, when, and where", and that is a chart, not a list.
 
 ```
- ●  i think right now there is overall needs to have a…  11:21
- │  9 agents  ·  at most 3 at once  ·  1h 18m
+ ⠴  hand the guide to an agent in its own worktree     14:35
+ │  1 agent  ·  7m
  │
- │                        11:21       12:00      12:39
- │  in jiaolong   the folder you are in              read only
- │  Audit Usage view      ▄                          ✓  2m 39s
- │  Audit Agents view     ▄                          ● stopped
- │  Phase 1 · left line        ▄▄▄▄▄▄                ✓ 18m 02s
+ │                        14:35      14:38     14:41
+ │  in agent-a7b1                             ✓ merged 14:45
+ │  ▸ ■ Write the guide   ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄ ✓  6m 36s
+
+ ▾  document greet and get a few agents to check it…   14:15
+ │  3 agents  ·  at most 2 at once  ·  29m
  │
- │  in three worktrees   one agent in each          ✓ 3 merged
- │  Phase 2a · Usage                  ▄▄▄▄           ✓ 12m 50s
- │  Phase 2b · Agents                 ▄▄▄▄▄▄         ✓ 18m 35s
+ │                        14:16      14:30     14:45
+ │  in demo   the folder you are in
+ │  ▸ ■ Check the README… ▄                        ✓     18s
+ │  ▸ ■ Rewrite the exam… ▄                        ● stopped
+ │  ▸ ■ Polish the greet…  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄ ⠴ 28m 28s
+ │      ⎿  Bash  Typecheck the greeting          2 tool uses
 ```
 
 - **One clock a turn.** Every agent of a turn is a bar on the same 26 cell
@@ -412,14 +495,28 @@ hang them on.
   for an agent without one, from the `cwd` every transcript line carries.
   `src/core/worktrees.ts` answers two questions per folder: how far it has
   gone (dirty, `↑N` ahead) and whether it has arrived here (merged, and when).
+- **A worktree is where an agent worked, never a block of the stream.** It
+  shows in three places and no more:
+
+  | Where | When |
+  |---|---|
+  | one fact row under the agent's own row, inside the turn that started it | always, in either scope |
+  | the WORKTREES map at the head of the stream | the wider scope only |
+  | a folder chip on a turn's title, and the folder's hue on its chevron | the wider scope only, and only on a turn that was typed in another folder |
+
+  It used to be four places, and one of them was a block: the worktree got a
+  stream block of its own, repeating the twenty minutes the agent's row already
+  carried, with a `you ·` in front of every chip to say which of the folders was
+  yours. The block is gone, and so is that caption and the chip on this folder's
+  own turns. The fact row under the agent says where it worked and how far that
+  has got, in one row, and that is the whole of it.
 - **Scope: mine or all.** `mine` is the pane's folder plus every worktree an
-  agent of its chats is working in, or worked in today. `all` is every
-  worktree of the repository. `w`, or the scope pill, switches. With more than
-  one folder in scope the WORKTREES map heads the stream — one row a folder,
-  filled node for active, `↑N`, and what it is doing — every block's title
-  carries its folder's chip, and a worktree an agent is working in is a block
-  of its own, saying the truth on its right: `not in your folder until it is
-  merged`.
+  agent of its chats is working in, or worked in today. `all` is every worktree
+  of the repository. `w`, or the scope pill, switches. The wider scope adds
+  exactly two things to the same stream — the map, which folds from a chevron in
+  column 1, and the chip and hue on a turn from another folder. *Open: in `all`
+  the day's head still counts the turns of one chat and carries that chat's
+  title, not the day's.*
 - **`all` really does widen the data.** A chat is keyed by the folder it was
   typed in, so a chat that ran in another worktree has a transcript directory
   of its own that is invisible from here. In `all`, `src/core/folders.ts`
@@ -442,6 +539,23 @@ hang them on.
   status`, a `rev-list --count` and a `diff --numstat`, all cached by its head
   and its status text, so a folder nothing moved in costs nothing. Only `all`
   reads other folders' transcripts, and at most eight folders.
+
+The wider scope, from the same run — the map, and the one turn that was typed
+somewhere else:
+
+```
+  By turn  ·  By file  ·  Uncommitted   in all 2 worktrees ▾
+
+ ▾  WORKTREES   one repo, 2 folders                 1 active
+ ● improve-greet      demo                ↑2  ⠼ you + Claude
+ └○ agent-docs        agent-a7b1               ↑1  1 changed
+
+ TODAY   Write the guide                      1 turn  ·  36s
+         ▂▂                                            +7 −0
+
+ ▾  ▐agent-docs▌ write the guide and commit it         14:35
+ │  ▐1 file▌ ▐+7▌  36s                         ▐◆ committed▌
+```
 
 ## Usage
 
@@ -552,14 +666,49 @@ checked on this machine, not assumed.
 | Which lines a turn changed | a snapshot of the project taken either side of the turn | Exact, from the moment sidecar first runs |
 | Which lines a turn sidecar was *not* open for changed | the project's own commits, matched to the turn by time | Exact lines; the turn they belong to is matched, and the row says so |
 | What differs from the last commit | git | Exact |
+| Whether Claude Code is waiting for you to allow a tool call | nowhere in the transcript: the one hook there is writes it down | Exact while the note still matches the transcript |
 
-Four things follow from that.
+Five things follow from that.
 
-**No hooks.** The transcript is flushed message by message: opening the file
-and reading the bytes appended since last time tells you the chat, the prompt,
-the tool running right now and when the turn ended. Day 4's status line and
-Day 6's turn list both fall out of it. The `hook.mjs` plan stays unbuilt until
-something actually needs it.
+**One hook, for the one thing the transcript never records.** The transcript is
+flushed message by message: opening the file and reading the bytes appended
+since last time tells you the chat, the prompt, the tool running right now and
+when the turn ended. Day 4's status line and Day 6's turn list both fall out of
+it, and the six-event `hook.mjs` plan was never built.
+
+The exception is the permission prompt. It lives in the CLI, and answering it
+either way makes it gone: nothing about it is written down, and a turn parked
+on one appends nothing at all, so from the outside it looks exactly like a turn
+thinking. `hooks/attention.mjs` writes it down. The event is
+`PermissionRequest`, not `Notification`, because `PermissionRequest` carries
+`transcript_path` and `tool_use_id` — which chat, and which call — and
+`Notification` carries only a message to show. The note is
+`{at, tool, toolUseId, sessionId, transcriptPath, transcriptSize}`, written to
+`~/.sidecar/<project>/attention.json` through a `.tmp` and a rename, so the
+pane never reads half of one.
+
+**Nothing ever deletes the note.** A hook that fires when the prompt goes up
+cannot fire again when you answer it, so the file on disk only ever means "a
+prompt was raised here once". Whether it is still true is read back out of the
+transcript, every poll, by `src/core/attention.ts`: the call named in the note
+has no result yet, and the chat is still inside that turn. Where the call's
+record has not been flushed yet — the hook can beat it — the fallback is the
+transcript still being the size the hook wrote down, because answering, either
+way, appends a line. `bypassPermissions` never raises a prompt, so the hook
+never fires and the pane says nothing, which is right.
+
+The hook obeys the rules every hook in this repo obeys, and they are the reason
+it is safe to install: it prints nothing on any path, because a hook that says
+nothing has made no decision and the prompt you are looking at is untouched; it
+has no dependencies; it runs `async` with a five second timeout, so Claude never
+waits for it; and it exits 0 on every path, including bad stdin and an
+unwritable folder. It is never installed for you. `npm run connect` appends it
+to `hooks.PermissionRequest` in `~/.claude/settings.json` — appends, because
+hooks are a list, so the owner's Orca hook and the toast are untouched — and
+`npm run disconnect` removes only the entries that run `attention.mjs`, by name
+rather than by path, so a copy connected from another checkout comes out too. If
+`hooks` is not the shape Claude Code documents, connect stops and says so rather
+than guess.
 
 **Never guess a file from a command.** The first attempt read paths out of
 shell commands and confidently attributed `Object.assign` and `frames.push`.
@@ -598,6 +747,87 @@ pane *did* watch keeps its snapshot diff and ignores commits entirely. Cost is
 one `git rev-parse HEAD` per poll while HEAD is unchanged, and the log is
 bounded by the oldest turn still missing. Outside a git repo nothing changes.
 
+## The bar and the first frame
+
+The right end of the bar is the one thing you glance at without moving your
+eyes off the conversation, so it has to say the true thing and not a category.
+It used to say `working` or `idle`, which is two of the five things that can be
+true. Now it reads the transcript the same way you do, and takes the first of
+these that applies:
+
+| Word | When | How it looks |
+|---|---|---|
+| `⠧ reading` | the pane has not finished its own first read | accent spinner, `dim` word |
+| `⠧ 1 agent` | any agent is running | accent spinner, `ink`; the count is the news, and the turn they belong to is working by definition |
+| `● asking you` | the newest turn has an unanswered `AskUserQuestion` or `ExitPlanMode`, or the permission hook's note is still live | `warn` dot and word |
+| `⠧ Bash 4m` | the turn is running: the tool it is inside, cut to eight columns, and how long the turn has been going | accent spinner, `ink` |
+| `● your turn` | the newest turn ended, and it ended today | `ink` dot, `text` word |
+| `● idle` | nothing of today to say, or no chat at all | `faint` dot, `dim` word |
+
+`asking you` is keyed on the question and never on the turn running, because a
+turn parked on a permission prompt appends nothing: those are two different
+facts and only one of them is about you. Ended is read out of the transcript
+now — `stop_reason: end_turn`, or a reply cut off with the interrupt line right
+after it — rather than from a quiet timer, which called a finished reply
+running for two minutes and a slow tool call finished after two. The timer is
+left only as the bound on a call that never came back, and inside an open call
+it is twelve minutes, past Claude Code's own ten minute Bash timeout.
+
+A spinner says something is happening and never says for how long, so the same
+question is answered one row in as well: the running turn's step row and a
+running agent's say `6m quiet` in `warn` once the silence passes five minutes,
+and the turn's step row says `waiting for you` outright while the hook's note
+is live. The Changes tab carries a `warn` dot for that while you are looking at
+another view, because it is the one thing worth pulling you out of one.
+
+**The first frame is a card, not an empty stream.** The pane starts before it
+has read anything, and what it drew then was the chrome with one dim sentence
+under it. Now the stream's place is taken whole, a third of the way down, by
+one card: the pane's name in the pixel font (`bigDigits`, with A–Z added to the
+digit map), the folder and the branch, and a readout of what the read has
+found. The chrome above it and the footer below it never move, so nothing jumps
+when the real rows arrive. The pills wait until there is something for them to
+be showing.
+
+The readout is honest about how far it has got. Before the transcripts are in,
+one `readdir` is all it can afford, so the row says `reading 58 chats…`; once
+`readSessions` and `readAgents` have returned it says `3 chats   41 turns   12
+agents`; while the commits are still being measured a spinner row under it says
+so. Files keeps its tree and its reader through all of this — those are worth
+looking at whether or not anything was ever typed here — and so does every
+grouping but By turn, which is the only one the chats themselves are the
+content of.
+
+The same card is the empty state, with its last row settled. A folder is only
+called empty once the read is over; before that it is a folder nothing has
+looked in yet.
+
+```
+ ◆ Sidecar  View                                      ● idle
+
+  Changes   Files   Usage
+  By turn  ·  By file  ·  Uncommitted
+
+
+
+
+   ██▀▀▀▀  ▀▀██▀▀  ██▀▀▄▄  ██▀▀▀▀  ██▀▀▀▀  ▄▄▀▀▄▄  ██▀▀██
+   ▀▀▀▀██    ██    ██  ██  ██▀▀    ██      ██▀▀██  ██▀▀▄▄
+   ▀▀▀▀▀▀  ▀▀▀▀▀▀  ▀▀▀▀    ▀▀▀▀▀▀  ▀▀▀▀▀▀  ▀▀  ▀▀  ▀▀  ▀▀
+
+   nothing  ·  master
+   no chats yet  ·  start Claude Code in this folder
+```
+
+The wordmark is centred rather than indented: at 62 columns it is 54 wide, and
+a fixed indent would have pushed its last letter off the edge. Scale 2 while it
+fits, scale 1 below that, which is 27 columns and leaves a 40 column pane room
+for the readout.
+
+**And there is no other idle screen.** The card is only ever in the way of
+nothing. At rest the stream is the content, and an attract screen would be a
+thing to dismiss.
+
 ## Mouse
 
 Ink has no mouse support, so the pane turns on the terminal's own reporting
@@ -612,13 +842,13 @@ Every line carries what a click on it does, so a row is a button.
 |---|---|---|---|
 | A menu title | open or close that menu | | |
 | The usage meters | go to Usage | | |
-| `working` / `idle` | go to Changes | | |
+| The status word — `⠧ Bash 4m`, `● asking you`, `● your turn`, `● idle` | go to Changes | | |
 | A tab | switch view | | |
 | A pill | show that grouping, or clear that filter | | |
 | `in <folder> ▾` at the right of the pills | widen the Changes view to every worktree, or back to this folder (`w`) | | |
 | A column of the day's skyline | jump to that turn | | |
-| The WORKTREES header | fold or unfold the map | | |
-| A turn, a file, an agent, "more", Steps | open or close it in place | scroll | |
+| The WORKTREES header (the wider scope only) | fold or unfold the map | | |
+| Any row with a chevron — a turn, a file, an agent, `N steps`, `N more files` | open or close it in place | scroll | |
 | A hunk header | fold or unfold | scroll | |
 | A gap | open it | scroll | |
 | A diff line | move the cursor; double-click opens the file there | scroll | |
@@ -631,9 +861,25 @@ Every line carries what a click on it does, so a row is a button.
 The last column is also a minimap: the thumb is a background, and the change
 marks are spread over the whole track by where their row falls in the list, so
 a mark and the thumb can share a cell instead of hiding each other. A click on
-a row that has nothing to open walks up to the nearest row that does, and
-nothing a click cannot reach keeps a click zone: a menu title, a tab or a
-meter that had to be cut at a narrow width loses its zone with its text.
+a row that has nothing to open walks up to the nearest row that does — the
+nearest chevron above it — and nothing a click cannot reach keeps a click zone:
+a menu title, a tab or a meter that had to be cut at a narrow width loses its
+zone with its text.
+
+**Anything you do with the mouse pauses follow mode**, the same as a key press,
+because the page is yours the moment you reach for it. `f` hands it back. The
+footer says which it is: `f following` in `accent` while it is on, `f follow`
+in `dim` while it is not — where there is room for it. It is one of the last
+hints, so a row with a long verb and something to go back out to pushes it off
+a 62 column footer.
+
+**One key that is not a click.** `y` on a line of a diff, or of a file in the
+reader, puts `src/ui/App.tsx:1123` on the clipboard, through the terminal's own
+OSC 52 escape, and the footer says `copied src/ui/App.tsx:1123`. That is the
+whole of it: no file is written, no command is run, and what lands there is a
+place rather than the code — the only shape of "take this with you" a viewer is
+allowed to have. It is one function, so it comes out again in one commit if the
+terminal it has to go through will not carry it.
 
 ## 4. The build, day by day
 
@@ -666,8 +912,8 @@ File tree, plain preview with line numbers, keyboard control, Windows Terminal s
 
 ### Day 4: make it aware of Claude
 
-1. `hook.mjs` and the hook config for `SessionStart`, `UserPromptSubmit`, `PostToolUse`, `Notification`, `Stop`, `SessionEnd`. Added next to your existing Orca and toast hooks without touching them.
-2. Status line: `● working`, `● idle`, `● needs you` (permission prompts).
+1. ~~`hook.mjs` and the hook config for `SessionStart`, `UserPromptSubmit`, `PostToolUse`, `Notification`, `Stop`, `SessionEnd`.~~ **Done, and it took one hook, not six:** the transcript already carries everything those five would have said. The sixth, the permission prompt, is the one thing it never records, so `hooks/attention.mjs` writes that down and nothing else. `npm run connect` appends it to `hooks.PermissionRequest` beside your Orca and toast hooks without touching them.
+2. ~~Status line: `● working`, `● idle`, `● needs you` (permission prompts).~~ **Done, and it says more than three things:** `⠧ reading`, `⠧ N agents`, `● asking you`, `⠧ Bash 4m`, `● your turn`, `● idle` (see "The bar and the first frame").
 3. Files light up in the tree the moment Claude touches them, then fade to a quieter "touched this session" mark.
 4. Optional auto-open when a Claude session starts. Auto-close when it ends.
 
@@ -690,7 +936,7 @@ File tree, plain preview with line numbers, keyboard control, Windows Terminal s
 1. ~~Shadow snapshots on prompt start and on stop.~~ Done, driven by the
    transcript rather than by hooks.
 2. ~~Turn list: each prompt you sent, with its own diff and counts.~~ Done.
-3. Follow mode: the pane jumps to whatever Claude just edited. Any key press pauses it; a key turns it back on.
+3. ~~Follow mode: the pane jumps to whatever Claude just edited. Any key press pauses it; a key turns it back on.~~ **Done, and on by default.** Each poll the pane compares the running turn's known files with the last poll's, and a file that was not there before gets its diff opened, the one before it closed — one followed diff at a time — and the cursor moved onto it three rows down the page. It compares the snapshot's list, not the Edit calls, so a file a shell command changed without naming it counts. Any key, click or wheel but `f` pauses it; `f` hands it back; when the turn ends the last diff it opened stays open.
 4. Works in folders without git.
 
 - **Done when:** you can leave the pane alone for a whole session and it always shows the right thing.
@@ -710,11 +956,16 @@ File tree, plain preview with line numbers, keyboard control, Windows Terminal s
 
 In rough order of value:
 
-1. **Revert** a file or a whole turn back to its turn-start snapshot. Covers shell-command and subagent changes, which the built-in `/rewind` does not restore.
-2. **Line comments that reach Claude.** Press a key on a line, type a note. A `UserPromptSubmit` hook prints queued notes so they join your next prompt.
-3. **Risk flags.** Local rules that mark removed test assertions, newly skipped tests, new dependencies, edits to `.env` or CI files.
+1. **Risk flags.** Local rules that mark removed test assertions, newly skipped tests, new dependencies, edits to `.env` or CI files.
+2. **Check lights.** `✓ typecheck passed` on a turn, read off the tool results it already has.
+3. **"Before this turn"** in the reader: the same file as it was when the prompt was sent.
 4. **Log view.** Tail a dev-server log file in the pane. Viewer only: Sidecar does not start the server.
 5. **Wrapper mode (option B).** Only if the split still feels wrong after living with it.
+
+**Never**, whatever else gets built:
+
+- **Revert** a file or a turn. It was first on this list, and it is the one thing that would make the pane an editor. Claude edits, you look; `/rewind` and git are where undo lives.
+- **Line comments that reach Claude.** Typing a note on a line and having a `UserPromptSubmit` hook carry it into your next prompt makes the pane an input to the conversation, which is the CLI's job. `y` is the viewer-only form of the same wish: it puts the place — `src/ui/App.tsx:1123` — on your clipboard, and you decide what to say about it.
 
 ## 6. Rules that protect the project
 
@@ -723,13 +974,18 @@ In rough order of value:
 - `core` and `ui` stay separate.
 - Every feature must answer: does this help me see what Claude is doing? If not, it does not go in.
 - Windows Terminal is the first-class target because that is what you use. Other terminals are best effort.
-- Before each commit: `npm run typecheck` and `npx tsx scripts/smoke.tsx`.
+- Before each commit: `npm run typecheck`, `npx tsx scripts/smoke.tsx` and
+  `npx tsx scripts/smoke-history.tsx`, each at `--cols 40 --rows 16` as well as
+  at its own width. The two scripts drive the real pane — one over this repo,
+  one over a whole fake day in a temp folder — and every frame in this file was
+  printed by one of them. If it is not in a frame, it is not built.
 
 ## 7. Open questions
 
 | Question | Decide by |
 |---|---|
 | ~~Ink or OpenTUI~~ | Decided: Ink, with mouse reporting parsed by hand. |
+| The name on the bar and on the first frame: **Tower**, **Glass**, **Deck**, or keep **Sidecar**. It is one string, `NAME` in `src/ui/splash.ts`, and the wordmark is drawn from it, so changing it is one line | Whenever you like. The build ships `Sidecar` |
 | Final name (`sidecar` is taken on npm; `sidecar-pane` is free) | Day 7, before going public |
 | ~~Tree on top, or side by side when wide~~ | Decided: on top, in both views. Columns are the scarce resource in a split. |
 | Should auto-open be on by default | Day 4 |
