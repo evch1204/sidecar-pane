@@ -264,12 +264,14 @@ agentFile('def456', [
 ]);
 
 // Still running, on another model, so its row carries a model chip and the
-// step it is on.
+// step it is on. Its typecheck was started six minutes ago and has not come
+// back, which is the window in which a spinner stops being enough and the row
+// says the number instead.
 agentMeta('run789', {agentType: 'general-purpose', description: 'Polish the greeting', toolUseId: 'call-agent-3', spawnDepth: 1, model: 'claude-opus-4-5-20251101'});
 agentFile('run789', [
   agentAsk('run789', at(28), 'Polish the greeting itself.'),
   agentLine('run789', at(27), {id: 'c-1', model: 'claude-opus-4-5-20251101', usage, content: [{type: 'tool_use', id: 'c-t1', name: 'Read', input: {file_path: path.join(project, 'src/greet.ts')}}]}),
-  agentLine('run789', at(0.4), {id: 'c-2', model: 'claude-opus-4-5-20251101', usage, stop_reason: 'tool_use', content: [{type: 'tool_use', id: 'c-t2', name: 'Bash', input: {command: 'npx tsc --noEmit', description: 'Typecheck the greeting'}}]}),
+  agentLine('run789', at(6.2), {id: 'c-2', model: 'claude-opus-4-5-20251101', usage, stop_reason: 'tool_use', content: [{type: 'tool_use', id: 'c-t2', name: 'Bash', input: {command: 'npx tsc --noEmit', description: 'Typecheck the greeting'}}]}),
 ]);
 flush();
 await take(store, project, Date.parse(at(28)));
@@ -543,6 +545,11 @@ if (await p.onto('document greet')) {
   check(chart.includes('■'), 'each agent should carry a square in its own hue');
   check(chart.includes('■■'), 'a file two agents wrote should carry both their squares');
   check(chart.includes('⎿'), 'the agent still running should show the step it is on');
+  // A spinner says something is happening and never says for how long. Past
+  // five minutes the row says the number, because that is where a long
+  // command and a stuck one start to look the same.
+  const step = chart.split('\n').find(row => row.includes('⎿')) ?? '';
+  check(/\d+m( \d+s)? quiet/.test(step), `and how long that step has been silent, and it reads "${step.trim()}"`);
   check(COLS < 56 || /▐(Explore|Opus)/.test(chart), 'an agent whose kind or model is not the default should carry a chip');
   await p.press(ESC, ESC);
 }

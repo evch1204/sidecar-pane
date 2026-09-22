@@ -846,7 +846,10 @@ function chartRow(ctx: Ctx, node: AgentNode, change: TurnChange, pins: string[],
   if (status === 'running' && last) {
     row(
       [sp(1), seg(glyph.elbow, theme.faint), sp(2), seg(last.tool.padEnd(6), theme.dim), seg(target(ctx.root, last), theme.text)],
-      quietNote(agent.endedAt, now),
+      // The quiet the pane judges it by, not its own last record: an agent
+      // waiting on a child of its own writes nothing while the child works,
+      // and branding a healthy parent `20m quiet` in warn is a false alarm.
+      quietNote(agent.quiet.from, now),
     );
   }
 
