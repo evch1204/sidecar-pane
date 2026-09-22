@@ -63,6 +63,8 @@ const diffNo = (row: string): number => Number(/^[\s│▎]*(\d+) [+−] /.exec(
 // The one rule for a row that opens or closes in place: a chevron first, after
 // whatever left line or tree guide comes before it.
 const opensInPlace = (row: string): boolean => /^[\s│]*[▸▾] /.test(row);
+// The word the footer puts after `enter`: what the row under the cursor does.
+const verbOf = (row: string): string => /^\s*enter (.+?)(?: {2,}|$)/.exec(row)?.[1] ?? '';
 // Markdown spells a sentence the same way formatted and as written, once the
 // markers it swallows are gone.
 const bare = (row: string): string => row.replace(/[*`_[\]|#>]/g, '').replace(/\s+/g, ' ').trim();
@@ -157,8 +159,13 @@ function pane(root: string) {
   // before anything has been read, and it is gone again in a few hundred
   // milliseconds, so it can only be looked at afterwards.
   const shots = () => frames.map(plain).filter(shot => shot.includes('\n'));
+  // The footer says what Enter will do on the row under the cursor.
+  const foot = () => [...frame().split('\n')].map(plain).reverse().find(row => row.trim()) ?? '';
+  // Everything the pane has written to the terminal, escapes and all: the
+  // clipboard goes out through one of them and never appears in a frame.
+  const raw = () => frames.join('');
 
-  return {press, show, frame, shots, text, cursorRow, cursorRows, cursorAt, numbers, onto, quit};
+  return {press, show, frame, foot, raw, shots, text, cursorRow, cursorRows, cursorAt, numbers, onto, quit};
 }
 
 // ---- the repo itself -------------------------------------------------------
@@ -420,6 +427,11 @@ const flat = b.text().filter(row => row.trim());
 const notFlat = flat.find(row => !opensInPlace(row));
 check(flat.length > 0 && !notFlat, `every row of Uncommitted should start with a chevron, and "${notFlat?.trim()}" does not`);
 
+// And says so in the footer, in the word for what Enter does there.
+if (await b.onto('long.txt')) {
+  check(verbOf(b.foot()) === 'diff', `a file row should offer its diff, and the footer reads "${b.foot().trim()}"`);
+}
+
 let wanted = 0;
 for (let n = 0; n < 40 && !wanted; n++) {
   const row = b.cursorRow();
@@ -440,6 +452,13 @@ check(b.text().some(row => /^ │\s+▾ /.test(row)), 'an open hunk should be he
 if (!wanted) await b.show('changes: the cursor never reached a line of the diff');
 check(wanted > 0, 'the cursor should have reached a changed line of the diff');
 if (wanted) {
+  // `y` puts the place, not the code, on the clipboard, through the escape
+  // the terminal reads. Nothing about it shows in a frame but the notice.
+  await b.press('y');
+  await wait(300);
+  check(b.raw().includes('\u001B]52;c;'), 'y should write the clipboard escape to the terminal');
+  check(plain(b.frame()).includes(`copied long.txt:${wanted}`), `and the footer should say what it copied, and it reads "${b.foot().trim()}"`);
+
   await b.press('o');
   await wait(700);
   await b.show(`changes: o opened the reader on line ${wanted}`);
@@ -497,6 +516,11 @@ fs.rmSync(stage, {recursive: true, force: true});
 // the frame down, so nothing below it is where it says it is.
 const overflowed = seen.filter(shot => shot.split('\n').some(row => [...row].length > COLS));
 check(overflowed.length === 0, `no row should be wider than the pane, and ${overflowed.length} frames have one`);
+// The scope has a key, a menu item and a pill of its own; the footer's columns
+// belong to the row under the cursor.
+const lastRow = (shot: string) => [...shot.split('\n')].reverse().find(row => row.trim()) ?? '';
+const scoped = seen.filter(shot => lastRow(shot).includes('w worktree')).length;
+check(scoped === 0, `no footer should spend a hint on the scope key, and ${scoped} frames do`);
 
 if (failed) {
   console.error(`\n${failed} check${failed === 1 ? '' : 's'} failed at ${COLS}x${ROWS}.`);

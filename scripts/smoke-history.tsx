@@ -90,6 +90,14 @@ function rowUnder(frame: string, what: string): string {
 // `2 tool uses`, and what a row too narrow to hold the words leaves of it.
 const TOOLS = /\d+ tool use|\d+ too…/;
 
+// The spinner is a different glyph every 250 ms, so a check about a row that
+// carries one matches whichever frame the pane happens to be on.
+const SPIN = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏';
+const spinning = (row: string, what: string): boolean => new RegExp(`[${SPIN}] ${what}`).test(row);
+
+// The word the footer puts after `enter`: what the row under the cursor does.
+const verbOf = (row: string): string => /^\s*enter (.+?)(?: {2,}|$)/.exec(row)?.[1] ?? '';
+
 // How many columns of a row are painted with the cursor's own background.
 function litWidth(row: string): number {
   let on = false;
@@ -371,6 +379,10 @@ function pane(root: string, cols = COLS, rows = ROWS) {
   const frame = () => out.at(-1) ?? '';
   const text = () => plain(frame());
   const rowsOf = () => frame().split('\n');
+  // The two rows of chrome the checks about state read: the bar says who the
+  // pane is waiting on, the footer says what the row under the cursor does.
+  const bar = () => plain(rowsOf()[0] ?? '');
+  const foot = () => [...rowsOf()].map(plain).reverse().find(row => row.trim()) ?? '';
   // A block is often taller than the window, and on a short pane never more
   // than half of it is on screen at once. `mark` remembers where the run is
   // now and `since` reads back every row drawn after that: step through a
@@ -423,7 +435,7 @@ function pane(root: string, cols = COLS, rows = ROWS) {
     await app.waitUntilExit();
   };
 
-  return {press, show, frame, text, rowsOf, cursorRow, mark, since, onto, quit};
+  return {press, show, frame, text, rowsOf, bar, foot, cursorRow, mark, since, onto, quit};
 }
 
 const DOWN = '\u001B[B';
@@ -446,7 +458,6 @@ check(/[▁▂▃▄▅▆▇█]{2} [▁▂▃▄▅▆▇█]{2} /.test(openin
 
 // A turn is a row that opens, so it is marked like one, and the one that is
 // running says that instead.
-const SPIN = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏';
 const turnRows = (shot: string) => shot.split('\n').filter(row => /\d\d:\d\d\s*$/.test(row) && !row.startsWith(' │'));
 const opens = (rows: string[]) => rows.length > 0 && rows.every(row => new RegExp(`^ [▸▾${SPIN}]`).test(row));
 check(opens(turnRows(opening)), 'every turn on screen should start with a chevron, or with the spinner while it runs');
@@ -455,6 +466,10 @@ check(opens(turnRows(opening)), 'every turn on screen should start with a chevro
 // under it, because your own words are the reason the files moved.
 check(saysIt(opening, 'hand the guide to an agent'), 'the open turn should start with your own words');
 check(saysIt(opening, 'in its own worktree'), 'and carry the end of them too, wrapped rather than cut');
+
+// While a fan-out is running, how many of them there are is the news.
+check(spinning(p.bar(), '1 agent'), `the bar should count the agent that is running, and it reads "${p.bar().trim()}"`);
+check(!saysIt(opening, 'w worktree'), 'and the footer should not spend a hint on the scope key');
 
 // ---- the agent that worked in a worktree of its own ----------------------
 // One row under the agent says the whole of it: where it worked, how much is
@@ -522,11 +537,19 @@ if (await p.onto('document greet')) {
 }
 
 if (await p.onto('make greet friendlier')) {
+  // The footer says what Enter will do here, and it says it three ways: on a
+  // turn that is closed, on the same turn open, and on a file inside it.
+  check(verbOf(p.foot()) === 'open', `a closed turn should offer to open, and the footer reads "${p.foot().trim()}"`);
   await p.press(ENTER, DOWN, DOWN);
   const dirty = await p.show('changes: a measured turn whose work is still only in the working tree');
   check(dirty.includes('● uncommitted'), 'a measured turn with nothing committed and a dirty file should say uncommitted');
   check(/\+\d+ +−\d+/.test(dirty), 'its file row should carry both counts');
-  await p.press(ESC, ESC);
+  if (await p.onto('greet.ts')) check(verbOf(p.foot()) === 'diff', `a file row should offer its diff, and the footer reads "${p.foot().trim()}"`);
+  await p.press('g');
+  if (await p.onto('make greet friendlier')) {
+    check(verbOf(p.foot()) === 'close', `the same turn open should offer to close, and the footer reads "${p.foot().trim()}"`);
+    await p.press(ESC, ESC);
+  }
 }
 
 // ---- the turn whose commit reached main ----------------------------------
@@ -590,6 +613,7 @@ check(/✓ merged \d\d:\d\d/.test(landed), `the agent's own row should say when 
 // ---- the Agents view ----------------------------------------------------
 await p.press('3');
 await wait(600);
+p.mark();
 await p.show('agents: the newest block, and the folder its agent worked in');
 
 // The turn with three agents is history by now, so its block is closed.
@@ -610,6 +634,14 @@ if (await p.onto('Check the README')) {
   check(opened.includes('“'), 'and quote what it handed back');
 }
 
+// Every row of this view that opens says so the same way: an agent by the
+// chevron in front of its square, a turn by the one in column 1.
+const walked = p.since();
+const squares = walked.split('\n').filter(row => row.includes('■'));
+const unmarked = squares.find(row => !/^[\s│]*[▸▾] ■ /.test(row));
+check(squares.length > 0 && !unmarked, `every agent row should start with a chevron and its square, and "${unmarked?.trim()}" does not`);
+check(walked.split('\n').some(row => /^ [▸▾] {2}/.test(row)), 'and a closed turn should carry its own chevron in column 1');
+
 if (await p.onto('Rewrite the example')) {
   p.mark();
   await p.press(ENTER);
@@ -619,6 +651,44 @@ if (await p.onto('Rewrite the example')) {
   // the window: one step further down brings what it says into it.
   await p.press(DOWN);
   check(p.since().includes('Stopped before it handed back.'), 'and say what that means');
+}
+
+// ---- the bar, once the agents are done and a prompt is up ---------------
+// The agent that was still polishing hands back, so the newest turn itself is
+// the news: the step it is on, and how long it has been going.
+fs.appendFileSync(
+  path.join(agentDir, 'agent-run789.jsonl'),
+  agentLine('run789', at(0.1), {id: 'c-3', model: 'claude-opus-4-5-20251101', usage, stop_reason: 'end_turn', content: [{type: 'text', text: 'The greeting reads well now.'}]}) + '\n',
+);
+await p.press('1');
+await wait(4000);
+check(spinning(p.bar(), 'Read \\d'), `with nothing else running the bar should name the step the turn is on, and it reads "${p.bar().trim()}"`);
+
+// Claude Code asking to run something leaves nothing in the transcript, so the
+// hook writes the note and the pane reads it back against the size it wrote.
+const transcript = path.join(dir, `${chat}.jsonl`);
+fs.writeFileSync(path.join(home, slug(project), 'attention.json'), JSON.stringify({
+  at: Date.now(), tool: 'Read', toolUseId: 't0', sessionId: chat,
+  transcriptPath: transcript, transcriptSize: fs.statSync(transcript).size,
+}));
+await wait(4000);
+await p.show('changes: Claude Code is asking you to allow something');
+check(p.bar().includes('● asking you'), `a prompt waiting on you should reach the bar, and it reads "${p.bar().trim()}"`);
+if (await p.onto('Read what it wrote')) {
+  check(p.cursorRow().includes('waiting for you'), `and the step row should say who it is waiting on, and it reads "${p.cursorRow().trim()}"`);
+}
+
+// Answering it, either way, appends a line — and then Claude Code carries on.
+lines.push(JSON.stringify({
+  type: 'user', isSidechain: false, sessionId: chat, timestamp: at(0.05),
+  message: {role: 'user', content: [{type: 'tool_result', tool_use_id: 't0', content: 'the guide'}]},
+}));
+lines.push(acts(at(0.02), [{name: 'Read', id: 'after-1', input: {file_path: path.join(treePath, 'docs/guide.md'), description: 'Read what it wrote'}}]));
+flush();
+await wait(4000);
+check(!p.bar().includes('asking you'), `answering it should take the word off the bar, and it reads "${p.bar().trim()}"`);
+if (await p.onto('Read what it wrote')) {
+  check(!p.cursorRow().includes('waiting for you'), `and off the step row, and it reads "${p.cursorRow().trim()}"`);
 }
 
 // ---- Usage, Files, and the reader ---------------------------------------
@@ -741,6 +811,7 @@ fs.writeFileSync(path.join(soloDir, `${soloChat}.jsonl`), soloLines.join('\n') +
 
 const q = pane(solo);
 await wait(1800);
+check(q.bar().includes('● your turn'), `a chat that handed back today should say whose turn it is, and the bar reads "${q.bar().trim()}"`);
 q.mark();
 const oneFolder = await q.show('changes: a day of four turns, and the skyline that gives it a shape');
 check(/[▁▂▃▄▅▆▇█]{2} [▁▂▃▄▅▆▇█]{2} /.test(oneFolder), 'the day should draw a skyline of its turns');
@@ -760,7 +831,99 @@ check(!clicked.includes('✓ merged'), 'on the default branch with no upstream, 
 // hold them with it: walking to the oldest takes every one of them through it.
 await q.onto('fix the typo');
 check(/◆\d/.test(q.since()), 'a past turn with commits should carry the mark and the count');
+
+// A question Claude asked and nobody has answered yet. The turn has not ended
+// and the call has no result: that, and nothing about a timer, is the rule.
+soloLines.push(JSON.stringify({
+  type: 'user', turnOrigin: 'human', isSidechain: false, uuid: 's-4', sessionId: soloChat,
+  timestamp: at(0.2), cwd: solo, gitBranch: 'main', message: {role: 'user', content: 'should the table have a summary row'},
+}));
+soloLines.push(JSON.stringify({
+  type: 'assistant', sessionId: soloChat, timestamp: at(0.1), isSidechain: false,
+  message: {role: 'assistant', id: 'sm-ask', model: 'claude-fable-5-1', usage, content: [{type: 'tool_use', id: 'ask-1', name: 'AskUserQuestion', input: {questions: []}}]},
+}));
+fs.writeFileSync(path.join(soloDir, `${soloChat}.jsonl`), soloLines.join('\n') + '\n');
+await wait(4000);
+check(q.bar().includes('● asking you'), `an unanswered question should reach the bar too, and it reads "${q.bar().trim()}"`);
 await q.quit();
+// ---- follow mode: the file the running turn is working on right now ------
+// Nothing touches a key before the first check: follow is on until you reach
+// for the page, and what it does is open the diff you would have opened.
+const live = path.join(stage, 'live');
+fs.mkdirSync(live, {recursive: true});
+fs.writeFileSync(path.join(live, 'one.ts'), 'export const one = 1;\n');
+execFileSync('git', ['-C', live, 'init', '-q', '-b', 'main'], {stdio: 'ignore'});
+execFileSync('git', ['-C', live, 'add', '-A'], {stdio: 'ignore'});
+commitIn(live, at(30), 'first', []);
+
+const liveChat = 'bbbbbbbb-cccc-dddd-eeee-ffffffffffff';
+const liveDir = path.join(process.env.SIDECAR_CLAUDE_HOME, 'projects', slug(live));
+fs.mkdirSync(liveDir, {recursive: true});
+const liveLines = [
+  JSON.stringify({type: 'ai-title', aiTitle: 'Write the other files', sessionId: liveChat}),
+  JSON.stringify({
+    type: 'user', turnOrigin: 'human', isSidechain: false, uuid: 'live-1', sessionId: liveChat,
+    timestamp: at(1), cwd: live, gitBranch: 'main', message: {role: 'user', content: 'add a second file beside the first'},
+  }),
+];
+const flushLive = () => fs.writeFileSync(path.join(liveDir, `${liveChat}.jsonl`), liveLines.join('\n') + '\n');
+// What Claude Code writes the moment it makes a file. The timestamp is now,
+// as a real one is: the snapshot the pane takes this poll is the first one
+// after it, and that is the pair the turn's diff is measured between.
+let wrote = 0;
+const writeFile = (name: string, body: string) => {
+  fs.writeFileSync(path.join(live, name), body);
+  liveLines.push(JSON.stringify({
+    type: 'assistant', sessionId: liveChat, timestamp: new Date().toISOString(), isSidechain: false,
+    message: {
+      role: 'assistant', id: `lm-${wrote++}`, model: 'claude-fable-5-1', usage,
+      content: [{type: 'tool_use', id: `lt-${wrote}`, name: 'Write', input: {file_path: path.join(live, name), description: `Write ${name}`}}],
+    },
+  }));
+  flushLive();
+};
+
+writeFile('one.ts', 'export const one = 1;\n');
+// Snapshots only belong to a turn the pane was looking at the whole time, so
+// the store starts with one taken before the turn began.
+const liveStore = openStore(live)!;
+await take(liveStore, live, Date.parse(at(2)));
+fs.writeFileSync(path.join(liveStore.dir, 'watched.json'), JSON.stringify([[Date.parse(at(2)), Date.now()]]));
+
+const f = pane(live);
+await wait(4000);
+f.mark();
+const before = await f.show('changes: a turn running, with nothing written yet');
+check(!before.includes('two.ts'), 'nothing has been written yet, so nothing on screen is about it');
+
+writeFile('two.ts', 'export const two = 2;\nexport const alpha = 1;\n');
+await wait(5000);
+const opened = await f.show('changes: follow mode opened the file the turn had just written');
+check(onRow(f.cursorRow(), 'two.ts'), `the cursor should land on the file the turn just wrote, and it is on "${f.cursorRow().trim()}"`);
+check(opened.includes('export const two'), 'and its diff should be open under it');
+
+// The page is yours the moment you reach for it.
+await f.press(DOWN);
+f.mark();
+writeFile('three.ts', 'export const beta = 2;\n');
+await wait(5000);
+await f.show('changes: paused, so the next file is left where it was');
+check(!onRow(f.cursorRow(), 'three.ts'), `a key press should pause it, and the cursor is on "${f.cursorRow().trim()}"`);
+
+// Back at the head of the stream, where the footer has room to say which of
+// the two it is. `g` is a key like any other, so it leaves follow paused.
+await f.press('g');
+await wait(300);
+check(COLS < 56 || /f follow(?!ing)/.test(f.foot()), `paused, the footer should offer to follow again, and it reads "${f.foot().trim()}"`);
+await f.press('f');
+await wait(300);
+check(COLS < 56 || f.foot().includes('f following'), `and f should light it, and it reads "${f.foot().trim()}"`);
+writeFile('four.ts', 'export const gamma = 3;\n');
+await wait(5000);
+await f.show('changes: f handed it back, and the next file opened again');
+check(onRow(f.cursorRow(), 'four.ts'), `f should hand it back, and the cursor is on "${f.cursorRow().trim()}"`);
+await f.quit();
+
 // ---- what must be true of every frame -----------------------------------
 const labelled = seen.filter(shot => shot.split('\n').some(row => /\bA[1-9]\b(?=\s\w)/.test(row)));
 check(labelled.length === 0, `no frame should label an agent A1, A2 …, and ${labelled.length} do`);
@@ -771,10 +934,21 @@ const anyOf = (what: string) => seen.filter(shot => shot.includes(what)).length;
 check(anyOf('▐demo▌') === 0, `no frame should chip this folder's own turns, and ${anyOf('▐demo▌')} do`);
 check(seen.every(shot => !/\byou {2}·/.test(shot)), 'and no row should say who was at the keyboard');
 check(anyOf('the squares say') === 0, 'and the squares should carry no caption');
+// The scope has a key, a menu item and a pill of its own; the footer's columns
+// belong to the row under the cursor.
+const lastRow = (shot: string) => [...shot.split('\n')].reverse().find(row => row.trim()) ?? '';
+const scoped = seen.filter(shot => lastRow(shot).includes('w worktree')).length;
+check(scoped === 0, `no footer should spend a hint on the scope key, and ${scoped} frames do`);
 const overflowed = seen.filter(shot => shot.split('\n').some(row => [...row].length > COLS));
 check(overflowed.length === 0, `no row should be wider than the pane, and ${overflowed.length} frames have one`);
 
-fs.rmSync(stage, {recursive: true, force: true});
+// Several bare repositories were written under here and Windows can still be
+// holding one open a moment after the pane that used it has gone.
+try {
+  fs.rmSync(stage, {recursive: true, force: true, maxRetries: 10, retryDelay: 300});
+} catch {
+  // A folder left in the temp directory is not a failed check.
+}
 
 if (failed) {
   console.error(`\n${failed} check${failed === 1 ? '' : 's'} failed at ${COLS}x${ROWS}.`);
