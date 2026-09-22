@@ -620,6 +620,10 @@ check(COLS < 56 || back.includes('merged into improve-greet'), 'and name the bra
 // The folder is gone by now, and its own row still says where its work got to.
 const landed = rowUnder(back, 'Write the guide');
 check(/✓ merged \d\d:\d\d/.test(landed), `the agent's own row should say when its folder landed, and it reads "${landed.trim()}"`);
+// The point it left the parent has moved past it, so there is nothing left to
+// count: saying `0 files` over a file that is plainly there is the worse half
+// of the row, and the name alone is the truth.
+check(!/\d+ files?/.test(landed), `and count nothing it can no longer measure, and it reads "${landed.trim()}"`);
 
 // ---- the Agents view ----------------------------------------------------
 await p.press('3');

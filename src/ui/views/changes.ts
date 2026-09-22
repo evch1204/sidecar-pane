@@ -840,8 +840,13 @@ function chartRow(ctx: Ctx, node: AgentNode, change: TurnChange, pins: string[],
   if (wt) {
     const n = wt.files.length;
     const left = [seg('in ', theme.faint), seg(folderLabel(wt), theme.text)];
+    // Once the work has been merged or the folder taken away there is nothing
+    // left to count against: the point it left the parent has moved past it,
+    // so the count would read `0 files` over work that is plainly there. The
+    // folder's name is the whole of the left side then.
+    const countable = !wt.merged && !wt.removed && !wt.gone;
     // At 40 columns the words on the right are the news, so the count gives way.
-    if (!tight) {
+    if (!tight && countable) {
       if (status === 'running') left.push(seg(`   ${plural(n, 'file')} so far`, theme.dim));
       else left.push(seg(`   ${plural(n, 'file')} `, theme.dim), ...sizeCells(wt.lines.added, wt.lines.removed));
     }
