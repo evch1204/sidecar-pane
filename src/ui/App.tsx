@@ -754,6 +754,16 @@ export function App({root, interactive, mouseDebug = false}: Props) {
     setSel(s => ({...s, reader: id}));
   }, [readerPath, readFile.view, formatted, sel.reader, target]);
 
+  // A place in the code, onto the clipboard, through the terminal itself. OSC
+  // 52 is the one way a pane running inside somebody else's terminal can reach
+  // it, and it is the whole of what the pane may do with a line: no file is
+  // written, no command is run, and what lands there is a place, not the code.
+  const copyPlace = (place: {path: string; line: number}) => {
+    const where = `${path.relative(root, place.path).split(path.sep).join('/')}:${place.line}`;
+    stdout.write(`\u001B]52;c;${Buffer.from(where).toString('base64')}\u0007`);
+    say(`copied ${where}`);
+  };
+
   const reveal = (file: string) => {
     const next = new Set(expanded);
     for (let p = path.dirname(file); p.startsWith(root) && p !== root; p = path.dirname(p)) next.add(p);
@@ -1120,6 +1130,11 @@ export function App({root, interactive, mouseDebug = false}: Props) {
           (act?.type === 'file' && open.files.has(act.key)) ||
           (act?.type === 'toggle' && open[act.set].has(act.key));
         return isOpen ? perform(act) : undefined;
+      }
+
+      if (input === 'y') {
+        if (!current?.at) return refuse('Move onto a line of a diff or a file first.');
+        return copyPlace(current.at);
       }
 
       if (input === ']' || input === '[') {
