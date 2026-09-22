@@ -71,6 +71,19 @@ function onRow(row: string, what: string): boolean {
 // The same, over a whole frame.
 const saysIt = (frame: string, what: string): boolean => frame.split('\n').some(row => onRow(row, what));
 
+// The row under the first one that says `what`. What a row opens — an agent's
+// kind, model and tool count under the agent, the folder a worktree's work is
+// in under its own row — is drawn there, and reading it by name beats counting
+// rows, which a narrow pane rewraps anyway.
+function rowUnder(frame: string, what: string): string {
+  const rows = frame.split('\n');
+  const at = rows.findIndex(row => onRow(row, what));
+  return at < 0 ? '' : rows[at + 1] ?? '';
+}
+
+// `2 tool uses`, and what a row too narrow to hold the words leaves of it.
+const TOOLS = /\d+ tool use|\d+ too…/;
+
 // How many columns of a row are painted with the cursor's own background.
 function litWidth(row: string): number {
   let on = false;
@@ -539,7 +552,9 @@ if (await p.onto('document greet')) {
 if (await p.onto('Check the README')) {
   await p.press(ENTER);
   const opened = await p.show('agents: one agent opened, with what it was and what it said');
-  check(/tool use/.test(opened), 'an opened agent should say how much it did');
+  // Its own row, not any row: the agent still running says how much it did on
+  // a row of its own, and that was answering for this one.
+  check(TOOLS.test(rowUnder(opened, 'Check the README')), 'an opened agent should say how much it did');
   check(opened.includes('“'), 'and quote what it handed back');
 }
 
