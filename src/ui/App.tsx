@@ -19,7 +19,7 @@ import type {DiffGroup} from './diffrows';
 import {follow, scrollFromThumb, thumb} from './layout';
 import {footer, isAction, MENU_WIDTH, menuBar, menuBox, menus, pillRow, tabRow, type Command, type Hint, type Pill} from './menu';
 import {DOUBLE_CLICK_MS, MOUSE_OFF, MOUSE_ON, parseMouse, type MouseEvent} from './mouse';
-import {type Counts} from './splash';
+import {splashLines, type Counts} from './splash';
 import {Screen} from './Screen';
 import {glyph, theme} from './theme';
 import {agentsBadge, agentsLines, agentsTabVisible, runningAgents} from './views/agents';
@@ -323,12 +323,13 @@ export function App({root, interactive, mouseDebug = false}: Props) {
     [history.changes],
   );
 
-  // The spinner only ticks while there is something spinning.
+  // The spinner only ticks while there is something spinning. The first read is
+  // one of those things: it is the one the pane is waiting on itself.
   useEffect(() => {
-    if (!interactive || (!working && agentsRunning === 0)) return;
+    if (!interactive || (history.loaded && !working && agentsRunning === 0)) return;
     const timer = setInterval(() => setFrame(f => f + 1), SPIN_MS);
     return () => clearInterval(timer);
-  }, [interactive, working, agentsRunning]);
+  }, [interactive, history.loaded, working, agentsRunning]);
 
   // ---- diffs for the file rows that are open ---------------------------------
 
@@ -524,13 +525,24 @@ export function App({root, interactive, mouseDebug = false}: Props) {
   const inDiff = Boolean(current?.pins?.some(id => id.startsWith('f:')));
   const markdown = slot === 'reader' && Boolean(readerPath && isMarkdown(readerPath));
   const list = menus({view, group, hideSpace, changedOnly, chat: chatName, folders: worktrees.length, scope, inDiff, markdown, raw, mouse});
-  // Agents come first: while a fan-out is running, how many of them there are
-  // is the news, and the turn they belong to is working by definition.
-  const status: Seg[] = agentsRunning
-    ? [seg(spinner(frame), theme.accent), seg(` ${agentsRunning} agent${agentsRunning === 1 ? '' : 's'}`, theme.ink)]
-    : working
-      ? [seg(spinner(frame), theme.accent), seg(' working', theme.ink)]
-      : [seg(glyph.dot, theme.faint), seg(' idle', theme.dim)];
+  // The card, and not the stream, on the two occasions there is no stream: the
+  // first frames, and a folder Claude Code has never been run in. Files is left
+  // alone — the tree is worth looking at whether or not anything was ever typed
+  // here — and so is every grouping but By turn, the only one the chats are the
+  // content of.
+  const reading = !history.loaded && slot !== 'files' && slot !== 'reader';
+  const nothingYet = history.loaded && history.counts?.chats === 0 && slot === 'changes' && group === 'turn';
+  const card = reading || nothingYet;
+  // Reading comes first while it lasts: nothing else is known yet. Then agents
+  // — while a fan-out is running, how many of them there are is the news, and
+  // the turn they belong to is working by definition.
+  const status: Seg[] = !history.loaded
+    ? [seg(spinner(frame), theme.accent), seg(' reading', theme.dim)]
+    : agentsRunning
+      ? [seg(spinner(frame), theme.accent), seg(` ${agentsRunning} agent${agentsRunning === 1 ? '' : 's'}`, theme.ink)]
+      : working
+        ? [seg(spinner(frame), theme.accent), seg(' working', theme.ink)]
+        : [seg(glyph.dot, theme.faint), seg(' idle', theme.dim)];
   // What is left of the bar once the menus and the status have had their
   // columns. The meters shrink in steps and then go, so the menus always fit.
   const barLeft = 2 + list.reduce((n, m) => n + m.title.length + 2, 0);
@@ -574,7 +586,9 @@ export function App({root, interactive, mouseDebug = false}: Props) {
       ? [seg(`${uncommitted} uncommitted`, theme.dim)]
       : [];
   const scopeAct: Act | undefined = scopePill.length ? {type: 'scope', scope: scope === 'all' ? 'mine' : 'all'} : undefined;
-  const pillsLine = pills.length ? pillRow(cols, pills, note, scopeAct) : null;
+  // Nothing has been read, so there is nothing for a pill to be showing or
+  // hiding yet: the first frame is the bar, the tabs and the card.
+  const pillsLine = pills.length && !reading ? pillRow(cols, pills, note, scopeAct) : null;
   const blank: Line = {segs: [sp(cols)]};
   const top: Line[] = roomy
     ? [bar.line, blank, tabs, ...(pillsLine ? [pillsLine] : []), blank, ...head, ...(head.length ? [blank] : [])]
@@ -1112,9 +1126,27 @@ export function App({root, interactive, mouseDebug = false}: Props) {
     return {segs: [...(visible[i]?.segs ?? [sp(cols - 1)]), mark]};
   });
 
+  // The card takes the stream's place whole, a third of the way down it, so
+  // the chrome above it and the footer under it never move when the real rows
+  // arrive.
+  const body: Line[] = !card
+    ? stream
+    : ((): Line[] => {
+        const rows = splashLines(cols, {
+          folder: project,
+          branch: git?.branch ?? '',
+          counts: history.counts,
+          chats: history.chats,
+          reading: !history.loaded,
+          frame,
+        }).map(line => ({segs: [...line.segs, sp(1)]}));
+        const lead = Math.min(Math.floor(height / 3), Math.max(0, height - rows.length));
+        return Array.from({length: height}, (_, i) => rows[i - lead] ?? blank);
+      })();
+
   let screen: Line[] = [
     ...top,
-    ...stream,
+    ...body,
     ...(roomy ? [blank] : []),
     footer(cols, hints, notice, {project, branch: git?.branch ?? null}, !mouse),
   ];
@@ -1124,11 +1156,6 @@ export function App({root, interactive, mouseDebug = false}: Props) {
       const row = menuLines[y - 1];
       return row ? {...under, segs: overlay(under.segs, menuLeft, row.segs, cols)} : under;
     });
-  }
-
-  // `loaded` keeps the first frame from flashing an empty state.
-  if (!history.loaded && slot !== 'files') {
-    screen = [...top, {segs: [sp(1), seg('Reading your chats…', theme.dim)]}];
   }
 
   return <Screen lines={screen} cols={cols} rows={rows} />;

@@ -67,11 +67,15 @@ export function splashLines(cols: number, at: Splash): Line[] {
 // The one row that says where the read has got to. Before it comes back all
 // the card can honestly say is how many files it is about to open.
 function state(at: Splash, inner: number): Seg[][] {
-  if (!at.counts) return [[seg(at.chats ? `reading ${plural(at.chats, 'chat')}…` : 'reading…', theme.dim)]];
-  const {chats, turns, agents} = at.counts;
-  if (chats) {
+  const chats = at.counts?.chats ?? at.chats;
+  if (at.counts && chats) {
+    const {turns, agents} = at.counts;
     return [[seg(`${plural(chats, 'chat')}   ${plural(turns, 'turn')}   ${plural(agents, 'agent')}`, theme.text)]];
   }
+
+  // A folder with no chats in it is only empty once the read is over: until
+  // then it is a folder nothing has looked in yet.
+  if (at.reading || !at.counts) return [[seg(chats ? `reading ${plural(chats, 'chat')}…` : 'reading…', theme.dim)]];
 
   // Nothing has ever run here. The card keeps its shape and its last row says
   // what to do, on one line where there is room for one and two where not.
