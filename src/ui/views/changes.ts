@@ -248,12 +248,13 @@ type Block = {
   who?: string;
 };
 
-// The node in column 1: the spinner while the turn runs, a filled dot for the
-// turn that is open, a ring for one that is past.
-function nodeOf(ctx: Ctx, change: TurnChange, isOpen: boolean, colour?: string): Seg {
+// The mark in column 1. A turn opens and closes in place, so it carries the
+// same chevron every such row carries: dim, accent under the cursor, the
+// folder's hue when the stream is covering more than one. While it runs the
+// spinner says so instead, and Enter there still closes it.
+function nodeOf(ctx: Ctx, change: TurnChange, isOpen: boolean, here: boolean, colour?: string): Seg {
   if (change.running) return seg(spinner(ctx.frame), theme.accent);
-  if (isOpen) return seg(glyph.dot, colour ?? theme.accent);
-  return seg(glyph.ring, colour ?? theme.faint);
+  return seg(isOpen ? glyph.open : glyph.closed, here ? theme.accent : colour ?? theme.dim);
 }
 
 // Your own words are the title: they are the reason the files moved. One line
@@ -279,7 +280,7 @@ function titleRow(ctx: Ctx, change: TurnChange, o: Block): void {
   lines.forEach((text, i) => {
     ctx.out.push(
       streamRow(cols, i === 0 ? [...tag, seg(text, theme.ink, {bold: true})] : [seg(text, theme.ink, {bold: true})], i === 0 ? when : [], {
-        bg, live, ...(i === 0 ? {mark: nodeOf(ctx, change, true, o.colour), id, pick: true, act} : {pins: [id], act: {type: 'toggle', set: 'more', key: promptKey}}),
+        bg, live, ...(i === 0 ? {mark: nodeOf(ctx, change, true, here, o.colour), id, pick: true, act} : {pins: [id], act: {type: 'toggle', set: 'more', key: promptKey}}),
       }),
     );
   });
@@ -398,13 +399,17 @@ function fileRow(ctx: Ctx, key: string, rel: string, abs: string | null, left: S
   ctx.out.push(...diffLines(rows, keyed, {cols, fileKey: key, path: abs, sel, pins: [...pins, id], live, wide: true}));
 }
 
-// A file of a turn: the status letter, its path under the folder it is grouped
-// by, the squares of whoever wrote it, then how big the change was.
+// A file of a turn: the chevron that opens its diff, the status letter, its
+// path under the folder it is grouped by, the squares of whoever wrote it,
+// then how big the change was.
 function turnFileRow(ctx: Ctx, change: TurnChange, file: ChangedFile, label: string, tags: Seg[], pins: string[]): void {
   const tight = ctx.cols < NARROW;
   const known = file.known;
   const letter = known ? LETTER[file.status] : '?';
+  const key = fileKey(turnKey(change), file.rel);
   const left = [
+    sp(1),
+    chevron(ctx.open.files.has(key), `f:${key}` === ctx.sel),
     sp(1),
     seg(letter, known ? LETTER_COLOUR[file.status] : theme.faint, {bold: known}),
     sp(2),
@@ -418,7 +423,7 @@ function turnFileRow(ctx: Ctx, change: TurnChange, file: ChangedFile, label: str
     ...(tight ? [] : [...(known ? sizeCells(file.added, file.removed) : [sp(SIZE_CELLS)]), sp(2)]),
     ...(known ? counts(file.added, file.removed) : [sp(SIZE_CELLS * 2 + 1)]),
   ];
-  fileRow(ctx, fileKey(turnKey(change), file.rel), file.rel, file.status === 'deleted' ? null : file.path, left, right, pins, {live: change.running});
+  fileRow(ctx, key, file.rel, file.status === 'deleted' ? null : file.path, left, right, pins, {live: change.running});
 }
 
 function folderRow(ctx: Ctx, name: string, note: Seg[], rail: Rail): void {
@@ -637,7 +642,7 @@ function pastTurn(ctx: Ctx, change: TurnChange, agents: AgentRun[], o: Block): v
   ctx.out.push(
     streamRow(cols, [seg(cut(change.turn.prompt, promptRoom(cols)), here ? theme.ink : theme.text)], right, {
       bg: here ? theme.surface2 : undefined,
-      mark: nodeOf(ctx, change, false, o.colour),
+      mark: nodeOf(ctx, change, false, here, o.colour),
       id, pick: true, act: {type: 'turn', key},
     }),
   );
