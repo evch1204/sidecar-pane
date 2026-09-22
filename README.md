@@ -13,47 +13,62 @@ Four views, a menu bar, a mouse, and no editing.
   thing that changed. `o` reads the whole file; markdown is formatted.
 - **Agents** shows the subagents Claude started, named as Claude named them,
   each on a lane of a shared clock and grouped by the folder it worked in;
-  the same coloured square marks the files it wrote. When agents work in git
-  worktrees of their own, `w` widens Changes to every worktree, with a map on
-  top and `✓ merged` on each one that has landed.
+  the same coloured square marks the files it wrote. An agent given a git
+  worktree of its own carries one fact row saying which folder, how much is in
+  it, and whether any of that has arrived here — `↑1 · not in demo yet`, `✓
+  merged 11:56`, `removed`. `w` widens Changes to every worktree of the
+  repository and adds a map at the head of the stream.
 - **Usage** shows where the tokens went, and your 5 hour and weekly limits if
   you connect the status line script.
+
+Every row that opens in place starts with a chevron — `▸` closed, `▾` open —
+and the footer says what Enter will do to the row under the cursor. The right
+end of the bar says which of you it is waiting on: `⠧ Bash 4m`, `● asking
+you`, `● your turn`, `● idle`. Follow mode is on by default: while a turn runs
+the pane opens the diff of the file it has just written, anything you press or
+click pauses it, `f` hands it back. `y` on a diff line puts that place —
+`src/ui/App.tsx:1123` — on your clipboard. Before the history is read, and in
+a folder Claude Code has never been run in, the pane draws a card with its own
+name on it instead of an empty list.
 
 See [PLAN.md](PLAN.md) for why it is built this way, and [design/](design) for
 the design canvas.
 
+A real frame, printed by `npx tsx scripts/smoke-history.tsx --cols 62`:
+
 ```
- ◆ Sidecar  View        5h ▄▄▄▄▄▄ 58%  1h 52m · wk 23%   ⠴ 3 agents
+ ◆ Sidecar  View  5h ▄▄▄▄▄▄ 58%  1h 52m · wk 23%   ⠇ 1 agent
 
-  Changes   Files   Agents ⠴ 2   Usage
-  By turn  ·  By file  ·  Uncommitted           in launchers ▾
+  Changes   Files   Agents ⠇ 1   Usage
+  By turn  ·  By file  ·  Uncommitted              in demo ▾
 
- TODAY   Day 3 launchers                        3 turns  ·  41m
-         ▂▂ ▃▃ ██                                       +38 −5
+ TODAY   Make greet friendlier           5 turns  ·  46m 01s
+         ▂▂ ▂▂ ▃▃ ▂▂ ▁▁                               +20 −3
 
- ⠴  build the rest of the day 3 launchers in parallel    19:31
- │  running 3m 16s   ▐3 files▌ ▐+18▌ ▐−1▌
+ ⠇  hand the guide to an agent in its own worktree     14:35
+ │  running 10m 00s
  │
- │  ⠴ 3 agents  ·  2 running  ·  1 done            264k tokens
- │  ├─ ■ Write the WezTerm launcher            ✓  1m 45s   73k
- │  │       12 tool uses  ·  wrote wezterm.ts, index.ts
- │  ├─ ■ Try the AppleScript split             ⠴  3m 01s   98k
- │  │    ⎿  Bash  osascript split.scpt
- │  └─ ■ Write kitty.ts                        ⠴  3m 01s   93k
+ │  1 agent  ·  1 done                            12k tokens
+ │  ▸ ■ Write the guide                      ✓  6m 36s   12k
+ │      in agent-docs   1 file ▄▄▄▄▄    ↑1 · not in demo yet
  │
- │  src/launch
- │   M  index.ts   ■■ ⚠ two agents          ▄▄▄▄▄     +2    −1
- │   A  kitty.ts   ■                        ▄▄▄▄▄     +8
- │   A  wezterm.ts   ■                      ▄▄▄▄▄     +8
+ │  ⠇ Read  Read what it wrote                       2 steps
 
- ○  add a tmux launcher and wire it…  3 files ▄▄▄▄▄ ✓    19:00
- ○  fix the wt launcher so the spli…  2 files ▄▄▄▄▄ ◆1   18:40
+ ▸  add a farewell as well, then…   2 files ▄▄▄▄▄ ◆2   14:25
+ ▸  document greet and get a few…   2 files ▄▄▄▄▄      14:15
+ ▸  make greet friendlier and say…  1 file  ▄▄▄▄▄      14:05
+ ▸  mention the licence in the re…  2 files ▄▄▄▄▄ ✓    13:59
+
+ enter close  3 agents  m menu  ↑↓ move demo • improve-greet
 ```
 
 The prompts, the chats, the steps and the subagents come from Claude Code's own
 session files, so past chats show up with no setup. The line counts come from
 snapshots sidecar takes while it runs, so turns from before you first opened
-it, or while it was closed, say `not recorded` rather than guessing.
+it, or while it was closed, say `not recorded` rather than guessing. The one
+thing the session files never record is Claude Code asking you to allow a tool
+call, so that is the one hook there is: `npm run connect` adds it, beside your
+own hooks, and `npm run disconnect` takes only ours back out.
 
 ## Run it
 
@@ -85,8 +100,9 @@ npm run disconnect
 ```
 
 `connect` copies `settings.json` to `settings.json.sidecar-backup-<time>` beside
-it, then sets `statusLine` to `node "…/hooks/statusline.mjs"`. Nothing else in
-the file changes, and your `hooks` are never touched. If a status line was
+it, then sets `statusLine` to `node "…/hooks/statusline.mjs"` and appends
+`hooks/attention.mjs` to the `PermissionRequest` hooks. Hooks are a list, so
+yours are appended to and never replaced. If a status line was
 already there, the whole thing is saved to `~/.sidecar/statusline-chain.json`
 first, and our script runs it with the same input and prints exactly what it
 printed before — including nothing at all, if that is what it printed. So your
@@ -121,12 +137,15 @@ Everywhere: `1` Changes, `2` Files, `3` Agents, `4` Usage, `m` or `?` menu,
 | `o` | read the whole file: the one under the cursor, or the one this diff line belongs to |
 | `c` | Files: changed files only |
 | `r` | reader: a markdown file as a page, or as written |
+| `f` | follow mode on or off; it pauses by itself the moment you touch anything |
+| `y` | copy the place under the cursor — `src/ui/App.tsx:1123` — to the clipboard |
 
 ## Mouse
 
-Every row is a button: click a turn, a file, an agent or a hunk header to open
-or close it in place, a gap to fill it in, a tab, a pill or a menu to use it.
-The meters go to Usage and `working` goes to Changes. Double click a diff line
+Every row with a chevron is a button: click a turn, a file, an agent or a hunk
+header to open or close it in place, a gap to fill it in, a tab, a pill or a
+menu to use it. The meters go to Usage and the status word goes to Changes.
+Double click a diff line
 to open the file there. The wheel scrolls, and the last column is both a
 scrollbar you can drag and a minimap of where the changes are.
 
@@ -139,7 +158,7 @@ a row off in some terminal, run with `--mouse-debug` to see what it reports.
 
 - `src/core` reads folders, files, git, Claude Code's transcripts, its subagents and token counts. It knows nothing about the screen.
 - `src/ui` draws with Ink. It knows nothing about the file system beyond what `core` hands it. `cells.ts` is the row model everything is drawn from, `views/` builds the rows of each view, `App.tsx` holds the state, keys and mouse.
-- `hooks/statusline.mjs` is the optional status line script that feeds the usage limits, and `scripts/connect.mjs` is the `npm run connect` / `npm run disconnect` pair that puts it in the slot and takes it out again.
+- `hooks/statusline.mjs` is the optional status line script that feeds the usage limits, `hooks/attention.mjs` writes down a permission prompt, and `scripts/connect.mjs` is the `npm run connect` / `npm run disconnect` pair that installs both and takes them out again.
 - `scripts/smoke.tsx` drives the app against this repo with fake key presses and mouse reports, then prints frames: `npx tsx scripts/smoke.tsx`.
 - `scripts/smoke-history.tsx` builds a whole fake chat in a temp folder (transcript, a subagent, a usage feed and snapshots) and prints every view reading it: `npx tsx scripts/smoke-history.tsx`.
 - `design/` is the design canvas as files, and the script that captures the real pane into it.
