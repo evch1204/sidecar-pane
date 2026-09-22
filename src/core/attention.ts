@@ -60,12 +60,17 @@ function sizeOf(file: string): number {
 }
 
 // The prompt the pane should be showing, or null when there is nothing to
-// say. Two things have to hold, and both are read out of the transcript:
+// say. Three things have to hold, and all three are read off the disk:
 //
-// The call is still outstanding. Normally its `tool_use` record is already on
-// disk, so "no result yet" answers it exactly. But the hook can fire first,
-// before Claude Code has flushed that record, and then the only thing to go on
-// is the transcript being the size the hook wrote down.
+// Nothing has been written since the prompt went up. Answering it, either way,
+// appends a line, so the transcript still being the size the hook wrote down
+// is what says you have not answered yet. This is the test, not the call:
+// allowing `npm test` leaves its call open for the three minutes the command
+// runs, and the pane must stop asking the moment you answer.
+//
+// And the call is still outstanding, where the transcript knows about it. Its
+// `tool_use` record is normally already on disk when the prompt goes up, so a
+// result on it means the prompt is long over however the size reads.
 //
 // And the chat is still in that turn. A note left behind by a session that has
 // since finished, or been closed, is not a question anyone is waiting on.
@@ -78,6 +83,6 @@ export function attention(root: string, sessions: Session[], now: number = Date.
   if (!newest || !isRunning(newest, undefined, now)) return null;
 
   const call = note.toolUseId ? newest.actions.find(action => action.id === note.toolUseId) : undefined;
-  const outstanding = call ? !call.done : sizeOf(note.transcriptPath) === note.transcriptSize;
+  const outstanding = sizeOf(note.transcriptPath) === note.transcriptSize && !call?.done;
   return outstanding ? note : null;
 }

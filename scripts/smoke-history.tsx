@@ -706,6 +706,23 @@ if (await p.onto('Read what it wrote')) {
   check(!p.cursorRow().includes('waiting for you'), `and off the step row, and it reads "${p.cursorRow().trim()}"`);
 }
 
+// Allowing something is not the same as it being over. `npm test` runs for
+// minutes with its call still open, so the line that clears the note is any
+// line at all, not that call's own result.
+fs.writeFileSync(path.join(home, slug(project), 'attention.json'), JSON.stringify({
+  at: Date.now(), tool: 'Read', toolUseId: 'after-1', sessionId: chat,
+  transcriptPath: transcript, transcriptSize: fs.statSync(transcript).size,
+}));
+await wait(4000);
+check(p.bar().includes('● asking you'), `a prompt on a call with no result should reach the bar, and it reads "${p.bar().trim()}"`);
+lines.push(acts(at(0.01), [{name: 'Bash', id: 'allowed-1', input: {command: 'npm test', description: 'Run the tests'}}]));
+flush();
+await wait(4000);
+check(
+  !p.bar().includes('asking you'),
+  `and allowing it should clear the note while its call runs on, and the bar reads "${p.bar().trim()}"`,
+);
+
 // ---- Usage, Files, and the reader ---------------------------------------
 await p.press('4');
 await wait(1200);
