@@ -9,7 +9,7 @@ import {
 import {modelName} from '../../core/usage';
 import type {WorktreeRun} from '../../core/worktrees';
 import {
-  blankRow, brief, chevron, chip, counts, cut, INDENT2, num, pageRow, plural, sep, seg, sizeCells, sizeLit, SIZE_CELLS,
+  blankRow, brief, chevron, chip, counts, cut, INDENT, INDENT2, num, pageRow, plural, sep, seg, sizeCells, sizeLit, SIZE_CELLS,
   skylineCol, sp, span, splitBar, streamRoom, streamRow, tokens, width, widthOf,
   type Group, type Line, type Seg, type Zone,
 } from '../cells';
@@ -652,21 +652,12 @@ function pastTurn(ctx: Ctx, change: TurnChange, agents: AgentRun[], o: Block): v
 
 const guide = (on: boolean): Seg => (on ? seg(glyph.guide, theme.spine) : sp(1));
 
-// Where an agent sits in the tree hanging off the turn's line. `on[i]` is true
-// when the line at level i carries on below this row; the row's own level is
-// the last one. A branch is `├─` and a space, so the task always starts three
-// columns in from its parent.
-function chartLead(on: boolean[]): Seg[] {
-  const depth = on.length - 1;
-  return [...on.slice(0, depth).flatMap(carries => [guide(carries), sp(2)]), seg(on[depth] ? glyph.branch : glyph.branchLast, theme.spine), sp(1)];
-}
-
-// The lead of the rows that hang under an agent: its own line carries on for
-// as long as something is still under it.
-function chartUnder(on: boolean[], kids: boolean): Seg[] {
-  const depth = on.length - 1;
-  return [...on.slice(0, depth).flatMap(carries => [guide(carries), sp(2)]), guide(Boolean(on[depth]) || kids), sp(2)];
-}
+// How far in an agent sits under the turn's line: one step a level, with the
+// guide of everything above it running down the left, the way the Files tree
+// draws what is inside a folder. An agent the chat started needs no step at
+// all: its chevron is the first thing on the row.
+const agentIndent = (depth: number): Seg[] =>
+  Array.from({length: Math.max(0, depth - 1)}, () => seg(`${glyph.guide}${' '.repeat(INDENT - 1)}`, theme.spine));
 
 // "general-purpose" says nothing and the chat's own model says nothing either.
 // A kind that was chosen, or a model that differs, is worth two columns.
@@ -750,30 +741,31 @@ function chartRows(ctx: Ctx, change: TurnChange, agents: AgentRun[], rail: Rail)
 
   if (rolled) return;
   const pins = crowd ? [...rail.pins, rollId] : rail.pins;
-  const draw = (level: AgentNode[], on: boolean[], under: string[]) => {
-    level.forEach((node, i) => {
-      const mine = [...on, i < level.length - 1];
-      chartRow(ctx, node, change, under, mine, rail.live);
+  const draw = (level: AgentNode[], depth: number, under: string[]) => {
+    for (const node of level) {
+      chartRow(ctx, node, change, under, depth, rail.live);
       // A nested agent keeps its parent's row on screen with it.
-      if (node.kids.length && mine.length < TREE_MAX) draw(node.kids, mine, [...under, `a:${node.agent.id}`]);
-    });
+      if (node.kids.length && depth < TREE_MAX) draw(node.kids, depth + 1, [...under, `a:${node.agent.id}`]);
+    }
   };
 
-  draw(agentTree(agents), [], pins);
+  draw(agentTree(agents), 1, pins);
 }
 
 // One agent: the square in its own hue, the task as its name, the chip when
 // there is something to say about it, and the state, time and tokens in fixed
 // columns on the right.
-function chartRow(ctx: Ctx, node: AgentNode, change: TurnChange, pins: string[], on: boolean[], live?: boolean): void {
+function chartRow(ctx: Ctx, node: AgentNode, change: TurnChange, pins: string[], depth: number, live?: boolean): void {
   const {cols, sel, now} = ctx;
   const {agent, index} = node;
   const id = `a:${agent.id}`;
   const here = id === sel;
   const isOpen = ctx.open.agents.has(agent.id);
   const status = statusOf(agent, now);
-  const lead = chartLead(on);
-  const under = chartUnder(on, node.kids.length > 0);
+  const indent = agentIndent(depth);
+  // The chevron, the square and the air between them: four columns, and
+  // everything that hangs under the agent starts where its task does.
+  const under = [...indent, sp(INDENT2)];
   const mine = [...pins, id];
   const tight = cols < NARROW;
 
@@ -781,7 +773,9 @@ function chartRow(ctx: Ctx, node: AgentNode, change: TurnChange, pins: string[],
     streamRow(
       cols,
       [
-        ...lead,
+        ...indent,
+        chevron(isOpen, here),
+        sp(1),
         seg(glyph.square, hueOf(index)),
         sp(1),
         seg(agent.task, status === 'running' ? theme.ink : theme.text, {bold: status === 'running'}),
@@ -801,7 +795,7 @@ function chartRow(ctx: Ctx, node: AgentNode, change: TurnChange, pins: string[],
   // While it runs, the one thing worth a row is the step it is on.
   const last = agent.steps[agent.steps.length - 1];
   if (status === 'running' && last) {
-    row([sp(2), seg(glyph.elbow, theme.faint), sp(2), seg(last.tool.padEnd(6), theme.dim), seg(target(ctx.root, last), theme.text)]);
+    row([sp(1), seg(glyph.elbow, theme.faint), sp(2), seg(last.tool.padEnd(6), theme.dim), seg(target(ctx.root, last), theme.text)]);
   }
 
   // How much it has done, and what it left behind.
@@ -810,31 +804,31 @@ function chartRow(ctx: Ctx, node: AgentNode, change: TurnChange, pins: string[],
     status === 'running' || wrote.length === 0
       ? plural(agent.toolUses, 'tool use')
       : `${plural(agent.toolUses, 'tool use')}  ${glyph.sep}  wrote ${wrote.slice(0, TAGS_SHOWN).join(', ')}${wrote.length > TAGS_SHOWN ? ` +${wrote.length - TAGS_SHOWN}` : ''}`;
-  if (agent.toolUses || wrote.length) row([sp(5), seg(cut(facts, roomOf(cols) - widthOf(under) - 5), theme.faint)]);
+  if (agent.toolUses || wrote.length) row([seg(cut(facts, roomOf(cols) - widthOf(under)), theme.faint)]);
 
   if (!isOpen) return;
-  row([sp(5), seg(`${agent.type}  ${glyph.sep}  ${modelName(agent.model)}  ${glyph.sep}  ${tokens(agent.tokens)}`, theme.faint)]);
+  row([seg(`${agent.type}  ${glyph.sep}  ${modelName(agent.model)}  ${glyph.sep}  ${tokens(agent.tokens)}`, theme.faint)]);
   // The notification says how it ended; without one the quiet is only a guess,
   // so the sentence stays vaguer.
   if (status === 'stopped') {
     const why =
       agent.ended === 'killed' ? 'Stopped before it handed back.' : agent.ended === 'failed' ? 'Failed before it handed back.' : 'Went quiet without handing back.';
-    row([sp(5), seg(why, theme.warn)]);
+    row([seg(why, theme.warn)]);
   }
 
   for (const file of agent.wrote) {
     const rel = path.relative(ctx.root, file).split(path.sep).join('/');
     const stat = change.files.find(f => f.path === file);
-    row([sp(5), ...pathSegs(rel, false)], stat?.known ? counts(stat.added, stat.removed) : []);
+    row([sp(1), ...pathSegs(rel, false)], stat?.known ? counts(stat.added, stat.removed) : []);
   }
 
   for (const step of agent.steps.slice(-5)) {
-    row([sp(5), seg(step.tool.padEnd(9), theme.faint), seg(target(ctx.root, step), theme.dim)], [seg(clock(step.at), theme.faint)]);
+    row([seg(step.tool.padEnd(9), theme.faint), seg(target(ctx.root, step), theme.dim)], [seg(clock(step.at), theme.faint)]);
   }
 
   if (agent.says && status !== 'running') {
-    const room = Math.max(20, roomOf(cols) - widthOf(under) - 5);
-    for (const text of wrap(agent.says.replace(/[*_`#>]/g, ''), room).slice(0, 3)) row([sp(5), seg(text, theme.text)]);
+    const room = Math.max(20, roomOf(cols) - widthOf(under));
+    for (const text of wrap(agent.says.replace(/[*_`#>]/g, ''), room).slice(0, 3)) row([seg(text, theme.text)]);
   }
 }
 
