@@ -327,9 +327,12 @@ export function panelTitle(cols: number, name: string, note: string, right: Seg[
   );
 }
 
-// The glyphs of a big number, in order, with anything unprintable dropped.
+// The glyphs of a big number or a big word, in order, with anything the pixel
+// font has no glyph for dropped. The digit map wins where the two overlap, so
+// a million still draws the `M` it always drew.
+const bigGlyph = (char: string): string[] | undefined => glyph.digits[char] ?? glyph.font[char];
 const bigFont = (text: string): string[][] =>
-  [...text].map(char => glyph.digits[char]).filter((font): font is string[] => Boolean(font));
+  [...text].map(bigGlyph).filter((font): font is string[] => Boolean(font));
 
 // How many columns `bigDigits` will take. The font is proportional, so this is
 // the sum of the glyph widths plus one gap of `scale` between each pair.
@@ -339,22 +342,24 @@ export function bigWidth(text: string, scale = 2): number {
   return fonts.reduce((n, font) => n + font[0]!.length * scale, 0) + (fonts.length - 1) * scale;
 }
 
-// One number in big type: three screen rows of half blocks, `scale` columns a
-// pixel and `scale` columns between glyphs. Every cell carries `bg`, blank
-// pixels included, so a number can sit on a panel without holes in it. A unit
-// (`%`, `k`, `M`, `~`) is not part of the figure, so it takes its own colour.
+// One number, or one word, in big type: three screen rows of half blocks,
+// `scale` columns a pixel and `scale` columns between glyphs. Every cell
+// carries `bg`, blank pixels included, so a number can sit on a panel without
+// holes in it. A unit (`%`, `k`, `M`, `~`) is not part of the figure, so it
+// takes its own colour; `word` says there is no unit here and every letter is
+// the figure.
 export function bigDigits(
   text: string,
   color: string = theme.ink,
-  more: {bg?: string; scale?: number; unit?: string} = {},
+  more: {bg?: string; scale?: number; unit?: string; word?: boolean} = {},
 ): Seg[][] {
-  const {bg, scale = 2, unit = theme.dim} = more;
+  const {bg, scale = 2, unit = theme.dim, word = false} = more;
   const block = glyph.columns[8];
-  const chars = [...text].filter(char => glyph.digits[char]);
+  const chars = [...text].filter(char => bigGlyph(char));
   return [0, 1, 2].map(row =>
     chars.flatMap((char, i) => {
-      const font = glyph.digits[char]!;
-      const ink = /[0-9.]/.test(char) ? color : unit;
+      const font = bigGlyph(char)!;
+      const ink = word || /[0-9.]/.test(char) ? color : unit;
       // Each screen row is two pixel rows: the top half and the bottom half.
       // The last row has no bottom half, so the figure sits on a baseline.
       const top = font[row * 2]!;

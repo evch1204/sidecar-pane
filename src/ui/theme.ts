@@ -99,6 +99,41 @@ const digits: Record<string, string[]> = {
   ' ': ['.', '.', '.', '.', '.'],
 };
 
+// The same five pixel rows, for a word rather than a number: the pane's own
+// name, drawn once on the first frame. Three pixels wide keeps a long name on
+// one line; `M` and `W` get five, because the stems and the fold between them
+// need three columns of their own.
+const font: Record<string, string[]> = {
+  A: ['.#.', '#.#', '###', '#.#', '#.#'],
+  B: ['##.', '#.#', '##.', '#.#', '##.'],
+  C: ['###', '#..', '#..', '#..', '###'],
+  D: ['##.', '#.#', '#.#', '#.#', '##.'],
+  E: ['###', '#..', '##.', '#..', '###'],
+  F: ['###', '#..', '##.', '#..', '#..'],
+  G: ['###', '#..', '#.#', '#.#', '###'],
+  H: ['#.#', '#.#', '###', '#.#', '#.#'],
+  I: ['###', '.#.', '.#.', '.#.', '###'],
+  J: ['###', '..#', '..#', '#.#', '.#.'],
+  K: ['#.#', '#.#', '##.', '#.#', '#.#'],
+  L: ['#..', '#..', '#..', '#..', '###'],
+  M: digits.M!,
+  // Three columns cannot hold a diagonal, so the stroke is the weight across
+  // the top two bands: heavier than H, which only carries its bar in the middle.
+  N: ['#.#', '###', '###', '#.#', '#.#'],
+  O: ['###', '#.#', '#.#', '#.#', '###'],
+  P: ['###', '#.#', '###', '#..', '#..'],
+  Q: ['###', '#.#', '#.#', '###', '..#'],
+  R: ['###', '#.#', '##.', '#.#', '#.#'],
+  S: ['###', '#..', '###', '..#', '###'],
+  T: ['###', '.#.', '.#.', '.#.', '.#.'],
+  U: ['#.#', '#.#', '#.#', '#.#', '###'],
+  V: ['#.#', '#.#', '#.#', '#.#', '.#.'],
+  W: ['#...#', '#...#', '#.#.#', '##.##', '#...#'],
+  X: ['#.#', '#.#', '.#.', '#.#', '#.#'],
+  Y: ['#.#', '#.#', '.#.', '.#.', '.#.'],
+  Z: ['###', '..#', '.#.', '#..', '###'],
+};
+
 export const glyph = {
   open: '▾',
   closed: '▸',
@@ -161,6 +196,7 @@ export const glyph = {
   columns: [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'],
   spinner: ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'],
   digits,
+  font,
 } as const;
 
 type Style = {color?: string; bold?: boolean; italic?: boolean; underline?: boolean; bg?: string};
