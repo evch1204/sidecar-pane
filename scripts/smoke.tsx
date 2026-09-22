@@ -84,6 +84,9 @@ const check = (ok: boolean, what: string) => {
 
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+// Every frame any pane printed, for the checks that are about all of them.
+const seen: string[] = [];
+
 // One rendered pane, driven by keys and read back from its last frame.
 function pane(root: string) {
   const stdin = Object.assign(new PassThrough(), {
@@ -114,7 +117,9 @@ function pane(root: string) {
 
   const show = async (label: string) => {
     await wait(400);
-    console.log(`\n=== ${label}\n${plain(frame())}`);
+    const shot = plain(frame());
+    seen.push(shot);
+    console.log(`\n=== ${label}\n${shot}`);
   };
 
   // The rows of the stream only: the tabs and the pills carry the cursor's
@@ -423,6 +428,12 @@ if (wanted) {
 
 await b.quit();
 fs.rmSync(stage, {recursive: true, force: true});
+
+// ---- what must be true of every frame --------------------------------------
+// A row wider than the pane wraps in a real terminal and pushes the rest of
+// the frame down, so nothing below it is where it says it is.
+const overflowed = seen.filter(shot => shot.split('\n').some(row => [...row].length > COLS));
+check(overflowed.length === 0, `no row should be wider than the pane, and ${overflowed.length} frames have one`);
 
 if (failed) {
   console.error(`\n${failed} check${failed === 1 ? '' : 's'} failed at ${COLS}x${ROWS}.`);
