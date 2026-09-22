@@ -54,6 +54,10 @@ export type Line = {
   pins?: string[];
   // A mark in the scrollbar column, for "there is a change about here".
   rail?: string;
+  // The verb the footer puts after `enter` when the cursor is here: `close`,
+  // `diff`, `steps`. The view that built the row is the only thing that knows
+  // what Enter will do, so it is the thing that says so. `open` when unset.
+  hint?: string;
   // For a line of code: where `o` should open it.
   at?: {path: string; line: number};
 };
