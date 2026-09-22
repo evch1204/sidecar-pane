@@ -5,8 +5,8 @@ import type {TurnChange} from '../../core/turns';
 import {modelName} from '../../core/usage';
 import type {WorktreeRun} from '../../core/worktrees';
 import {
-  blankRow, brief, chip, countWord, cut, INDENT, padTo, pageRow, RIGHT_PAD, seg, sep, sizeCells, sp, span,
-  streamRoom, streamRow, tokens, width, widthOf, type Line, type Seg,
+  blankRow, brief, chevron, chip, countWord, cut, INDENT, INDENT2, padTo, pageRow, RIGHT_PAD, seg, sep, sizeCells, sp,
+  span, streamRoom, streamRow, tokens, width, widthOf, type Line, type Seg,
 } from '../cells';
 import {glyph, hues, theme} from '../theme';
 import {wrap} from '../util';
@@ -260,22 +260,39 @@ const rightOf = (agent: AgentRun, status: string, now: number, frame: number): S
   seg((status === 'stopped' ? 'stopped' : span(elapsed(agent, now, status))).padStart(TIME), status === 'running' ? theme.accent : theme.dim),
 ];
 
+// An agent that another agent started hangs one step in from it, with the
+// guide of every level above running down beside it, the way the Files tree
+// draws its own nesting. Past `NEST_MAX` the indent costs more than it says.
+const nestLead = (depth: number): Seg[] =>
+  Array.from({length: Math.min(depth, NEST_MAX)}, () => seg(`${glyph.guide} `, theme.faint));
+const nestWidth = (depth: number): number => Math.min(depth, NEST_MAX) * INDENT;
+
 // The rows under an agent: what it is, where its work went, and what it said.
 // A running one says the step it is on instead, whether it is open or not.
 function agentUnder(ctx: Ctx, slot: Slot, group: Group, pins: string[], isOpen: boolean): void {
   const {cols, now} = ctx;
   const {agent} = slot;
   const status = statusOf(agent, now);
-  const inset = INDENT + slot.depth * INDENT;
+  // Under the agent's name, not under its chevron: what an open row says is
+  // about the task, so it starts where the task does. The chevron, the square
+  // and the space after each are exactly the two steps `INDENT2` is.
+  const inset = INDENT2 + nestWidth(slot.depth);
   const row = (left: Seg[], right: Seg[] = []) => ctx.out.push(streamRow(cols, [sp(inset), ...left], right, {pins}));
 
   if (isOpen) {
     const model = modelName(agent.model);
-    const facts: Seg[] = [seg(agent.type, theme.dim)];
-    if (model && model !== 'unknown') facts.push(sep(), seg(model, theme.dim));
-    facts.push(sep(), seg(`${agent.toolUses} tool use${agent.toolUses === 1 ? '' : 's'}`, theme.dim));
-    facts.push(sep(), seg(tokens(agent.tokens), theme.dim));
-    row(facts);
+    const kind: Seg[] = [seg(agent.type, theme.dim)];
+    const named: Seg[] = model && model !== 'unknown' ? [sep(), seg(model, theme.dim)] : [];
+    const did: Seg[] = [
+      sep(),
+      seg(`${agent.toolUses} tool use${agent.toolUses === 1 ? '' : 's'}`, theme.dim),
+      sep(),
+      seg(tokens(agent.tokens), theme.dim),
+    ];
+    // Which model ran it is the first fact to go. What it is and how much it
+    // did are why the row is here, and they would be the ones cut in half.
+    const facts = [...kind, ...named, ...did];
+    row(widthOf(facts) <= room(cols) - inset ? facts : [...kind, ...did]);
 
     // The notification says how it ended; without one the quiet is only a
     // guess, so the sentence stays vaguer.
@@ -345,18 +362,29 @@ function laneRow(ctx: Ctx, slot: Slot, group: Group, lane: number, from: number,
   const here = id === ctx.sel;
   const isOpen = ctx.open.agents.has(agent.id);
   const status = statusOf(agent, now);
-  const nested = Math.min(slot.depth, NEST_MAX) * INDENT;
+  const nested = nestWidth(slot.depth);
+  // The name column is fixed, so the chevron and the square come out of it:
+  // the lanes start in the same place whatever is in front of them.
   ctx.out.push(
     streamRow(
       cols,
       [
-        sp(nested),
-        ...nameSegs(agent, status, NAME - nested),
+        ...nestLead(slot.depth),
+        chevron(isOpen, here),
+        sp(1),
+        seg(glyph.square, laneColour(agent, status, slot.index)),
+        sp(1),
+        ...nameSegs(agent, status, NAME - nested - INDENT2),
         sp(1),
         ...laneCells(agent, status, from, to, lane, now, laneColour(agent, status, slot.index)),
       ],
       rightOf(agent, status, now, ctx.frame),
-      {id, pick: true, pins, bg: here ? theme.surface2 : undefined, act: {type: 'toggle', set: 'agents', key: agent.id}},
+      {
+        id, pick: true, pins,
+        bg: here ? theme.surface2 : undefined,
+        hint: isOpen ? 'close' : 'agent',
+        act: {type: 'toggle', set: 'agents', key: agent.id},
+      },
     ),
   );
 
@@ -378,11 +406,11 @@ function branchRow(ctx: Ctx, slot: Slot, group: Group, pins: string[]): void {
   // that is not the chat's own.
   let tag = agent.type !== 'general-purpose' ? agent.type : model && chatModel && model !== chatModel ? model : '';
   const state = rightOf(agent, status, now, ctx.frame);
-  const nested = Math.min(slot.depth, NEST_MAX) * INDENT;
+  const nested = nestWidth(slot.depth);
   // The name is the row. What it cost goes first when the pane is narrow, then
   // the chip; how it ended and how long it took never go.
   const nameRoom = (right: Seg[], chipped: string) =>
-    room(cols, 2) - nested - 2 - (chipped ? width(chipped) + 4 : 0) - 1 - widthOf(right);
+    room(cols) - nested - INDENT2 - (chipped ? width(chipped) + 4 : 0) - 1 - widthOf(right);
   let right = [...state, sp(1), seg(tokens(agent.tokens).padStart(5), theme.faint)];
   if (nameRoom(right, tag) < NAME_MIN) right = state;
   if (nameRoom(right, tag) < NAME_MIN) tag = '';
@@ -391,7 +419,9 @@ function branchRow(ctx: Ctx, slot: Slot, group: Group, pins: string[]): void {
     streamRow(
       cols,
       [
-        sp(nested),
+        ...nestLead(slot.depth),
+        chevron(isOpen, here),
+        sp(1),
         seg(glyph.square, laneColour(agent, status, slot.index)),
         sp(1),
         seg(cut(agent.task || agent.type, nameWide), status === 'running' ? theme.ink : status === 'stopped' ? theme.dim : theme.text, {bold: status === 'running'}),
@@ -402,9 +432,8 @@ function branchRow(ctx: Ctx, slot: Slot, group: Group, pins: string[]): void {
         id,
         pick: true,
         pins,
-        // Always `├─`: the turn's own line carries on past every agent.
-        mark: seg(glyph.branch, theme.spine),
         bg: here ? theme.surface2 : undefined,
+        hint: isOpen ? 'close' : 'agent',
         act: {type: 'toggle', set: 'agents', key: agent.id},
       },
     ),
@@ -414,6 +443,13 @@ function branchRow(ctx: Ctx, slot: Slot, group: Group, pins: string[]): void {
 }
 
 // ---- a turn ----------------------------------------------------------------
+
+// A turn's own mark, by the same rule the Changes view goes by: a chevron for
+// a turn you can open or close, and the spinner while it is still running,
+// which Enter still closes. The two views keep a copy each for now, so the
+// rule can be changed in one place once both have landed.
+const turnMark = (change: TurnChange, isOpen: boolean, here: boolean, frame: number): Seg =>
+  change.running ? seg(spinner(frame), theme.accent) : chevron(isOpen, here);
 
 // A past turn is one row: the prompt, how many agents it started and how long
 // they took, and when it was. Enter opens the block in its place.
@@ -431,7 +467,8 @@ function closedBlock(input: AgentsInput, change: TurnChange, agents: AgentRun[])
   return streamRow(cols, [seg(cut(change.turn.prompt, wide), theme.text)], right, {
     id,
     pick: true,
-    mark: seg(glyph.ring, theme.faint),
+    hint: 'open',
+    mark: turnMark(change, false, here, input.frame),
     bg: here ? theme.surface2 : undefined,
     act: {type: 'turn', key},
   });
@@ -452,14 +489,14 @@ function openBlock(input: AgentsInput, out: Line[], change: TurnChange, agents: 
   const key = turnKey(change);
   const id = `t:${key}`;
   const here = id === input.sel;
-  const live = agents.some(a => statusOf(a, now) === 'running');
   const {from, to} = spanOf(agents, now);
 
   out.push(
     streamRow(cols, [seg(cut(change.turn.prompt, room(cols) - 7), theme.ink, {bold: true})], [seg(clock(change.turn.at), theme.dim)], {
       id,
       pick: true,
-      mark: seg(glyph.dot, live ? theme.accent : theme.text),
+      hint: 'close',
+      mark: turnMark(change, true, here, input.frame),
       bg: here ? theme.surface2 : undefined,
       act: {type: 'turn', key},
     }),
@@ -485,17 +522,27 @@ function openBlock(input: AgentsInput, out: Line[], change: TurnChange, agents: 
   const away = crowd ? agents.filter(quiet) : [];
   if (away.length) {
     const foldId = `gf:${key}`;
+    const onFold = foldId === input.sel;
     const spent = away.reduce((n, a) => n + a.tokens, 0);
     out.push(
       streamRow(
         cols,
-        [seg(glyph.check, theme.add), sp(1), seg(`${away.length} finished`, theme.dim), sep(), seg(tokens(spent), theme.dim)],
+        [
+          chevron(!folded, onFold),
+          sp(1),
+          seg(glyph.check, theme.add),
+          sp(1),
+          seg(`${away.length} finished`, theme.dim),
+          sep(),
+          seg(tokens(spent), theme.dim),
+        ],
         [],
         {
           id: foldId,
           pick: true,
           pins: [id],
-          bg: foldId === input.sel ? theme.surface2 : undefined,
+          bg: onFold ? theme.surface2 : undefined,
+          hint: folded ? 'unfold' : 'fold',
           act: {type: 'toggle', set: 'folded', key: foldKey},
         },
       ),
