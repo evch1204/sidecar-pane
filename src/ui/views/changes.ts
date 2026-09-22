@@ -841,7 +841,11 @@ function chartRow(ctx: Ctx, node: AgentNode, change: TurnChange, pins: string[],
   }
 
   if (!isOpen) return;
-  row([seg(`${agent.type}  ${glyph.sep}  ${modelName(agent.model)}  ${glyph.sep}  ${plural(agent.toolUses, 'tool use')}  ${glyph.sep}  ${tokens(agent.tokens)}`, theme.faint)]);
+  // What it was, what it ran on, and how much it did. At 40 columns the kind
+  // is the part that says least — `general-purpose`, nearly always — so it is
+  // the part that gives way.
+  const facts = [...(tight ? [] : [agent.type]), modelName(agent.model), plural(agent.toolUses, 'tool use'), tokens(agent.tokens)];
+  row([seg(facts.join(`  ${glyph.sep}  `), theme.faint)]);
   // The notification says how it ended; without one the quiet is only a guess,
   // so the sentence stays vaguer.
   if (status === 'stopped') {

@@ -437,12 +437,48 @@ await wait(1800);
 
 // The cursor opens on the turn you are in, and a short window has to scroll
 // past the head of the stream to reach it. `g` walks back up to the top, so
-// the map and the day are drawn whatever the pane's height.
+// the day and the turn under it are drawn whatever the pane's height.
 await p.press('g');
 const opening = await p.show('changes: the day, and the turn you are in');
 check(opening.includes('TODAY'), 'the day should head the stream');
 check(!opening.includes('WORKTREES'), 'this folder alone is no map: a worktree is where an agent worked, not a head of the stream');
 check(/[▁▂▃▄▅▆▇█]{2} [▁▂▃▄▅▆▇█]{2} /.test(opening), 'and the day should keep its skyline whatever else is in scope');
+
+// A turn is a row that opens, so it is marked like one, and the one that is
+// running says that instead.
+const SPIN = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏';
+const turnRows = (shot: string) => shot.split('\n').filter(row => /\d\d:\d\d\s*$/.test(row) && !row.startsWith(' │'));
+const opens = (rows: string[]) => rows.length > 0 && rows.every(row => new RegExp(`^ [▸▾${SPIN}]`).test(row));
+check(opens(turnRows(opening)), 'every turn on screen should start with a chevron, or with the spinner while it runs');
+
+// An open turn cuts nothing: whatever is not on its first row is on the row
+// under it, because your own words are the reason the files moved.
+check(saysIt(opening, 'hand the guide to an agent'), 'the open turn should start with your own words');
+check(saysIt(opening, 'in its own worktree'), 'and carry the end of them too, wrapped rather than cut');
+
+// ---- the agent that worked in a worktree of its own ----------------------
+// One row under the agent says the whole of it: where it worked, how much is
+// there, and whether any of that has arrived in this folder yet.
+const fact = rowUnder(opening, 'Write the guide');
+check(fact.includes('in agent-docs'), `the row under the agent should name the folder it worked in, and it reads "${fact.trim()}"`);
+check(
+  COLS < 56 ? fact.includes('not merged') : /↑1 · not in demo yet/.test(fact),
+  'and say that none of it is in this folder yet, with how far ahead it is when there is room',
+);
+
+if (await p.onto('Write the guide')) {
+  p.mark();
+  // What it opens is drawn under it, which on a short pane is under the window
+  // too: one step further down brings it in.
+  await p.press(ENTER, DOWN, DOWN);
+  await p.show('changes: the agent opened, and the files of the folder it worked in');
+  const inside = p.since();
+  check(saysIt(inside, 'guide.md'), "an opened agent should list the files of its own folder, read from that folder's git");
+  check(TOOLS.test(inside), 'and say what it was and how much it did');
+  // Closed again, so the turns below are read against the stream as it opened.
+  await p.press('g');
+  if (await p.onto('Write the guide')) await p.press(ENTER);
+}
 
 // The stream is newest first and `onto` only ever steps down, so the turns are
 // visited in the order they are drawn: the newest at the top, the one whose
@@ -461,6 +497,9 @@ if (await p.onto('add a farewell as well')) {
   const block = p.since();
   check(block.includes('◆ committed'), 'a turn with commits that have not landed should say committed');
   check(/\?\s+scratch\.ts/.test(block), 'a file no source recorded should be marked and named');
+  check(/[▸▾] [AMDR?] {2}\S/.test(block), 'a file inside an open turn should be a row that opens too');
+  // The walk took the turns above and below this one through the window.
+  check(opens(turnRows(block)), 'and every turn the walk passed should start with a chevron or the spinner');
   check(COLS < 56 || block.includes('not recorded'), 'and it should say so in words: on a narrow row the mark is the whole of it');
   check(/◆ [0-9a-f]{7} {2}Tidy the farewell/.test(receipt), 'its own commits should be listed');
   check(!block.includes('✓ merged'), 'nothing in that turn has been merged, so nothing should say so');
@@ -516,8 +555,14 @@ const all = await p.show('changes: every worktree of the repository, scope all')
 // menu still has it, and the map still heads the stream.
 check(COLS < 56 || all.includes('in all 2 worktrees'), 'the scope pill should say how many folders are in view');
 check(all.includes('WORKTREES'), 'the map should head the stream, and only in this scope');
-check(/▐agent-docs▌/.test(all), "a turn typed in another folder should carry that folder's chip");
+check(/[▸▾] {2}WORKTREES/.test(all), 'and fold from a chevron of its own');
 check(saysIt(all, 'write the guide and commit it'), "that folder's own chat should be in the stream");
+check(/[▁▂▃▄▅▆▇█]{2}/.test(all), 'the day should still head it with its own skyline');
+const chipped = all.split('\n').filter(row => row.includes('▐agent-docs▌'));
+check(
+  chipped.length === 1 && onRow(chipped[0]!, 'write the guide and commit it'),
+  `only a turn typed in another folder should carry that folder's chip, and ${chipped.length} rows carry one`,
+);
 
 // ---- merge it, and take the folder away ---------------------------------
 run('merge', '-q', '--no-ff', 'agent-docs', '-m', 'Merge the guide');
@@ -538,6 +583,9 @@ await p.press(DOWN, DOWN, DOWN, DOWN);
 const back = p.since();
 check(/✓ [0-9a-f]{7} {2}merged into/.test(back), 'the newest turn should carry the merge that landed in this folder');
 check(COLS < 56 || back.includes('merged into improve-greet'), 'and name the branch it landed on');
+// The folder is gone by now, and its own row still says where its work got to.
+const landed = rowUnder(back, 'Write the guide');
+check(/✓ merged \d\d:\d\d/.test(landed), `the agent's own row should say when its folder landed, and it reads "${landed.trim()}"`);
 
 // ---- the Agents view ----------------------------------------------------
 await p.press('3');
@@ -694,7 +742,7 @@ fs.writeFileSync(path.join(soloDir, `${soloChat}.jsonl`), soloLines.join('\n') +
 const q = pane(solo);
 await wait(1800);
 q.mark();
-const oneFolder = await q.show('changes: one folder, so the day heads the stream with its own skyline');
+const oneFolder = await q.show('changes: a day of four turns, and the skyline that gives it a shape');
 check(/[▁▂▃▄▅▆▇█]{2} [▁▂▃▄▅▆▇█]{2} /.test(oneFolder), 'the day should draw a skyline of its turns');
 check(/[+]\d+ −\d+/.test(oneFolder), "the day's own totals should be on the skyline row");
 check(!oneFolder.includes('✓ merged'), 'and never merged: there is nothing here it could have been merged into');
@@ -716,6 +764,13 @@ await q.quit();
 // ---- what must be true of every frame -----------------------------------
 const labelled = seen.filter(shot => shot.split('\n').some(row => /\bA[1-9]\b(?=\s\w)/.test(row)));
 check(labelled.length === 0, `no frame should label an agent A1, A2 …, and ${labelled.length} do`);
+// A worktree shows in three places at most, and the pane's own folder is not
+// one of them: no chip on your own turns, no word for who was at the keyboard,
+// and no caption under a folder heading.
+const anyOf = (what: string) => seen.filter(shot => shot.includes(what)).length;
+check(anyOf('▐demo▌') === 0, `no frame should chip this folder's own turns, and ${anyOf('▐demo▌')} do`);
+check(seen.every(shot => !/\byou {2}·/.test(shot)), 'and no row should say who was at the keyboard');
+check(anyOf('the squares say') === 0, 'and the squares should carry no caption');
 const overflowed = seen.filter(shot => shot.split('\n').some(row => [...row].length > COLS));
 check(overflowed.length === 0, `no row should be wider than the pane, and ${overflowed.length} frames have one`);
 
