@@ -171,7 +171,13 @@ function useHistory(root: string, live: boolean, git: GitState | null) {
     // The transcripts are read; the commits are not. Say so now rather than at
     // the end: on a big history the two are minutes apart.
     const turns = sessions.reduce((n, session) => n + session.turns.length, 0);
-    setState(s => ({...s, counts: {chats: sessions.length, turns, agents: agents.length}}));
+    // The same three numbers every poll once the history is read: handing back
+    // the state unchanged is React's way of saying there is nothing to draw.
+    setState(s =>
+      s.counts && s.counts.chats === sessions.length && s.counts.turns === turns && s.counts.agents === agents.length
+        ? s
+        : {...s, counts: {chats: sessions.length, turns, agents: agents.length}},
+    );
     // Claude Code asking to run something is the one thing the transcript
     // never records, so the note the hook left is read against the transcript
     // that has just been read, every poll.
