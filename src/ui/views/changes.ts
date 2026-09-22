@@ -262,19 +262,19 @@ function titleRow(ctx: Ctx, change: TurnChange, o: Block): void {
   const live = change.running;
   const tag = o.tag ?? [];
   const when = [seg(clock(change.turn.at), theme.dim)];
-  const promptKey = `prompt:${key}`;
-  const full = ctx.open.more.has(promptKey);
-  // The clock and one clear column, then whatever the chip in front took.
-  const room = roomOf(cols) - 6 - widthOf(tag);
-  const lines = full ? wrap(change.turn.prompt, room) : [cut(change.turn.prompt, room)];
-  const hidden = !full && width(change.turn.prompt) > room;
-  // Enter opens the rest of the prompt while there is any; after that it is
-  // the way to close the turn again.
-  const act = hidden ? ({type: 'toggle', set: 'more', key: promptKey} as const) : ({type: 'turn', key} as const);
+  // Your own words are the reason the turn happened, so an open turn carries
+  // all of them, on as many rows as they take. The clock's columns are kept
+  // clear on every one of them, and the chip in front took what it took.
+  const act = {type: 'turn', key} as const;
+  const lines = wrap(change.turn.prompt, roomOf(cols) - 6 - widthOf(tag));
+  if (lines.length === 0) lines.push('');
   lines.forEach((text, i) => {
     ctx.out.push(
       streamRow(cols, i === 0 ? [...tag, seg(text, theme.ink, {bold: true})] : [seg(text, theme.ink, {bold: true})], i === 0 ? when : [], {
-        bg, live, ...(i === 0 ? {mark: nodeOf(ctx, change, true, here, o.colour), id, pick: true, act} : {pins: [id], act: {type: 'toggle', set: 'more', key: promptKey}}),
+        // Enter on any row of the title closes the turn, because every one of
+        // them is the turn's own row.
+        bg, live, act, hint: 'close',
+        ...(i === 0 ? {mark: nodeOf(ctx, change, true, here, o.colour), id, pick: true} : {pins: [id]}),
       }),
     );
   });

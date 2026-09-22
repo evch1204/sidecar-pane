@@ -55,7 +55,9 @@ const plain = (text: string) => text.replace(/\u001B\[[0-9;]*m/g, '');
 
 // Does this row say `what`? A narrow pane cuts a prompt, a name and a whole
 // sentence with an ellipsis, and `add a farewel…` still names the turn it is
-// the start of, so a cut piece counts when enough of it is there.
+// the start of, so a cut piece counts when enough of it is there. An open turn
+// wraps its prompt instead of cutting it, so the first row of one carries the
+// start of the words and the rest are on the rows below.
 const KEPT = 8;
 function onRow(row: string, what: string): boolean {
   if (row.includes(what)) return true;
@@ -63,6 +65,10 @@ function onRow(row: string, what: string): boolean {
     for (let n = piece.length; n >= KEPT; n--) {
       if (what.startsWith(piece.slice(piece.length - n))) return true;
     }
+  }
+
+  for (let n = what.length; n >= KEPT; n--) {
+    if (row.includes(what.slice(0, n))) return true;
   }
 
   return false;
