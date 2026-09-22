@@ -60,6 +60,9 @@ const plain = (text: string) => text.replace(/\u001B\[[0-9;]*m/g, '');
 // puts its sign where a file row has its second space.
 const lineNo = (row: string): number => Number(/^[\s│▎]*(\d+) {2}/.exec(row)?.[1] ?? 0);
 const diffNo = (row: string): number => Number(/^[\s│▎]*(\d+) [+−] /.exec(row)?.[1] ?? 0);
+// The one rule for a row that opens or closes in place: a chevron first, after
+// whatever left line or tree guide comes before it.
+const opensInPlace = (row: string): boolean => /^[\s│]*[▸▾] /.test(row);
 // Markdown spells a sentence the same way formatted and as written, once the
 // markers it swallows are gone.
 const bare = (row: string): string => row.replace(/[*`_[\]|#>]/g, '').replace(/\s+/g, ' ').trim();
@@ -183,6 +186,12 @@ await show('changes: wheel scrolled the stream, cursor left alone');
 
 await press(click(16, tabsRow));
 await wait(300);
+// Every row of the tree opens something: a folder in place, a file into a peek
+// under it. So every row of it starts with a chevron.
+const tree = text().filter(row => row.trim());
+const notTree = tree.find(row => !opensInPlace(row));
+check(tree.length > 2 && !notTree, `every row of the tree should start with a chevron, and "${notTree?.trim()}" does not`);
+
 await press(DOWN, DOWN, ENTER, DOWN, DOWN, ENTER, DOWN, DOWN, ENTER);
 await wait(500);
 await show('files: a folder opened, then a file peeked in place');
@@ -401,6 +410,11 @@ if (await b.onto('long.txt')) {
 
 await b.press('1', 'v', 'v');
 await wait(700);
+// Uncommitted is one row a file, and each of them opens its diff in place.
+const flat = b.text().filter(row => row.trim());
+const notFlat = flat.find(row => !opensInPlace(row));
+check(flat.length > 0 && !notFlat, `every row of Uncommitted should start with a chevron, and "${notFlat?.trim()}" does not`);
+
 let wanted = 0;
 for (let n = 0; n < 40 && !wanted; n++) {
   const row = b.cursorRow();
@@ -413,6 +427,10 @@ for (let n = 0; n < 40 && !wanted; n++) {
   const opens = head.startsWith('▸') || (/^[AMDR?]\s/.test(head) && !/\d+ hunks?/.test(head));
   if (!wanted) await b.press(opens ? ENTER : DOWN);
 }
+
+await b.show('changes: the file opened, and its hunks open under it');
+// A hunk folds where it is, so its header is a chevron too, open side up.
+check(b.text().some(row => /^ │\s+▾ /.test(row)), 'an open hunk should be headed by an open chevron');
 
 if (!wanted) await b.show('changes: the cursor never reached a line of the diff');
 check(wanted > 0, 'the cursor should have reached a changed line of the diff');
