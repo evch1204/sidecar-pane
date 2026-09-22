@@ -67,6 +67,9 @@ export type ChangesInput = {
   // A turn of this folder's own chat is running, which is what makes the
   // folder active in the map even when no agent is.
   working?: boolean;
+  // Claude Code has a permission prompt up in the terminal beside the pane, so
+  // the step the running turn is on is waiting on you, not on the machine.
+  waiting?: boolean;
 };
 
 const FILES_SHOWN = 8;
@@ -92,6 +95,11 @@ const NARROW = 56;
 // `↑22  ✓ merged 13:20`: how far ahead a folder is, then where it has got to.
 const STATE_COL = 22;
 
+// A spinner says something is happening; it never says for how long. Past this
+// much silence the row says the number instead, because that is the point at
+// which a long command and a stuck one start to look the same.
+const QUIET_SHOWN = 5 * 60_000;
+
 export const turnKey = (change: TurnChange): string => `${change.chatId}:${change.turn.id}`;
 export const fileKey = (scope: string, rel: string): string => `${scope}|${rel}`;
 export const spinner = (frame: number): string => glyph.spinner[frame % glyph.spinner.length]!;
@@ -103,6 +111,11 @@ export function dayLabel(at: number, now: number): string {
   if (days === 1) return 'yesterday';
   if (days < 7) return new Date(at).toLocaleDateString(undefined, {weekday: 'long'}).toLowerCase();
   return new Date(at).toLocaleDateString(undefined, {month: 'short', day: 'numeric'});
+}
+
+// How long a running row has been silent, once that is worth saying.
+export function quietNote(since: number, now: number): Seg[] {
+  return now - since > QUIET_SHOWN ? [seg(`${span(now - since)} quiet`, theme.warn)] : [];
 }
 
 export function clock(at: number): string {
@@ -476,10 +489,13 @@ function stepsRow(ctx: Ctx, change: TurnChange, agents: AgentRun[], rail: Rail):
   const summary = [...tally.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4).map(([tool, n]) => `${tool} ${n}`).join('  ');
   const last = turn.actions[turn.actions.length - 1]!;
   const more = {...rail, id, pick: true, bg: here ? theme.surface2 : undefined, hint: isOpen ? 'close' : 'steps', act: {type: 'toggle', set: 'steps', key} as const};
+  // What the step is waiting on takes the right of the row when there is
+  // anything to say: a count of steps is the quietest thing on it.
+  const held = ctx.waiting ? [seg('waiting for you', theme.warn)] : quietNote(turn.endedAt, ctx.now);
 
   ctx.out.push(
     live
-      ? streamRow(cols, [seg(spinner(ctx.frame), theme.accent), sp(1), seg(last.tool, theme.dim), sp(2), seg(target(ctx.root, last), theme.text)], [seg(plural(turn.actions.length, 'step'), theme.dim)], more)
+      ? streamRow(cols, [seg(spinner(ctx.frame), theme.accent), sp(1), seg(last.tool, theme.dim), sp(2), seg(target(ctx.root, last), theme.text)], held.length ? held : [seg(plural(turn.actions.length, 'step'), theme.dim)], more)
       : streamRow(cols, [chevron(isOpen, here), sp(1), seg(plural(turn.actions.length, 'step'), theme.text), seg(`   ${summary}`, theme.dim)], agents.length ? [seg(plural(agents.length, 'agent'), theme.dim)] : [], more),
   );
 
@@ -821,7 +837,10 @@ function chartRow(ctx: Ctx, node: AgentNode, change: TurnChange, pins: string[],
   // While it runs, the one thing worth a row is the step it is on.
   const last = agent.steps[agent.steps.length - 1];
   if (status === 'running' && last) {
-    row([sp(1), seg(glyph.elbow, theme.faint), sp(2), seg(last.tool.padEnd(6), theme.dim), seg(target(ctx.root, last), theme.text)]);
+    row(
+      [sp(1), seg(glyph.elbow, theme.faint), sp(2), seg(last.tool.padEnd(6), theme.dim), seg(target(ctx.root, last), theme.text)],
+      quietNote(agent.endedAt, now),
+    );
   }
 
   // A worktree is where an agent worked, never a block of the stream, so this

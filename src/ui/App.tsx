@@ -457,7 +457,7 @@ export function App({root, interactive, mouseDebug = false}: Props) {
         lines: changesLines({
           cols, now, frame, root, group, changes: timeline, histories, flat: diff ? diff.files : null, agents: streamAgents,
           open, diffs, folded, opened, hideSpace, sel: at, worktrees, scope, chatModel,
-          branch: git?.branch ?? '', working,
+          branch: git?.branch ?? '', working, waiting: Boolean(history.note),
         }),
       };
     }
@@ -574,7 +574,14 @@ export function App({root, interactive, mouseDebug = false}: Props) {
 
   const uncommitted = git ? [...git.changes.values()].filter(c => c.status !== 'D').length : 0;
   const showAgents = agentsTabVisible(history.changes, history.agents, now) || view === 'agents';
-  const tabs = tabRow(cols, view, {agents: agentsBadge(history.agents, now, frame)}, {agents: !showAgents});
+  // A question waiting on you is the one thing worth pulling you out of
+  // another view, so the tab it happened on carries a dot until you look.
+  const tabs = tabRow(
+    cols,
+    view,
+    {agents: agentsBadge(history.agents, now, frame), changes: asking && view !== 'changes' ? [seg(glyph.dot, theme.warn)] : []},
+    {agents: !showAgents},
+  );
 
   // The pills carry the state the tab row used to describe in dim words: they
   // say what is showing and change it in one click.
