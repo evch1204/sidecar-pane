@@ -22,6 +22,9 @@ export type Action = {
   wrote: boolean;
   // The shell command, or the kind of subagent, when the call has one.
   detail: string;
+  // Its result has come back. A call still waiting is either slow, or is the
+  // one Claude Code is asking you to allow.
+  done: boolean;
 };
 
 export type Turn = {
@@ -252,6 +255,7 @@ function parseInto(session: Session, lines: string[], root: string, messages: Se
       if (block.type === 'tool_result' && block.tool_use_id) {
         turn.asks = turn.asks.filter(id => id !== block.tool_use_id);
         turn.asking = turn.asks.length > 0;
+        for (const action of turn.actions) if (action.id === block.tool_use_id) action.done = true;
       }
 
       if (block.type !== 'tool_use' || !block.name) continue;
@@ -273,6 +277,7 @@ function parseInto(session: Session, lines: string[], root: string, messages: Se
         file: named,
         at,
         wrote,
+        done: false,
         detail:
           typeof input.command === 'string'
             ? input.command

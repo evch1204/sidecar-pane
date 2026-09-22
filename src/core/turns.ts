@@ -68,6 +68,12 @@ const stats = new Map<string, ChangedFile[]>();
 // would otherwise read as running for ever.
 const QUIET = 120_000;
 
+// Whether a turn is still going. The newest turn of a chat has no `next`, and
+// anything with one is over by definition.
+export function isRunning(turn: Turn, next: Turn | undefined, now: number): boolean {
+  return !next && !turn.ended && now - turn.endedAt < QUIET;
+}
+
 function claimed(root: string, turn: Turn): ChangedFile[] {
   return turn.claimed.map(file => ({
     rel: path.relative(root, file).split(path.sep).join('/'),
@@ -205,7 +211,7 @@ export async function loadTurns(
   for (const session of sessions) {
     for (const [i, turn] of session.turns.entries()) {
       const next = session.turns[i + 1];
-      const running = !next && !turn.ended && now - turn.endedAt < QUIET;
+      const running = isRunning(turn, next, now);
       const base: TurnChange = {
         turn,
         chat: session.title || 'Untitled chat',
