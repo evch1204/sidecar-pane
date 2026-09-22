@@ -177,6 +177,23 @@ function daysOf(changes: TurnChange[], now: number): DayGroup[] {
   return days;
 }
 
+// `daySummary` groups by day and chat, because a run of turns from one chat is
+// what the stream breaks on. The head above them is about the day: two chats
+// this morning are still one morning, and its count, its span, its skyline and
+// its totals say so. The divider under the head names the next chat.
+function wholeDay(runs: DayGroup[], day: number, now: number): {turns: TurnChange[]; added: number; removed: number; span: number} {
+  const mine = runs.filter(run => run.day === day);
+  const turns = mine.flatMap(run => run.turns).sort((a, b) => a.turn.at - b.turn.at);
+  const first = turns[0];
+  const last = turns[turns.length - 1];
+  return {
+    turns,
+    added: mine.reduce((n, run) => n + run.added, 0),
+    removed: mine.reduce((n, run) => n + run.removed, 0),
+    span: first && last ? Math.max(0, (last.running ? now : last.turn.endedAt) - first.turn.at) : 0,
+  };
+}
+
 // One agent's own hue, by the order it was started in its turn.
 const hueOf = (index: number): string => hues[index % hues.length]!;
 
@@ -1046,11 +1063,12 @@ function stream(ctx: Ctx, folders: Folder[]): void {
 
   days.forEach((day, i) => {
     if (i === 0) {
+      const whole = wholeDay(days, day.day, now);
       dayHead(ctx, dayLabel(day.day, now), day.chat, [
-        seg(plural(day.turns.length, 'turn'), theme.dim),
-        ...(day.span >= 1000 ? [sep(), seg(span(day.span), theme.dim)] : []),
+        seg(plural(whole.turns.length, 'turn'), theme.dim),
+        ...(whole.span >= 1000 ? [sep(), seg(span(whole.span), theme.dim)] : []),
       ]);
-      skylineRow(ctx, day.turns, isOpen, day.added, day.removed);
+      skylineRow(ctx, whole.turns, isOpen, whole.added, whole.removed);
       ctx.out.push(blankRow(cols));
     } else {
       // A new day, or the same day in another chat: either way the stream

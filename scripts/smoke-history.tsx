@@ -598,6 +598,13 @@ check(
   `only a turn typed in another folder should carry that folder's chip, and ${chipped.length} rows carry one`,
 );
 
+// The head is about the day, not about whichever chat happened to start it:
+// two chats worked today and all six turns are the day's. The divider under
+// it is what says which chat the run of turns below belongs to.
+const dayRow = all.split('\n').find(row => row.trimStart().startsWith('TODAY')) ?? '';
+check(/\b6 turns\b/.test(dayRow), `the day head should count every turn of the day, and it reads "${dayRow.trim()}"`);
+check(/([▁▂▃▄▅▆▇█]{2} ){5}[▁▂▃▄▅▆▇█]{2}/.test(all), 'and the skyline should have a column pair for each of the six');
+
 // ---- merge it, and take the folder away ---------------------------------
 run('merge', '-q', '--no-ff', 'agent-docs', '-m', 'Merge the guide');
 run('worktree', 'remove', '--force', treePath);
