@@ -153,7 +153,12 @@ function pane(root: string) {
     return false;
   };
 
-  return {press, show, frame, text, cursorRow, cursorRows, cursorAt, numbers, onto, quit};
+  // Every frame this pane has written, oldest first. The first one is drawn
+  // before anything has been read, and it is gone again in a few hundred
+  // milliseconds, so it can only be looked at afterwards.
+  const shots = () => frames.map(plain).filter(shot => shot.includes('\n'));
+
+  return {press, show, frame, shots, text, cursorRow, cursorRows, cursorAt, numbers, onto, quit};
 }
 
 // ---- the repo itself -------------------------------------------------------
@@ -446,6 +451,46 @@ if (wanted) {
 
 await b.quit();
 fs.rmSync(stage, {recursive: true, force: true});
+
+// ---- C: the first frame, and a folder nothing has ever been typed in -------
+// The card stands in for the stream twice: on the way in, while the chats are
+// being read, and for good where there are none. The first of those is over in
+// a moment, so it is read back out of the frames the pane has already written
+// rather than off the screen.
+
+{
+  const quiet = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sidecar-quiet-')));
+  const project = path.join(quiet, 'nothing');
+  fs.mkdirSync(project, {recursive: true});
+  execFileSync('git', ['-C', project, 'init', '-q'], {stdio: 'ignore'});
+  // A home of its own, so the folder has no chats whatever the machine running
+  // this has.
+  process.env.SIDECAR_HOME = path.join(quiet, 'sidecar');
+  process.env.SIDECAR_CLAUDE_HOME = path.join(quiet, 'claude');
+
+  // Three rows of half blocks with nothing else on them: the name, in the
+  // pixel font.
+  const wordmark = (shot: string): boolean => {
+    const rows = shot.split('\n').map(row => row.trim());
+    const big = (row = '') => row.length > 6 && /^[█▀▄ ]+$/.test(row);
+    return rows.some((_, i) => big(rows[i]) && big(rows[i + 1]) && big(rows[i + 2]));
+  };
+
+  const c = pane(project);
+  const first = c.shots()[0] ?? '';
+  check(wordmark(first), 'the first frame should carry the wordmark');
+  check(first.includes('reading'), `the first frame should say it is reading, and it says "${first.split('\n')[0]?.trim()}"`);
+  check(!first.includes('By turn'), 'the first frame should have no pills yet');
+
+  await wait(1800);
+  await c.show('a folder Claude Code has never been run in');
+  const rest = plain(c.frame());
+  check(wordmark(rest), 'a folder with no chats should show the wordmark');
+  check(rest.includes('no chats yet'), 'a folder with no chats should say so');
+  check(rest.includes('By turn'), 'the pills should be back once the read is done');
+  await c.quit();
+  fs.rmSync(quiet, {recursive: true, force: true});
+}
 
 // ---- what must be true of every frame --------------------------------------
 // A row wider than the pane wraps in a real terminal and pushes the rest of
