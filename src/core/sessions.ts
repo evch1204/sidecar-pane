@@ -40,6 +40,20 @@ export type Turn = {
   // How full the context window was at the last reply, in tokens.
   context: number;
   model: string;
+  // The turn is over, exactly as the transcript says so: Claude's last record
+  // stopped at `end_turn`, or its reply was cut off and you interrupted it.
+  // A record that carries no `stop_reason` at all says nothing either way,
+  // and a turn only ever ends here — never on a timer.
+  ended: boolean;
+  // The last thing Claude said stopped with no reason given, which is what a
+  // reply cut off mid-stream looks like. On its own that means nothing; it is
+  // the interrupt line right after it that ends the turn.
+  cut: boolean;
+  // Calls that are waiting on you — a question, a plan to approve — with no
+  // result in the transcript yet.
+  asks: string[];
+  // Whether any of them still are. The one thing callers want to know.
+  asking: boolean;
   actions: Action[];
   // Files this turn looks like it wrote, read out of the transcript. A hint,
   // not a measurement: only a snapshot either side of the turn knows what
@@ -122,8 +136,16 @@ type Record_ = {
   turnOrigin?: string;
   isMeta?: boolean;
   isSidechain?: boolean;
-  message?: {role?: string; content?: unknown; id?: string; model?: string; usage?: Usage};
+  message?: {role?: string; content?: unknown; id?: string; model?: string; usage?: Usage; stop_reason?: string | null};
 };
+
+// The two calls that hand the turn back to you without ending it: a question,
+// and a plan waiting to be approved.
+const ASKS = new Set(['AskUserQuestion', 'ExitPlanMode']);
+
+// What Claude Code writes into the chat when you stop it mid-reply. There are
+// two spellings, one of them `… for tool use`, so only the front is matched.
+const INTERRUPT = '[Request interrupted by user';
 
 export type Usage = {
   input_tokens?: number;
@@ -175,6 +197,10 @@ function parseInto(session: Session, lines: string[], root: string, messages: Se
         tokens: 0,
         context: 0,
         model: '',
+        ended: false,
+        cut: false,
+        asks: [],
+        asking: false,
         actions: [],
         claimed: [],
       });
@@ -187,6 +213,11 @@ function parseInto(session: Session, lines: string[], root: string, messages: Se
     if (!Array.isArray(content)) continue;
 
     if (record.type === 'assistant') {
+      // Whatever Claude said last is where the turn stands, so both of these
+      // are set again on every reply rather than only the first.
+      const stop = record.message?.stop_reason;
+      turn.ended = stop === 'end_turn';
+      turn.cut = stop === null;
       if (!turn.firstReplyAt) turn.firstReplyAt = at;
       turn.endedAt = Math.max(turn.endedAt, at);
       if (record.message?.model) turn.model = record.message.model;
@@ -202,9 +233,22 @@ function parseInto(session: Session, lines: string[], root: string, messages: Se
       }
     }
 
-    for (const block of content as {type?: string; id?: string; name?: string; text?: string; input?: Record<string, unknown>}[]) {
+    for (const block of content as {type?: string; id?: string; name?: string; text?: string; tool_use_id?: string; input?: Record<string, unknown>}[]) {
       if (block.type === 'text' && record.type === 'assistant' && block.text?.trim()) turn.says = block.text.trim();
+      // You stopped it. That only ends the turn when the reply it stopped was
+      // still in flight; after a finished reply the line is just a line.
+      if (block.type === 'text' && record.type === 'user' && block.text?.startsWith(INTERRUPT) && turn.cut) turn.ended = true;
+      if (block.type === 'tool_result' && block.tool_use_id) {
+        turn.asks = turn.asks.filter(id => id !== block.tool_use_id);
+        turn.asking = turn.asks.length > 0;
+      }
+
       if (block.type !== 'tool_use' || !block.name) continue;
+      if (ASKS.has(block.name) && block.id) {
+        turn.asks.push(block.id);
+        turn.asking = true;
+      }
+
       const input = block.input ?? {};
       const tool = block.name;
       const wrote = wroteSomething(tool, input);

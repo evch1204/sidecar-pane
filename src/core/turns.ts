@@ -62,6 +62,12 @@ export type TurnGit = 'none' | 'uncommitted' | 'committed' | 'merged';
 
 const stats = new Map<string, ChangedFile[]>();
 
+// A turn ends when the transcript says it ended, not when it goes quiet. This
+// is only the bound on the other case: Claude Code was closed mid-reply, so
+// nothing will ever write the line that ends the turn, and a turn with no end
+// would otherwise read as running for ever.
+const QUIET = 120_000;
+
 function claimed(root: string, turn: Turn): ChangedFile[] {
   return turn.claimed.map(file => ({
     rel: path.relative(root, file).split(path.sep).join('/'),
@@ -199,7 +205,7 @@ export async function loadTurns(
   for (const session of sessions) {
     for (const [i, turn] of session.turns.entries()) {
       const next = session.turns[i + 1];
-      const running = !next && now - turn.endedAt < 120_000;
+      const running = !next && !turn.ended && now - turn.endedAt < QUIET;
       const base: TurnChange = {
         turn,
         chat: session.title || 'Untitled chat',
