@@ -781,9 +781,12 @@ function chartRows(ctx: Ctx, change: TurnChange, agents: AgentRun[], rail: Rail)
     ...(done ? [sep(), seg(`${done} done`, theme.dim)] : []),
     ...(stopped ? [sep(), seg(`${stopped} stopped`, theme.warn)] : []),
   ];
-  const tight = cols < NARROW;
+  // How they are getting on is the news; the word `tokens` is a label on a
+  // figure that reads the same without it. So it goes before any state is cut.
+  const spentSeg = (word: boolean) => seg(`${tokens(spent)}${word ? ' tokens' : ''}`, theme.dim);
+  const wordy = cols >= NARROW && widthOf(left) + 2 + widthOf([spentSeg(true)]) <= roomOf(cols);
   ctx.out.push(
-    streamRow(cols, left, [seg(`${tokens(spent)}${tight ? '' : ' tokens'}`, theme.dim)], {
+    streamRow(cols, left, [spentSeg(wordy)], {
       ...rail,
       ...(crowd ? {id: rollId, pick: true, bg: here ? theme.surface2 : undefined, hint: rolled ? 'unfold' : 'fold', act: {type: 'toggle', set: 'folded', key: rollKey}} : {}),
     }),
