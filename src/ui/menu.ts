@@ -1,4 +1,4 @@
-import {fit, RIGHT_PAD, seg, sp, widthOf, type Act, type Group, type Line, type Seg, type View, type Zone} from './cells';
+import {clip, fit, RIGHT_PAD, seg, sp, widthOf, type Act, type Group, type Line, type Seg, type View, type Zone} from './cells';
 import {NAME} from './splash';
 import {glyph, theme} from './theme';
 
@@ -131,8 +131,16 @@ export function menuBar(cols: number, list: Menu[], open: number | null, right: 
       ]
     : [];
 
+  // Laid out rather than fitted: `fit` gives the left side a column of air
+  // when the right one fills the row, and here that column comes off a menu
+  // title. The menus are the one thing on the bar that may never move, and a
+  // title already carries a space of its own on each side.
+  const air = Math.max(0, from - widthOf(left));
   return {
-    line: {segs: fit(left, [...shown, sp(1 + RIGHT_PAD)], cols, bg), zones: [...zones.filter(z => z.to <= from), ...rightZones]},
+    line: {
+      segs: [...clip(left, from), sp(air), ...shown, sp(1 + RIGHT_PAD)].map(s => ({...s, bg: s.bg ?? bg})),
+      zones: [...zones.filter(z => z.to <= from), ...rightZones],
+    },
     starts,
   };
 }
