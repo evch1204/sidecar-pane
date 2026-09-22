@@ -352,6 +352,17 @@ function pane(root: string, cols = COLS, rows = ROWS) {
   const frame = () => out.at(-1) ?? '';
   const text = () => plain(frame());
   const rowsOf = () => frame().split('\n');
+  // A block is often taller than the window, and on a short pane never more
+  // than half of it is on screen at once. `mark` remembers where the run is
+  // now and `since` reads back every row drawn after that: step through a
+  // block and the whole of it has passed through the window, one window at a
+  // time, so a check about a block reads `since` and not one frame of it.
+  let marked = 0;
+  const mark = () => {
+    marked = out.length;
+  };
+
+  const since = () => out.slice(marked).map(plain).join('\n');
   // A lit tab, a lit pill and every chip carry the cursor's own background
   // too, so a row is the cursor's when most of it is painted with it.
   const cursorRow = () => plain(rowsOf().find(row => litWidth(row) > cols / 2) ?? '');
@@ -393,7 +404,7 @@ function pane(root: string, cols = COLS, rows = ROWS) {
     await app.waitUntilExit();
   };
 
-  return {press, show, frame, text, rowsOf, cursorRow, onto, quit};
+  return {press, show, frame, text, rowsOf, cursorRow, mark, since, onto, quit};
 }
 
 const DOWN = '\u001B[B';
@@ -420,17 +431,20 @@ check(/you \+ Claude/.test(opening), 'the folder the pane is in should say you a
 
 // ---- the turn with commits that have not reached main --------------------
 if (await p.onto('add a farewell as well')) {
+  p.mark();
   await p.press(ENTER);
-  const committed = await p.show('changes: two commits of its own, and a file no source recorded');
-  check(committed.includes('◆ committed'), 'a turn with commits that have not landed should say committed');
-  check(/\?\s+scratch\.ts/.test(committed), 'a file no source recorded should be marked and named');
-  check(COLS < 56 || committed.includes('not recorded'), 'and it should say so in words: on a narrow row the mark is the whole of it');
+  await p.show('changes: two commits of its own, and a file no source recorded');
   // Its own rows carry on below the window, so stepping through them brings
-  // the receipt at the end of the block into view.
+  // the receipt at the end of the block into view — and, on a short pane, the
+  // chips and the files above it back out of view. The block is the walk.
   await p.press(DOWN, DOWN, DOWN, DOWN, DOWN);
   const receipt = await p.show('changes: the commits that turn made, at the end of its block');
+  const block = p.since();
+  check(block.includes('◆ committed'), 'a turn with commits that have not landed should say committed');
+  check(/\?\s+scratch\.ts/.test(block), 'a file no source recorded should be marked and named');
+  check(COLS < 56 || block.includes('not recorded'), 'and it should say so in words: on a narrow row the mark is the whole of it');
   check(/◆ [0-9a-f]{7} {2}Tidy the farewell/.test(receipt), 'its own commits should be listed');
-  check(!receipt.includes('✓ merged'), 'nothing in that turn has been merged, so nothing should say so');
+  check(!block.includes('✓ merged'), 'nothing in that turn has been merged, so nothing should say so');
   // Esc walks up to the row that owns these, and again closes it, so the next
   // turn is read against a stream that is not carrying this one open.
   await p.press(ESC, ESC);
@@ -474,14 +488,19 @@ if (await p.onto('mention the licence')) {
 // ---- the worktrees, before the merge ------------------------------------
 await p.press('g', 'w');
 await wait(1200);
+p.mark();
 const all = await p.show('changes: every worktree of the repository, scope all');
 // At 40 columns the grouping pills win and the scope pill gives way; the
 // menu still has it, and the map still heads the stream.
 check(COLS < 56 || all.includes('in all 2 worktrees'), 'the scope pill should say how many folders are in view');
 check(all.includes('WORKTREES'), 'the map should still head the stream');
-check(saysIt(all, 'not in your folder until it is merged'), "an agent's worktree should say its work is not here yet");
 check(/▐agent-a7b1▌|▐agent-docs▌/.test(all), "a block from another folder should carry that folder's chip");
 check(saysIt(all, 'write the guide and commit it'), "that folder's own chat should be in the stream");
+// What the other folder's work says about itself is inside the block below
+// the map, and no short window holds both: walk down to it.
+await p.onto('Write the guide');
+await p.press(DOWN, DOWN);
+check(saysIt(p.since(), 'not in your folder until it is merged'), "an agent's worktree should say its work is not here yet");
 
 // ---- merge it, and take the folder away ---------------------------------
 run('merge', '-q', '--no-ff', 'agent-docs', '-m', 'Merge the guide');
@@ -493,7 +512,13 @@ check(/✓ merged \d\d:\d\d/.test(after), 'a merged worktree should say when it 
 
 await p.press('w');
 await wait(600);
-const back = await p.show('changes: back to this folder, and the merge on the newest turn');
+p.mark();
+await p.show('changes: back to this folder, and the merge on the newest turn');
+// The merge is the last row of the newest turn's block, under the agent and
+// the files it wrote, so a short window reaches it by stepping.
+await p.onto('hand the guide');
+await p.press(DOWN, DOWN, DOWN, DOWN);
+const back = p.since();
 check(/✓ [0-9a-f]{7} {2}merged into/.test(back), 'the newest turn should carry the merge that landed in this folder');
 check(COLS < 56 || back.includes('merged into improve-greet'), 'and name the branch it landed on');
 
@@ -519,10 +544,14 @@ if (await p.onto('Check the README')) {
 }
 
 if (await p.onto('Rewrite the example')) {
+  p.mark();
   await p.press(ENTER);
   const stopped = await p.show('agents: the one the user stopped, read from the notification');
   check(/● +stopped/.test(stopped), 'an agent the user stopped should say stopped');
-  check(stopped.includes('Stopped before it handed back.'), 'and say what that means');
+  // It opens under the row it is on, which on a short pane is the last row of
+  // the window: one step further down brings what it says into it.
+  await p.press(DOWN);
+  check(p.since().includes('Stopped before it handed back.'), 'and say what that means');
 }
 
 // ---- Usage, Files, and the reader ---------------------------------------
@@ -645,10 +674,10 @@ fs.writeFileSync(path.join(soloDir, `${soloChat}.jsonl`), soloLines.join('\n') +
 
 const q = pane(solo);
 await wait(1800);
+q.mark();
 const oneFolder = await q.show('changes: one folder, so the day heads the stream with its own skyline');
 check(/[▁▂▃▄▅▆▇█]{2} [▁▂▃▄▅▆▇█]{2} /.test(oneFolder), 'the day should draw a skyline of its turns');
 check(/[+]\d+ −\d+/.test(oneFolder), "the day's own totals should be on the skyline row");
-check(/◆\d/.test(oneFolder), 'a past turn with commits should carry the mark and the count');
 check(!oneFolder.includes('✓ merged'), 'and never merged: there is nothing here it could have been merged into');
 check(!oneFolder.includes('WORKTREES'), 'one folder is no map');
 
@@ -660,6 +689,10 @@ const clicked = await q.show('changes: the turn a click on the skyline column op
 check(onRow(q.cursorRow(), 'add the whole reference table'), `a click on the third column should move the cursor to the third turn, and it is on "${q.cursorRow().trim()}"`);
 check(clicked.includes('◆ committed'), 'and open it: its commit is made but not merged anywhere');
 check(!clicked.includes('✓ merged'), 'on the default branch with no upstream, committed is the most it may say');
+// The past turns sit under whichever one is open, and a short window cannot
+// hold them with it: walking to the oldest takes every one of them through it.
+await q.onto('fix the typo');
+check(/◆\d/.test(q.since()), 'a past turn with commits should carry the mark and the count');
 await q.quit();
 // ---- what must be true of every frame -----------------------------------
 const labelled = seen.filter(shot => shot.split('\n').some(row => /\bA[1-9]\b(?=\s\w)/.test(row)));
