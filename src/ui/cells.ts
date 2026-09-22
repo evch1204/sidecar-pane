@@ -177,7 +177,9 @@ export function streamRow(
       sp(1),
       {...first, bg: first.bg ?? bg},
       sp(gap, bg),
-      ...fit(left, right, cols - 1 - w - gap - RIGHT_PAD, bg),
+      // Margin, mark, gap, content, pad: `cols - 1` in all, the last column
+      // being the scrollbar's.
+      ...fit(left, right, cols - 2 - w - gap - RIGHT_PAD, bg),
       sp(RIGHT_PAD, bg),
     ],
   };

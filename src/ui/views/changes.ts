@@ -1,20 +1,27 @@
 import path from 'node:path';
 import {statusOf, type AgentRun} from '../../core/agents';
 import type {DiffLine, FileDiff, FileStatus} from '../../core/diff';
+import type {FileStat} from '../../core/git';
+import {
+  daySummary, folderShares, groupByFolder,
+  type ChangedFile, type DayGroup, type FileHistory, type TurnChange,
+} from '../../core/turns';
 import {modelName} from '../../core/usage';
-import type {ChangedFile, FileHistory, TurnChange} from '../../core/turns';
 import type {WorktreeRun} from '../../core/worktrees';
 import {
-  blankRow, chevron, counts, INDENT, INDENT2, pageRow, RIGHT_PAD, seg, sp, span, spineRow, tokens, widthOf,
-  type Group, type Line, type Seg,
+  blankRow, chevron, chip, counts, INDENT, INDENT2, pageRow, RIGHT_PAD, seg, sizeCells, sizeLit, SIZE_CELLS,
+  skylineCol, sp, span, splitBar, spineRow, streamRow, STREAM_PREFIX, tokens, width, widthOf,
+  type Group, type Line, type Seg, type Zone,
 } from '../cells';
 import {diffLines, viewRows, type DiffGroup} from '../diffrows';
-import {agentColours, glyph, theme} from '../theme';
+import {agentColours, glyph, hues, theme} from '../theme';
 import {wrap} from '../util';
 
-// The Changes view is one stream. A turn is a header row and a left line under
-// it; what it changed is a row on that line; a diff opens in a well under its
-// own row. Nothing is shown "down there", and nothing is a fill.
+// The Changes view is one stream. A day heads it with its own skyline; a turn
+// is a block whose node sits in column 1 and whose rows all hang on the block's
+// own line; a diff opens in a well under the row of the file it belongs to.
+// Nothing is a box, nothing is shown "down there", and every row in the view
+// starts its text in the same column.
 
 export type Open = {
   // Turns whose open state was flipped by hand. The newest turn starts open,
@@ -58,12 +65,36 @@ export type ChangesInput = {
 
 const FILES_SHOWN = 8;
 // More agents than this in one turn and the Changes view rolls them into one
-// row. A file row carries this many agent labels before it counts the rest.
+// row. A file row carries this many squares before it counts the rest.
 const AGENTS_SHOWN = 3;
 const TAGS_SHOWN = 2;
 const STEPS_SHOWN = 40;
 const SAYS_SHOWN = 2;
+// More commits than this on one turn and the older ones fold away.
+const COMMITS_SHOWN = 3;
+// A worktree's own block lists this many folders and files, then counts the
+// rest: the whole list belongs to the folder it is in, not to your stream.
+const WT_FOLDERS = 2;
+const WT_FILES = 4;
+// The newest turns of a day the skyline has room for.
+const SKYLINE_SHOWN = 20;
+// The column the skyline starts in, clear of the day label above it.
+const SKYLINE_LEFT = 8;
 const DAY = 86_400_000;
+
+// Under this width a row cannot carry everything it does at 64 columns, so the
+// parts that give way (the skyline totals, the chips after the first, the
+// legend's percentages, the size cells) are dropped.
+const NARROW = 56;
+
+// `↑22  ✓ merged 13:20`: how far ahead a folder is, then where it has got to.
+const STATE_COL = 22;
+
+// Private, until Step 3 moves them: an arrow for "ahead by", and the two
+// single-cell tree joints, taken from the two-cell ones in the theme.
+const AHEAD = '↑';
+const TEE = glyph.branch[0]!;
+const TEE_LAST = glyph.branchLast[0]!;
 
 export const turnKey = (change: TurnChange): string => `${change.chatId}:${change.turn.id}`;
 export const fileKey = (scope: string, rel: string): string => `${scope}|${rel}`;
@@ -85,7 +116,50 @@ export function clock(at: number): string {
   return new Date(at).toLocaleTimeString(undefined, {hour: '2-digit', minute: '2-digit', hour12: false});
 }
 
-const VERB: Record<FileStatus, string> = {added: 'Created', modified: 'Edited', deleted: 'Deleted', renamed: 'Renamed'};
+// The room a stream row's own content has: the margin and the three column
+// prefix are taken, and the last column belongs to the scrollbar.
+const roomOf = (cols: number): number => cols - 1 - STREAM_PREFIX - RIGHT_PAD;
+
+// Cut to the columns there are, ending in an ellipsis in the text's own colour
+// rather than in the faint one `clip` uses: here the cut words are the content.
+function cut(text: string, room: number): string {
+  if (room <= 0) return '';
+  if (width(text) <= room) return text;
+  let out = '';
+  for (const char of text) {
+    if (width(out + char) > room - 1) break;
+    out += char;
+  }
+
+  return out.trimEnd() + glyph.ellipsis;
+}
+
+// How long, in one unit. The map's rows have no room for the seconds a `span`
+// carries, and on a folder somebody has been working in for half an hour they
+// say nothing anyway.
+function brief(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.round(s / 60);
+  return m < 60 ? `${m}m` : `${Math.round(m / 60)}h`;
+}
+
+// A day's totals are read as a size, so they carry their thousands.
+const num = (n: number): string => String(n).replace(/\B(?=(\d{3})+$)/g, ',');
+
+const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`;
+
+// What a tool call was aimed at: the words Claude gave it, or the file it
+// named, as a path in the project rather than a bare name.
+function target(root: string, step: {why: string; file: string | null}): string {
+  if (step.why) return step.why;
+  if (!step.file) return '';
+  const rel = path.relative(root, step.file).split(path.sep).join('/');
+  return rel.startsWith('..') ? path.basename(step.file) : rel;
+}
+
+const LETTER: Record<FileStatus, string> = {added: 'A', modified: 'M', deleted: 'D', renamed: 'R'};
+const LETTER_COLOUR: Record<FileStatus, string> = {added: theme.add, modified: theme.link, deleted: theme.del, renamed: theme.keyword};
 
 // The agents each turn started, keyed by turn. An agent started by another
 // agent belongs to the same turn as its parent.
@@ -107,8 +181,34 @@ export function agentsByTurn(changes: TurnChange[], agents: AgentRun[]): Map<str
   return out;
 }
 
+// `changesLines` runs on every spinner tick, and these two walk the whole
+// history. Both only depend on what the last poll handed over, so they are
+// worked out again when that moves and not four times a second.
+let agentMemo: {changes: TurnChange[]; agents: AgentRun[]; by: Map<string, AgentRun[]>} | null = null;
+
+function turnAgents(changes: TurnChange[], agents: AgentRun[]): Map<string, AgentRun[]> {
+  if (agentMemo && agentMemo.changes === changes && agentMemo.agents === agents) return agentMemo.by;
+  const by = agentsByTurn(changes, agents);
+  agentMemo = {changes, agents, by};
+  return by;
+}
+
+let dayMemo: {changes: TurnChange[]; now: number; days: DayGroup[]} | null = null;
+
+function daysOf(changes: TurnChange[], now: number): DayGroup[] {
+  if (dayMemo && dayMemo.changes === changes && dayMemo.now === now) return dayMemo.days;
+  const days = daySummary(changes, now);
+  dayMemo = {changes, now, days};
+  return days;
+}
+
+// Kept for the label of an agent's colour column until Step 3 has taken the
+// last `A1` out of the Agents view. Nothing in this view draws one.
 export const agentLabel = (index: number): string => `A${index + 1}`;
 export const agentColour = (index: number): string => agentColours[index % agentColours.length]!;
+
+// One agent's own hue, by the order it was started in its turn.
+const hueOf = (index: number): string => hues[index % hues.length]!;
 
 function pathSegs(rel: string, bright: boolean): Seg[] {
   // A file outside the project arrives as a chain of `../`, which says nothing
@@ -130,173 +230,245 @@ function pathSegs(rel: string, bright: boolean): Seg[] {
 
 type Ctx = ChangesInput & {out: Line[]};
 
-// Where a row sits on the left line. A nested row hangs off the line of the
-// block above it; a top level row carries its own mark in the line's column.
-type Where = {nested: boolean; live?: boolean};
+// Everything a block's rows hang on: the id that keeps them on screen while
+// they scroll, and whether the line is a live one.
+type Rail = {pins: string[]; live?: boolean};
 
-// One openable file row, and under it the diff when it is open.
-function fileRow(ctx: Ctx, key: string, rel: string, abs: string | null, left: Seg[], right: Seg[], pins: string[], where: Where): void {
-  const {cols, sel, open} = ctx;
-  const id = `f:${key}`;
-  const here = id === sel;
-  const isOpen = open.files.has(key);
-  const mark = chevron(isOpen, here);
-  const live = where.live;
-  ctx.out.push(
-    spineRow(cols, where.nested ? [mark, sp(1), ...left] : left, right, {
-      bg: here ? theme.surface2 : undefined,
-      id, pick: true, pins, live, act: {type: 'file', key},
-      ...(where.nested ? {} : {mark}),
-    }),
-  );
-  if (!isOpen) return;
-
-  const groups = ctx.diffs.get(key);
-  if (!groups) {
-    ctx.out.push(spineRow(cols, [sp(INDENT), seg('Reading the diff…', theme.faint)], [], {pins: [...pins, id], live}));
-    return;
-  }
-
-  const keyed = groups.map(g => ({...g, key: `${key}#${g.key}`}));
-  const rows = viewRows(keyed, ctx.folded, ctx.opened, ctx.hideSpace);
-  ctx.out.push(...diffLines(rows, keyed, {cols, fileKey: key, path: abs, sel, pins: [...pins, id], live}));
+function gapRow(ctx: Ctx, rail: Rail): void {
+  ctx.out.push(streamRow(ctx.cols, [], [], rail));
 }
 
-function changedFileRow(ctx: Ctx, change: TurnChange, file: ChangedFile, pins: string[], tags: Seg[]): void {
-  // Per file, not per turn: a turn filled in from commits can hold both a file
-  // git counted and a file only the transcript named.
-  const right = file.known ? counts(file.added, file.removed) : [seg('not recorded', theme.faint, {italic: true})];
-  fileRow(
-    ctx,
-    fileKey(turnKey(change), file.rel),
-    file.rel,
-    file.status === 'deleted' ? null : file.path,
-    [seg((file.known ? VERB[file.status] : 'Touched').padEnd(9), theme.dim), ...pathSegs(file.rel, true), ...tags],
-    right,
-    pins,
-    {nested: true, live: change.running},
-  );
+// ---------- the day header, and the day as a skyline ----------
+
+function dayHead(ctx: Ctx, label: string, title: string, right: Seg[]): void {
+  ctx.out.push(pageRow(ctx.cols, [seg(label.toUpperCase(), theme.faint, {bold: true}), seg(`   ${title}`, theme.dim)], right));
 }
 
-// `counted` is false when the turn has its own row for the agents: the count
-// belongs there and saying it twice reads as two different facts.
-function meta(change: TurnChange, agents: AgentRun[], now: number, counted = true): Seg[] {
-  const out: Seg[] = [];
-  const dot = () => (out.length ? [sep()] : []);
-  if (change.running) out.push(seg('running', theme.accent));
-  const n = change.files.length;
-  if (n) {
-    out.push(...dot(), seg(`${n} file${n === 1 ? '' : 's'}`, theme.dim));
-    if (change.measured) {
-      if (change.added) out.push(seg(`  +${change.added}`, theme.add));
-      if (change.removed) out.push(seg(` ${glyph.minus}${change.removed}`, theme.del));
-    } else {
-      out.push(seg('  not recorded', theme.faint, {italic: true}));
-    }
-  } else if (!change.running) {
-    out.push(...dot(), seg('no file changes', theme.faint));
+// One column pair per turn of the day, in time order: where the big ones were.
+// Each pair is a click zone that moves the cursor onto its turn.
+function skylineRow(ctx: Ctx, turns: TurnChange[], lit: (change: TurnChange) => boolean, added: number, removed: number): void {
+  const {cols} = ctx;
+  const shown = turns.slice(-SKYLINE_SHOWN);
+  const left: Seg[] = [sp(SKYLINE_LEFT)];
+  const zones: Zone[] = [];
+  let x = 1 + SKYLINE_LEFT;
+  for (const change of shown) {
+    const on = lit(change) || `t:${turnKey(change)}` === ctx.sel;
+    left.push(...skylineCol(sizeLit(change.added + change.removed), on ? theme.accent : theme.faint), sp(1));
+    zones.push({from: x, to: x + 3, act: {type: 'goTurn', key: turnKey(change)}});
+    x += 3;
   }
 
-  // Where the counts came from, when it was not this pane watching. The lines
-  // are git's own, only the turn they belong to is matched by time, so the row
-  // says so quietly rather than as a warning.
-  if (change.via === 'commits' && change.commits) {
-    out.push(...dot(), seg(change.commits === 1 ? `from commit ${(change.to ?? '').slice(0, 7)}` : `from ${change.commits} commits`, theme.dim));
-  }
-
-  if (agents.length && counted) out.push(...dot(), seg(`${agents.length} agent${agents.length === 1 ? '' : 's'}`, theme.dim));
-  const took = (change.running ? now : change.turn.endedAt) - change.turn.at;
-  if (took >= 1000) out.push(...dot(), seg(span(took), theme.dim));
-  return out;
+  const totals = added || removed ? [seg(`+${num(added)}`, theme.add), sp(1), seg(`${glyph.minus}${num(removed)}`, theme.del)] : [];
+  // The totals are the first thing to go when the day is wider than the pane.
+  const fits = widthOf(left) + widthOf(totals) + 2 <= cols - 3;
+  ctx.out.push(pageRow(cols, left, fits ? totals : [], {zones}));
 }
 
-// One header for a turn, open or closed: the same row, the same column, the
-// clock on the right of its first row. Opening a turn adds nothing above it.
-function turnHead(ctx: Ctx, change: TurnChange, isOpen: boolean): void {
+// Where the stream breaks between days, or between two chats of one day. The
+// rule is the same grey as a block's own line, so it reads as structure.
+function dividerRow(cols: number, label: string): Line {
+  const text = `  ${label}  `;
+  const left = Math.min(20, Math.max(2, cols - 6 - width(text)));
+  const rest = Math.max(0, cols - 1 - 4 - left - width(text));
+  return {segs: [sp(4), seg(glyph.rule.repeat(left), theme.spine), seg(text, theme.faint), seg(glyph.rule.repeat(rest), theme.spine)]};
+}
+
+// ---------- a turn ----------
+
+type Block = {
+  // The turn's node, and the chip in front of its title: which folder it
+  // happened in, when more than one is in scope.
+  colour?: string;
+  tag?: Seg[];
+  // `you` or `agent`: who was at the keyboard, which only means anything when
+  // the stream is covering more than this folder.
+  who?: string;
+};
+
+// The node in column 1: the spinner while the turn runs, a filled dot for the
+// turn that is open, a ring for one that is past.
+function nodeOf(ctx: Ctx, change: TurnChange, isOpen: boolean, colour?: string): Seg {
+  if (change.running) return seg(spinner(ctx.frame), theme.accent);
+  if (isOpen) return seg(glyph.dot, colour ?? theme.accent);
+  return seg(glyph.ring, colour ?? theme.faint);
+}
+
+// Your own words are the title: they are the reason the files moved. One line
+// of them, and the row itself opens the whole prompt when there is more.
+function titleRow(ctx: Ctx, change: TurnChange, o: Block): void {
   const {cols, sel} = ctx;
   const key = turnKey(change);
   const id = `t:${key}`;
   const here = id === sel;
   const bg = here ? theme.surface2 : undefined;
-  const act = {type: 'turn', key} as const;
   const live = change.running;
-  const mark = live ? seg(spinner(ctx.frame), theme.accent) : chevron(isOpen, here);
+  const tag = o.tag ?? [];
   const when = [seg(clock(change.turn.at), theme.dim)];
-
-  // Your own words are the title: they are the reason the files moved.
-  if (!isOpen) {
-    ctx.out.push(spineRow(cols, [seg(change.turn.prompt, here ? theme.ink : theme.text)], when, {bg, mark, id, pick: true, act}));
-    return;
-  }
-
-  // A running turn keeps the prompt to two rows: the terminal beside this pane
-  // has the rest of it anyway.
-  const lines = wrap(change.turn.prompt, cols - 13);
-  const shown = lines.slice(0, live ? 2 : 3);
-  shown.forEach((text, i) => {
-    const last = i === shown.length - 1 && lines.length > shown.length;
+  const promptKey = `prompt:${key}`;
+  const full = ctx.open.more.has(promptKey);
+  // The clock and one clear column, then whatever the chip in front took.
+  const room = roomOf(cols) - 6 - widthOf(tag);
+  const lines = full ? wrap(change.turn.prompt, room) : [cut(change.turn.prompt, room)];
+  const hidden = !full && width(change.turn.prompt) > room;
+  // Enter opens the rest of the prompt while there is any; after that it is
+  // the way to close the turn again.
+  const act = hidden ? ({type: 'toggle', set: 'more', key: promptKey} as const) : ({type: 'turn', key} as const);
+  lines.forEach((text, i) => {
     ctx.out.push(
-      spineRow(cols, [seg(text + (last ? ` ${glyph.ellipsis}` : ''), theme.ink, {bold: true})], i === 0 ? when : [], {
-        bg, act, live, ...(i === 0 ? {mark, id, pick: true} : {}),
+      streamRow(cols, i === 0 ? [...tag, seg(text, theme.ink, {bold: true})] : [seg(text, theme.ink, {bold: true})], i === 0 ? when : [], {
+        bg, live, ...(i === 0 ? {mark: nodeOf(ctx, change, true, o.colour), id, pick: true, act} : {pins: [id], act: {type: 'toggle', set: 'more', key: promptKey}}),
       }),
     );
   });
 }
 
-function closedTurn(ctx: Ctx, change: TurnChange, agents: AgentRun[]): void {
-  turnHead(ctx, change, false);
-  const id = `t:${turnKey(change)}`;
-  const bg = id === ctx.sel ? theme.surface2 : undefined;
-  // No line under a closed turn: its meta row is simply indented to the
-  // column the content starts at.
-  ctx.out.push(spineRow(ctx.cols, meta(change, agents, ctx.now), [], {bg, mark: sp(1), act: {type: 'turn', key: turnKey(change)}}));
+// Where a turn's work stands in git, as a chip on its own row.
+function stateChip(change: TurnChange): Seg[] {
+  if (change.git === 'merged') return chip(`${glyph.check} merged`, theme.tintAdd, theme.add);
+  if (change.git === 'committed') return chip(`${glyph.diamond} committed`, theme.surface2, theme.link);
+  if (change.git === 'uncommitted') return chip(`${glyph.dot} uncommitted`, theme.surface2, theme.dim);
+  return [];
 }
 
-function openTurn(ctx: Ctx, change: TurnChange, agents: AgentRun[]): void {
-  const {cols, sel, open, now} = ctx;
-  const key = turnKey(change);
-  const id = `t:${key}`;
-  const turn = change.turn;
-  const live = change.running;
-  // Every row below the header hangs off the turn's own line.
-  const rail = {pins: [id], live};
-  const pins = rail.pins;
+// How big the turn was, as figures on ground: the file count, then what it
+// added and removed. The parts after the first give way on a narrow pane.
+function chipsRow(ctx: Ctx, change: TurnChange, agents: AgentRun[], rail: Rail, o: Block & {right?: Seg[]}): void {
+  const {cols, now} = ctx;
+  const head: Seg[] = [];
+  const parts: Seg[][] = [];
+  if (o.who) head.push(seg(o.who, theme.dim), sep());
+  const took = (change.running ? now : change.turn.endedAt) - change.turn.at;
+  if (change.running) head.push(seg(`running ${span(took)}`, theme.accent), sp(3));
 
-  turnHead(ctx, change, true);
-  ctx.out.push(spineRow(cols, meta(change, agents, now, agents.length <= AGENTS_SHOWN), [], rail));
-
-  // What Claude said about it. Only once the turn is over: while it runs, the
-  // conversation is on screen right next to this pane.
-  if (!live && (turn.says || turn.firstReplyAt)) {
-    ctx.out.push(spineRow(cols, [], [], rail));
-    const thought = turn.firstReplyAt - turn.at;
-    // The mark column belongs to controls, so the thought glyph sits inside.
-    if (thought >= 1000) ctx.out.push(spineRow(cols, [sp(INDENT), seg(glyph.thought, theme.faint), seg(` Thought for ${span(thought)}`, theme.dim)], [], rail));
-    if (turn.says) {
-      const saysId = `s:${key}`;
-      const here = saysId === sel;
-      const all = open.says.has(key);
-      const text = wrap(turn.says.replace(/[*_`#>]/g, ''), cols - 9);
-      const some = all ? text : text.slice(0, SAYS_SHOWN);
-      const expands = text.length > SAYS_SHOWN;
-      some.forEach((line, i) => {
-        const cut = !all && i === some.length - 1 && text.length > some.length;
-        // Leave room for the word rather than letting it be cut off.
-        const shownText = cut ? [...line].slice(0, cols - 14).join('').trimEnd() + glyph.ellipsis : line;
-        const tail = expands && i === some.length - 1 ? [sp(1), seg(all ? 'less' : 'more', here ? theme.accent : theme.dim)] : [];
-        ctx.out.push(
-          spineRow(cols, [i === 0 && expands ? chevron(all, here) : sp(1), sp(1), seg(shownText, theme.text), ...tail], [], {
-            ...rail,
-            bg: here ? theme.surface2 : undefined,
-            act: {type: 'toggle', set: 'says', key},
-            ...(i === 0 ? {id: saysId, pick: expands} : {}),
-          }),
-        );
-      });
+  const n = change.files.length;
+  if (n) {
+    head.push(...chip(plural(n, 'file'), theme.surface2, theme.text));
+    if (change.measured) {
+      if (change.added) parts.push([sp(1), ...chip(`+${change.added}`, theme.tintAdd, theme.add)]);
+      if (change.removed) parts.push([sp(1), ...chip(`${glyph.minus}${change.removed}`, theme.tintDel, theme.del)]);
+    } else {
+      head.push(seg('  not recorded', theme.faint, {italic: true}));
     }
+  } else if (!change.running) {
+    head.push(seg('no file changes', theme.faint));
   }
 
-  if (change.files.length || agents.length || turn.actions.length) ctx.out.push(spineRow(cols, [], [], rail));
+  if (!change.running && took >= 1000) parts.push([seg(`  ${span(took)}`, theme.dim)]);
+  // The agents are not counted here: the chart's own head row below says how
+  // many there are, how they are getting on and what they have spent.
+
+  const right = o.right ?? stateChip(change);
+  // Whatever will not fit goes from the end: the agent count, then how long it
+  // took, then the figures, so the file count is the last thing standing.
+  let kept = parts;
+  while (kept.length && widthOf(head) + kept.reduce((w, part) => w + widthOf(part), 0) + widthOf(right) + 1 > roomOf(cols)) {
+    kept = kept.slice(0, -1);
+  }
+
+  ctx.out.push(streamRow(cols, [...head, ...kept.flat()], right, rail));
+}
+
+// Where the turn landed, by folder: one bar split by share, and a legend that
+// names the parts. Only worth drawing when there is more than one place.
+function landedRows(ctx: Ctx, change: TurnChange, rail: Rail): void {
+  const {cols} = ctx;
+  const parts = folderShares(change.files, change.measured);
+  if (parts.length < 2) return;
+  const bar = roomOf(cols);
+  let used = 0;
+  const cells = parts.map((part, i) => {
+    const n = i === parts.length - 1 ? bar - used : Math.max(0, Math.round(part.share * bar));
+    used += n;
+    return n;
+  });
+
+  ctx.out.push(streamRow(cols, splitBar(parts.map((_, i) => [cells[i]!, hueOf(i)])), [], rail));
+  const tight = cols < NARROW;
+  ctx.out.push(
+    streamRow(
+      cols,
+      parts.flatMap((part, i) => [
+        ...(i ? [sp(3)] : []),
+        seg(glyph.square, hueOf(i)),
+        seg(` ${part.key}`, theme.text),
+        ...(tight ? [] : [seg(` ${Math.round(part.share * 100)}%`, theme.dim)]),
+      ]),
+      [],
+      rail,
+    ),
+  );
+}
+
+// One openable file row, and under it the diff when it is open. The diff hangs
+// on the same line, one column further in than a row of the stream.
+function fileRow(ctx: Ctx, key: string, rel: string, abs: string | null, left: Seg[], right: Seg[], pins: string[], o: {mark?: Seg; live?: boolean}): void {
+  const {cols, sel, open} = ctx;
+  const id = `f:${key}`;
+  const here = id === sel;
+  const isOpen = open.files.has(key);
+  const groups = isOpen ? ctx.diffs.get(key) : undefined;
+  const hunks = groups?.reduce((n, group) => n + (group.file?.hunks.length ?? 0), 0) ?? 0;
+  // Only the cursor's own row is lit: two lit rows read as two cursors, and
+  // the hunk count beside the name already says which file is open.
+  const bg = here ? theme.surface2 : undefined;
+  const live = o.live;
+  ctx.out.push(
+    streamRow(cols, [...left, ...(hunks ? [seg(`   ${plural(hunks, 'hunk')}`, theme.dim)] : [])], right, {
+      bg, id, pick: true, pins, live, act: {type: 'file', key}, ...(o.mark ? {mark: o.mark} : {}),
+    }),
+  );
+  if (!isOpen) return;
+
+  if (!groups) {
+    ctx.out.push(streamRow(cols, [seg('Reading the diff…', theme.faint)], [], {pins: [...pins, id], live}));
+    return;
+  }
+
+  const keyed = groups.map(group => ({...group, key: `${key}#${group.key}`}));
+  const rows = viewRows(keyed, ctx.folded, ctx.opened, ctx.hideSpace);
+  // The well is drawn one column narrower and then pushed in, so it lines up
+  // under the three column prefix without `diffrows` having to know about it.
+  ctx.out.push(...diffLines(rows, keyed, {cols: cols - 1, fileKey: key, path: abs, sel, pins: [...pins, id], live}).map(widen));
+}
+
+// A well row, moved one column in. Until Step 3 gives `diffLines` the `wide`
+// option the well rows already take, this is how a diff meets the new prefix.
+const widen = (line: Line): Line => ({...line, segs: [line.segs[0]!, line.segs[1]!, sp(1), ...line.segs.slice(2)]});
+
+// A file of a turn: the status letter, its path under the folder it is grouped
+// by, the squares of whoever wrote it, then how big the change was.
+function turnFileRow(ctx: Ctx, change: TurnChange, file: ChangedFile, label: string, tags: Seg[], pins: string[]): void {
+  const tight = ctx.cols < NARROW;
+  const known = file.known;
+  const letter = known ? LETTER[file.status] : '?';
+  const left = [
+    sp(1),
+    seg(letter, known ? LETTER_COLOUR[file.status] : theme.faint, {bold: known}),
+    sp(2),
+    seg(label, known ? theme.ink : theme.dim),
+    ...tags,
+    // On a narrow pane the `?` is the whole of that news.
+    ...(known || tight ? [] : [seg('   not recorded', theme.faint, {italic: true})]),
+  ];
+  const right = [
+    // A file nothing counted has no size to show, so it shows none.
+    ...(tight ? [] : [...(known ? sizeCells(file.added, file.removed) : [sp(SIZE_CELLS)]), sp(2)]),
+    ...(known ? counts(file.added, file.removed) : [sp(SIZE_CELLS * 2 + 1)]),
+  ];
+  fileRow(ctx, fileKey(turnKey(change), file.rel), file.rel, file.status === 'deleted' ? null : file.path, left, right, pins, {live: change.running});
+}
+
+function folderRow(ctx: Ctx, name: string, note: Seg[], rail: Rail): void {
+  ctx.out.push(streamRow(ctx.cols, [seg(name, theme.dim)], note, rail));
+}
+
+// The turn's files, grouped under the folder each one lives in, biggest folder
+// first. A long list is cut and counted rather than scrolled past.
+function fileRows(ctx: Ctx, change: TurnChange, agents: AgentRun[], rail: Rail): void {
+  const {cols, sel, open} = ctx;
+  const key = turnKey(change);
+  const all = open.more.has(`files:${key}`);
 
   // Which agents wrote which file, so an overlap is visible on the row itself.
   const writers = new Map<string, number[]>();
@@ -304,72 +476,235 @@ function openTurn(ctx: Ctx, change: TurnChange, agents: AgentRun[]): void {
     for (const file of agent.wrote) writers.set(file, [...(writers.get(file) ?? []), i]);
   });
 
-  const all = open.more.has(key);
-  for (const file of all ? change.files : change.files.slice(0, FILES_SHOWN)) {
-    const by = writers.get(file.path) ?? [];
-    // Two labels is as much as a file row can carry; the rest is a count.
-    const tags: Seg[] = by.slice(0, TAGS_SHOWN).flatMap(i => [sp(1), seg(agentLabel(i), agentColour(i), {bold: true})]);
-    if (by.length > TAGS_SHOWN) tags.push(sp(1), seg(`+${by.length - TAGS_SHOWN}`, theme.faint));
-    if (by.length > 1) tags.push(sp(1), seg(glyph.warn, theme.warn));
-    changedFileRow(ctx, change, file, pins, tags.length ? [sp(1), ...tags] : []);
+  const groups = groupByFolder(change.files);
+  let shown = 0;
+  let legend = writers.size > 0;
+  for (const group of groups) {
+    const room = all ? group.files.length : Math.max(0, FILES_SHOWN - shown);
+    if (room === 0) break;
+    // The squares are new, so the first folder row of a turn that has any says
+    // what they mean, once.
+    folderRow(ctx, group.key, legend && cols >= NARROW ? [seg('the squares say who wrote it', theme.faint)] : [], rail);
+    legend = false;
+    for (const {file, label} of group.files.slice(0, room)) {
+      const by = writers.get(file.path) ?? [];
+      const tags: Seg[] = by.length ? [sp(3), ...by.slice(0, TAGS_SHOWN).map(i => seg(glyph.square, hueOf(i)))] : [];
+      if (by.length > TAGS_SHOWN) tags.push(seg(`+${by.length - TAGS_SHOWN}`, theme.faint));
+      if (by.length > 1) tags.push(sp(1), seg(`${glyph.warn} ${by.length === 2 ? 'two' : by.length} agents`, theme.warn));
+      turnFileRow(ctx, change, file, label, tags, rail.pins);
+      shown++;
+    }
   }
 
-  if (!all && change.files.length > FILES_SHOWN) {
-    const moreId = `m:${key}`;
+  const rest = change.files.length - shown;
+  if (rest <= 0) return;
+  const moreId = `m:${key}`;
+  ctx.out.push(
+    streamRow(cols, [seg(glyph.closed, theme.dim), sp(1), seg(plural(rest, 'more file'), moreId === sel ? theme.accent : theme.dim)], [], {
+      ...rail, id: moreId, pick: true, bg: moreId === sel ? theme.surface2 : undefined, act: {type: 'toggle', set: 'more', key: `files:${key}`},
+    }),
+  );
+}
+
+// Every tool call, folded into one row: the step in progress while the turn
+// runs, and afterwards a count with the tools it leaned on.
+function stepsRow(ctx: Ctx, change: TurnChange, agents: AgentRun[], rail: Rail): void {
+  const {cols, sel, open} = ctx;
+  const turn = change.turn;
+  const key = turnKey(change);
+  const id = `w:${key}`;
+  const here = id === sel;
+  const isOpen = open.steps.has(key);
+  const live = change.running;
+  const tally = new Map<string, number>();
+  for (const action of turn.actions) tally.set(action.tool, (tally.get(action.tool) ?? 0) + 1);
+  const summary = [...tally.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4).map(([tool, n]) => `${tool} ${n}`).join('  ');
+  const last = turn.actions[turn.actions.length - 1]!;
+  const more = {...rail, id, pick: true, bg: here ? theme.surface2 : undefined, act: {type: 'toggle', set: 'steps', key} as const};
+
+  ctx.out.push(
+    live
+      ? streamRow(cols, [seg(spinner(ctx.frame), theme.accent), sp(1), seg(last.tool, theme.dim), sp(2), seg(target(ctx.root, last), theme.text)], [seg(plural(turn.actions.length, 'step'), theme.dim)], more)
+      : streamRow(cols, [chevron(isOpen, here), sp(1), seg(plural(turn.actions.length, 'step'), theme.text), seg(`   ${summary}`, theme.dim)], agents.length ? [seg(plural(agents.length, 'agent'), theme.dim)] : [], more),
+  );
+
+  if (!isOpen) return;
+  const inner = {pins: [...rail.pins, id], live};
+  const from = Math.max(0, turn.actions.length - STEPS_SHOWN);
+  if (from > 0) ctx.out.push(streamRow(cols, [sp(INDENT2), seg(`${from} earlier steps`, theme.faint)], [], inner));
+  for (const action of turn.actions.slice(from)) {
+    const label = action.why || (action.file ? path.basename(action.file) : action.detail);
     ctx.out.push(
-      spineRow(cols, [sp(INDENT), seg(`${change.files.length - FILES_SHOWN} more files`, moreId === sel ? theme.accent : theme.dim)], [], {
-        ...rail, id: moreId, pick: true, bg: moreId === sel ? theme.surface2 : undefined, act: {type: 'toggle', set: 'more', key},
+      streamRow(cols, [sp(INDENT2), seg(action.tool.padEnd(9), action.wrote ? theme.text : theme.faint), seg(label, action.wrote ? theme.text : theme.dim)], [seg(clock(action.at), theme.faint)], inner),
+    );
+  }
+}
+
+// What Claude said about the turn, in its own words. Only once the turn is
+// over: while it runs, the conversation is on screen right next to this pane.
+function saysRows(ctx: Ctx, change: TurnChange, rail: Rail): void {
+  const {cols, sel, open} = ctx;
+  const key = turnKey(change);
+  const saysId = `s:${key}`;
+  const here = saysId === sel;
+  const all = open.says.has(key);
+  const room = roomOf(cols) - 2;
+  const text = wrap(change.turn.says.replace(/[*_`#>]/g, ''), room);
+  const some = all ? text : text.slice(0, SAYS_SHOWN);
+  const expands = text.length > SAYS_SHOWN;
+  some.forEach((line, i) => {
+    const last = i === some.length - 1;
+    const cutHere = !all && last && text.length > some.length;
+    // Leave room for the word rather than letting it be cut off.
+    const shown = cutHere ? cut(line, room - 5) : line;
+    const tail = expands && last ? [sp(1), seg(all ? 'less' : 'more', here ? theme.accent : theme.link, {underline: true})] : [];
+    ctx.out.push(
+      streamRow(cols, [i === 0 ? seg(glyph.thought, theme.accent) : sp(1), sp(1), seg(shown, theme.text), ...tail], [], {
+        ...rail,
+        bg: here ? theme.surface2 : undefined,
+        act: {type: 'toggle', set: 'says', key},
+        ...(i === 0 ? {id: saysId, pick: expands} : {}),
+      }),
+    );
+  });
+}
+
+// The receipt: every commit that landed inside the turn's window, and where
+// each one got to. A long run of them keeps the newest two.
+function commitRows(ctx: Ctx, change: TurnChange, branch: string, rail: Rail): void {
+  const {cols, sel, open} = ctx;
+  const key = `commits:${turnKey(change)}`;
+  const all = open.more.has(key);
+  const many = change.landed.length > COMMITS_SHOWN;
+  const shown = all || !many ? change.landed : change.landed.slice(-2);
+  if (many) {
+    const id = `mc:${turnKey(change)}`;
+    const here = id === sel;
+    const rest = change.landed.length - shown.length;
+    ctx.out.push(
+      streamRow(cols, [seg(all ? glyph.open : glyph.closed, theme.dim), sp(1), seg(all ? 'fewer commits' : plural(rest, 'more commit'), here ? theme.accent : theme.dim)], [], {
+        ...rail, id, pick: true, bg: here ? theme.surface2 : undefined, act: {type: 'toggle', set: 'more', key},
       }),
     );
   }
 
-  // Subagents as a tree under the turn. A handful is worth listing here; a
-  // crowd folds into one row, because the whole story is the Agents view's.
+  for (const landed of shown) {
+    const left = landed.merge
+      ? [seg(glyph.check, theme.add), sp(1), seg(landed.sha.slice(0, 7), theme.link), sp(2), seg('merged into ', theme.dim), seg(branch || 'the branch', theme.text, {bold: true})]
+      : [seg(glyph.diamond, theme.link), sp(1), seg(landed.sha.slice(0, 7), theme.link), sp(2), seg(landed.subject, theme.dim)];
+    ctx.out.push(streamRow(cols, left, [seg(clock(landed.at), theme.faint)], rail));
+  }
+}
+
+function openTurn(ctx: Ctx, change: TurnChange, agents: AgentRun[], o: Block): void {
+  const key = turnKey(change);
+  const id = `t:${key}`;
+  const turn = change.turn;
+  const live = change.running;
+  // Every row below the header hangs off the turn's own line.
+  const rail: Rail = {pins: [id], live};
+
+  titleRow(ctx, change, o);
+  chipsRow(ctx, change, agents, rail, o);
+  landedRows(ctx, change, rail);
+
+  const says = !live && Boolean(turn.says);
+  if (change.files.length || agents.length || turn.actions.length || says || change.landed.length) gapRow(ctx, rail);
   if (agents.length) {
-    const rollId = `ga:${key}`;
-    const rollKey = `roll:${key}`;
-    const crowd = agents.length > AGENTS_SHOWN;
-    const rolled = crowd && !open.folded.has(rollKey);
-    const hereRoll = rollId === sel;
-    if (crowd) {
-      ctx.out.push(
-        spineRow(cols, [chevron(!rolled, hereRoll), sp(1), ...agentSummary(agents, now)], [], {
-          ...rail, id: rollId, pick: true, bg: hereRoll ? theme.surface2 : undefined, act: {type: 'toggle', set: 'folded', key: rollKey},
-        }),
-      );
-    }
-
-    if (!rolled) agentRows(ctx, agentTree(agents), change, crowd ? [...pins, rollId] : pins, turn.actions.length > 0);
+    chartRows(ctx, change, agents, rail);
+    gapRow(ctx, rail);
   }
 
-  // Every tool call, folded into one row. The list is there when you want it.
-  if (turn.actions.length) {
-    const stepsId = `w:${key}`;
-    const here = stepsId === sel;
-    const isOpen = open.steps.has(key);
-    const tally = new Map<string, number>();
-    for (const action of turn.actions) tally.set(action.tool, (tally.get(action.tool) ?? 0) + 1);
-    const summary = [...tally.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4).map(([tool, n]) => `${tool} ${n}`).join('  ');
-    const last = turn.actions[turn.actions.length - 1]!;
-    const count = [seg(`${turn.actions.length} steps`, live ? theme.faint : theme.dim)];
-    const more = {...rail, id: stepsId, pick: true, bg: here ? theme.surface2 : undefined, act: {type: 'toggle', set: 'steps', key} as const};
-    ctx.out.push(
-      live
-        ? spineRow(cols, [seg(spinner(ctx.frame), theme.accent), sp(1), seg(last.tool.padEnd(9), theme.accent), seg(last.why || path.basename(last.file ?? ''), theme.text)], count, more)
-        : spineRow(cols, [chevron(isOpen, here), sp(1), seg('Steps'.padEnd(9), theme.dim), seg(summary, theme.faint)], count, more),
-    );
-    if (isOpen) {
-      const inner = {pins: [...pins, stepsId], live};
-      const from = Math.max(0, turn.actions.length - STEPS_SHOWN);
-      if (from > 0) ctx.out.push(spineRow(cols, [sp(INDENT2), seg(`${from} earlier steps`, theme.faint)], [], inner));
-      for (const action of turn.actions.slice(from)) {
-        const label = action.why || (action.file ? path.basename(action.file) : action.detail);
-        ctx.out.push(
-          spineRow(cols, [sp(INDENT2), seg(action.tool.padEnd(9), action.wrote ? theme.text : theme.faint), seg(label, action.wrote ? theme.text : theme.dim)], [seg(clock(action.at), theme.faint)], inner),
-        );
-      }
-    }
+  if (change.files.length) {
+    fileRows(ctx, change, agents, rail);
+    // Only when there is something under the files to be told apart from them.
+    if (turn.actions.length || says || change.landed.length) gapRow(ctx, rail);
   }
+
+  if (turn.actions.length) stepsRow(ctx, change, agents, rail);
+  if (says) saysRows(ctx, change, rail);
+  if (change.landed.length) {
+    gapRow(ctx, rail);
+    commitRows(ctx, change, ctx.worktrees?.find(wt => wt.here)?.branch ?? '', rail);
+  }
+}
+
+// The widest right side a past turn can have: the file count, the size cells,
+// the git mark and the clock. `2 files ▄▄▄▄▄ ◆3  12:41`
+const promptRoom = (cols: number): number => roomOf(cols) - (cols < NARROW ? 19 : 25) - 1;
+
+// A past turn is one row: what you asked, how big the answer was, where it
+// stands in git, and when. Everything else is one press away.
+function pastTurn(ctx: Ctx, change: TurnChange, agents: AgentRun[], o: Block): void {
+  const {cols, sel, now} = ctx;
+  const key = turnKey(change);
+  const id = `t:${key}`;
+  const here = id === sel;
+  const tight = cols < NARROW;
+  const when = seg(clock(change.turn.at), theme.faint);
+
+  let right: Seg[];
+  if (change.files.length && change.measured) {
+    const n = change.files.length;
+    const mark =
+      change.git === 'merged'
+        ? [seg(glyph.check, theme.add), sp(2)]
+        : change.landed.length
+          ? [seg(glyph.diamond, theme.link), seg(String(change.landed.length).padEnd(2), theme.dim)]
+          : [sp(3)];
+    right = [
+      seg(`${String(n).padStart(2)} ${n === 1 ? 'file ' : 'files'}`, theme.dim),
+      ...(tight ? [] : [sp(1), ...sizeCells(change.added, change.removed)]),
+      sp(1), ...mark, sp(2), when,
+    ];
+  } else {
+    // Nothing to measure, so the row says which kind of nothing it was.
+    const note = change.files.length
+      ? seg('not recorded', theme.faint, {italic: true})
+      : agents.length
+        ? seg(plural(agents.length, 'agent'), theme.faint, {italic: true})
+        : seg('no file changes', theme.faint);
+    right = [note, sp(3), when];
+  }
+
+  // Every past turn cuts its prompt in the same column, whatever it has to say
+  // on the right, so the stream reads as one list rather than as a ragged edge.
+  ctx.out.push(
+    streamRow(cols, [seg(cut(change.turn.prompt, promptRoom(cols)), here ? theme.ink : theme.text)], right, {
+      bg: here ? theme.surface2 : undefined,
+      mark: nodeOf(ctx, change, false, o.colour),
+      id, pick: true, act: {type: 'turn', key},
+    }),
+  );
+}
+
+// ---------- the agents of a turn, as the chart Claude Code prints ----------
+
+const guide = (on: boolean): Seg => (on ? seg(glyph.guide, theme.spine) : sp(1));
+
+// Where an agent sits in the tree hanging off the turn's line. `on[i]` is true
+// when the line at level i carries on below this row; the row's own level is
+// the last one. A branch is `├─` and a space, so the task always starts three
+// columns in from its parent.
+function chartLead(on: boolean[]): Seg[] {
+  const depth = on.length - 1;
+  return [...on.slice(0, depth).flatMap(carries => [guide(carries), sp(2)]), seg(on[depth] ? glyph.branch : glyph.branchLast, theme.spine), sp(1)];
+}
+
+// The lead of the rows that hang under an agent: its own line carries on for
+// as long as something is still under it.
+function chartUnder(on: boolean[], kids: boolean): Seg[] {
+  const depth = on.length - 1;
+  return [...on.slice(0, depth).flatMap(carries => [guide(carries), sp(2)]), guide(Boolean(on[depth]) || kids), sp(2)];
+}
+
+// "general-purpose" says nothing and the chat's own model says nothing either.
+// A kind that was chosen, or a model that differs, is worth two columns.
+function agentChip(agent: AgentRun, chatModel: string | undefined): Seg[] {
+  if (agent.type && agent.type !== 'general-purpose' && agent.type !== 'agent') return chip(agent.type, theme.surface2, theme.dim);
+  const mine = agent.model ? modelName(agent.model) : '';
+  if (!mine || !chatModel || modelName(chatModel) === mine) return [];
+  return chip(mine, theme.surface2, theme.dim);
 }
 
 export function agentStatus(agent: AgentRun, now: number, frame: number): Seg[] {
@@ -384,7 +719,7 @@ export type AgentNode = {agent: AgentRun; index: number; kids: AgentNode[]};
 // Who started whom. `parentId` is exact: the parent's own transcript carries
 // the call that started the child. Without it, a deeper agent hangs off
 // whichever shallower agent was running when it started. `index` stays the
-// place in the turn's whole list, so a folded list keeps its labels.
+// place in the turn's whole list, so a folded list keeps its hues.
 export function agentTree(agents: AgentRun[], shown?: (agent: AgentRun) => boolean): AgentNode[] {
   const nodes: AgentNode[] = agents.map((agent, index) => ({agent, index, kids: []})).filter(node => !shown || shown(node.agent));
   const byId = new Map(nodes.map(node => [node.agent.id, node]));
@@ -412,7 +747,7 @@ export const agentsFlat = (nodes: AgentNode[]): AgentNode[] => nodes.flatMap(nod
 export function agentSummary(agents: AgentRun[], now: number, unit = false): Seg[] {
   const count = (status: string) => agents.filter(a => statusOf(a, now) === status).length;
   const spent = agents.reduce((n, a) => n + a.tokens, 0);
-  const out: Seg[] = [seg(`${agents.length} agent${agents.length === 1 ? '' : 's'}`, theme.dim)];
+  const out: Seg[] = [seg(plural(agents.length, 'agent'), theme.dim)];
   const running = count('running');
   const done = count('done');
   const stopped = count('stopped');
@@ -423,13 +758,134 @@ export function agentSummary(agents: AgentRun[], now: number, unit = false): Seg
   return out;
 }
 
-const guide = (on: boolean): Seg => (on ? seg(glyph.guide, theme.spine) : sp(1));
+// How deep a tree is worth drawing: past this the indents cost more than the
+// nesting tells you.
+const TREE_MAX = 4;
 
-// Where a row sits in the tree. `stack[i]` is true when the line at level i
-// carries on below this row; the row's own level is the last one. Level 0 sits
-// in the left line's column and every level after it three columns further in.
-// A branch row ends in `├─`; the rows hanging under it end in four spaces, so
-// their text starts under the task and not under the status glyph.
+// The chart's own head row: the count first, then how they are getting on,
+// with the tokens they have spent on the right. A crowd rolls into this row.
+function chartRows(ctx: Ctx, change: TurnChange, agents: AgentRun[], rail: Rail): void {
+  const {cols, sel, now} = ctx;
+  const key = turnKey(change);
+  const rollId = `ga:${key}`;
+  const rollKey = `roll:${key}`;
+  const crowd = agents.length > AGENTS_SHOWN;
+  const rolled = crowd && !ctx.open.folded.has(rollKey);
+  const here = rollId === sel;
+  const count = (status: string) => agents.filter(a => statusOf(a, now) === status).length;
+  const running = count('running');
+  const done = count('done');
+  const stopped = count('stopped');
+  const spent = agents.reduce((n, a) => n + a.tokens, 0);
+
+  const left: Seg[] = [
+    ...(crowd ? [chevron(!rolled, here), sp(1)] : running ? [seg(spinner(ctx.frame), theme.accent), sp(1)] : []),
+    seg(plural(agents.length, 'agent'), theme.ink, {bold: true}),
+    ...(running ? [sep(), seg(`${running} running`, theme.accent)] : []),
+    ...(done ? [sep(), seg(`${done} done`, theme.dim)] : []),
+    ...(stopped ? [sep(), seg(`${stopped} stopped`, theme.warn)] : []),
+  ];
+  const tight = cols < NARROW;
+  ctx.out.push(
+    streamRow(cols, left, [seg(`${tokens(spent)}${tight ? '' : ' tokens'}`, theme.dim)], {
+      ...rail,
+      ...(crowd ? {id: rollId, pick: true, bg: here ? theme.surface2 : undefined, act: {type: 'toggle', set: 'folded', key: rollKey}} : {}),
+    }),
+  );
+
+  if (rolled) return;
+  const pins = crowd ? [...rail.pins, rollId] : rail.pins;
+  const draw = (level: AgentNode[], on: boolean[], under: string[]) => {
+    level.forEach((node, i) => {
+      const mine = [...on, i < level.length - 1];
+      chartRow(ctx, node, change, under, mine, rail.live);
+      // A nested agent keeps its parent's row on screen with it.
+      if (node.kids.length && mine.length < TREE_MAX) draw(node.kids, mine, [...under, `a:${node.agent.id}`]);
+    });
+  };
+
+  draw(agentTree(agents), [], pins);
+}
+
+// One agent: the square in its own hue, the task as its name, the chip when
+// there is something to say about it, and the state, time and tokens in fixed
+// columns on the right.
+function chartRow(ctx: Ctx, node: AgentNode, change: TurnChange, pins: string[], on: boolean[], live?: boolean): void {
+  const {cols, sel, now} = ctx;
+  const {agent, index} = node;
+  const id = `a:${agent.id}`;
+  const here = id === sel;
+  const isOpen = ctx.open.agents.has(agent.id);
+  const status = statusOf(agent, now);
+  const lead = chartLead(on);
+  const under = chartUnder(on, node.kids.length > 0);
+  const mine = [...pins, id];
+  const tight = cols < NARROW;
+
+  ctx.out.push(
+    streamRow(
+      cols,
+      [
+        ...lead,
+        seg(glyph.square, hueOf(index)),
+        sp(1),
+        seg(agent.task, status === 'running' ? theme.ink : theme.text, {bold: status === 'running'}),
+        ...(tight ? [] : [sp(2), ...agentChip(agent, ctx.chatModel)]),
+      ],
+      [
+        ...agentStatus(agent, now, ctx.frame),
+        sp(1),
+        seg(span((status === 'running' ? now : agent.endedAt) - agent.startedAt).padStart(7), theme.dim),
+        ...(tight ? [] : [sp(1), seg(tokens(agent.tokens).padStart(5), theme.faint)]),
+      ],
+      {id, pick: true, pins, live, bg: here ? theme.surface2 : undefined, act: {type: 'toggle', set: 'agents', key: agent.id}},
+    ),
+  );
+
+  const row = (left: Seg[], right: Seg[] = []) => ctx.out.push(streamRow(cols, [...under, ...left], right, {pins: mine, live}));
+  // While it runs, the one thing worth a row is the step it is on.
+  const last = agent.steps[agent.steps.length - 1];
+  if (status === 'running' && last) {
+    row([sp(2), seg(glyph.elbow, theme.faint), sp(2), seg(last.tool.padEnd(6), theme.dim), seg(target(ctx.root, last), theme.text)]);
+  }
+
+  // How much it has done, and what it left behind.
+  const wrote = agent.wrote.map(file => path.basename(file));
+  const facts =
+    status === 'running' || wrote.length === 0
+      ? plural(agent.toolUses, 'tool use')
+      : `${plural(agent.toolUses, 'tool use')}  ${glyph.sep}  wrote ${wrote.slice(0, TAGS_SHOWN).join(', ')}${wrote.length > TAGS_SHOWN ? ` +${wrote.length - TAGS_SHOWN}` : ''}`;
+  if (agent.toolUses || wrote.length) row([sp(5), seg(cut(facts, roomOf(cols) - widthOf(under) - 5), theme.faint)]);
+
+  if (!isOpen) return;
+  row([sp(5), seg(`${agent.type}  ${glyph.sep}  ${modelName(agent.model)}  ${glyph.sep}  ${tokens(agent.tokens)}`, theme.faint)]);
+  // The notification says how it ended; without one the quiet is only a guess,
+  // so the sentence stays vaguer.
+  if (status === 'stopped') {
+    const why =
+      agent.ended === 'killed' ? 'Stopped before it handed back.' : agent.ended === 'failed' ? 'Failed before it handed back.' : 'Went quiet without handing back.';
+    row([sp(5), seg(why, theme.warn)]);
+  }
+
+  for (const file of agent.wrote) {
+    const rel = path.relative(ctx.root, file).split(path.sep).join('/');
+    const stat = change.files.find(f => f.path === file);
+    row([sp(5), ...pathSegs(rel, false)], stat?.known ? counts(stat.added, stat.removed) : []);
+  }
+
+  for (const step of agent.steps.slice(-5)) {
+    row([sp(5), seg(step.tool.padEnd(9), theme.faint), seg(target(ctx.root, step), theme.dim)], [seg(clock(step.at), theme.faint)]);
+  }
+
+  if (agent.says && status !== 'running') {
+    const room = Math.max(20, roomOf(cols) - widthOf(under) - 5);
+    for (const text of wrap(agent.says.replace(/[*_`#>]/g, ''), room).slice(0, 3)) row([sp(5), seg(text, theme.text)]);
+  }
+}
+
+// ---------- the same agents, in the shape the Agents view still asks for ----------
+// Step 3 takes these out once `views/agents.ts` has stopped calling them.
+
 export function agentBranch(stack: boolean[]): {mark: Seg; lead: Seg[]} {
   const depth = stack.length - 1;
   const branch = seg(stack[depth] ? glyph.branch : glyph.branchLast, theme.spine);
@@ -444,10 +900,6 @@ function agentUnder(stack: boolean[], gap: number): {mark: Seg; lead: Seg[]} {
 
 type AgentCtx = Pick<Ctx, 'cols' | 'sel' | 'now' | 'frame' | 'root' | 'out'> & {open: Pick<Open, 'agents'>};
 
-// An agent as one row of the tree: status first, then the label, the kind it
-// was asked for and the job, with elapsed time and tokens in fixed columns on
-// the right. A running one gets one dim row with the step it is on; an open
-// one gets its detail under that.
 export function agentRow(ctx: AgentCtx, node: AgentNode, change: TurnChange | null, pins: string[], stack: boolean[], pad: number): void {
   const {cols, sel, now} = ctx;
   const {agent, index} = node;
@@ -456,8 +908,6 @@ export function agentRow(ctx: AgentCtx, node: AgentNode, change: TurnChange | nu
   const isOpen = ctx.open.agents.has(agent.id);
   const status = statusOf(agent, now);
   const branch = agentBranch(stack);
-  // The rows under an agent start under its task: the status glyph, a space
-  // and the label wide.
   const under = agentUnder([...stack, node.kids.length > 0], pad + 2);
   const mine = [...pins, id];
 
@@ -468,9 +918,8 @@ export function agentRow(ctx: AgentCtx, node: AgentNode, change: TurnChange | nu
         ...branch.lead,
         ...agentStatus(agent, now, ctx.frame),
         sp(1),
-        seg(agentLabel(index).padEnd(pad), agentColour(index), {bold: true}),
-        // "general-purpose" says nothing. A kind that was chosen does.
-        ...(agent.type === 'general-purpose' ? [] : [seg(`${agent.type}  `, theme.ink)]),
+        seg(glyph.square, hueOf(index)),
+        sp(1),
         seg(agent.task, status === 'running' ? theme.ink : theme.text),
       ],
       [seg(span((status === 'running' ? now : agent.endedAt) - agent.startedAt).padStart(7), theme.dim), sp(1), seg(tokens(agent.tokens).padStart(5), theme.faint)],
@@ -478,7 +927,6 @@ export function agentRow(ctx: AgentCtx, node: AgentNode, change: TurnChange | nu
     ),
   );
 
-  // While it runs, the one thing worth a second row is what it is doing.
   const last = agent.steps[agent.steps.length - 1];
   if (status === 'running' && last) {
     ctx.out.push(
@@ -489,14 +937,13 @@ export function agentRow(ctx: AgentCtx, node: AgentNode, change: TurnChange | nu
   if (!isOpen) return;
   const room = cols - 4 - RIGHT_PAD - widthOf(under.lead);
   const row = (left: Seg[], right: Seg[] = []) => ctx.out.push(spineRow(cols, [...under.lead, ...left], right, {mark: under.mark, pins: mine}));
-  row([seg(`${agent.type}  ${glyph.sep}  ${modelName(agent.model)}  ${glyph.sep}  ${agent.steps.length} step${agent.steps.length === 1 ? '' : 's'}  ${glyph.sep}  ${tokens(agent.tokens)}`, theme.faint)]);
-  // The notification says how it ended; without one the quiet is only a guess,
-  // so the sentence stays vaguer.
+  row([seg(`${agent.type}  ${glyph.sep}  ${modelName(agent.model)}  ${glyph.sep}  ${plural(agent.toolUses, 'tool use')}  ${glyph.sep}  ${tokens(agent.tokens)}`, theme.faint)]);
   if (status === 'stopped') {
     const why =
       agent.ended === 'killed' ? 'Stopped before it handed back.' : agent.ended === 'failed' ? 'Failed before it handed back.' : 'Went quiet without handing back.';
     row([seg(why, theme.warn)]);
   }
+
   for (const file of agent.wrote) {
     const rel = path.relative(ctx.root, file).split(path.sep).join('/');
     const stat = change?.files.find(f => f.path === file);
@@ -509,21 +956,12 @@ export function agentRow(ctx: AgentCtx, node: AgentNode, change: TurnChange | nu
   }
 }
 
-// How deep a tree is worth drawing: past this the indents cost more than the
-// nesting tells you.
-const TREE_MAX = 4;
-
-// `tail` is for a tree with more of its turn under it: the last branch is then
-// still a `├─`, because the turn's own line carries on past it.
 export function agentRows(ctx: AgentCtx, nodes: AgentNode[], change: TurnChange | null, pins: string[], tail = false): void {
-  // One label column for the whole tree, so `A10` does not push its own task
-  // out of line with the rest.
-  const pad = Math.max(3, ...agentsFlat(nodes).map(node => agentLabel(node.index).length + 1));
+  const pad = Math.max(3, ...agentsFlat(nodes).map(() => 3));
   const draw = (level: AgentNode[], stack: boolean[], under: string[]) => {
     level.forEach((node, i) => {
       const mine = [...stack, i < level.length - 1 || (stack.length === 0 && tail)];
       agentRow(ctx, node, change, under, mine, pad);
-      // A nested agent keeps its parent's row on screen with it.
       if (node.kids.length && mine.length < TREE_MAX) draw(node.kids, mine, [...under, `a:${node.agent.id}`]);
     });
   };
@@ -531,49 +969,305 @@ export function agentRows(ctx: AgentCtx, nodes: AgentNode[], change: TurnChange 
   draw(nodes, [], pins);
 }
 
-function byTurn(ctx: Ctx): void {
-  const {cols, changes, now, open} = ctx;
-  const byAgent = agentsByTurn(changes, ctx.agents);
-  let section = '';
-  let blanked = false;
-  const newest = changes[changes.length - 1];
+// ---------- the worktrees of the repository ----------
 
-  for (const change of [...changes].reverse()) {
-    const when = dayLabel(change.turn.at, now);
-    const mark = `${change.chatId}|${when}`;
-    if (mark !== section) {
-      if (section && !blanked) ctx.out.push(blankRow(cols));
-      section = mark;
-      ctx.out.push(pageRow(cols, [seg(change.chat, theme.dim)], [seg(when, theme.faint)]));
-    }
+type Folder = {wt: WorktreeRun; colour: string; label: string};
 
-    const key = turnKey(change);
-    const agents = byAgent.get(key) ?? [];
-    // Flipped by hand, or the newest turn, but not both.
-    const isOpen = open.turns.has(key) !== (change === newest);
-    if (isOpen) openTurn(ctx, change, agents);
-    else closedTurn(ctx, change, agents);
-    // One blank row after an open turn, below it only.
-    if (isOpen) ctx.out.push(blankRow(cols));
-    blanked = isOpen;
+// The folders this view is covering: the pane's own plus wherever an agent of
+// its chats is working, or every worktree of the repository.
+function foldersInScope(ctx: Ctx): Folder[] {
+  const all = ctx.worktrees ?? [];
+  const list = ctx.scope === 'all' ? all : all.filter(wt => wt.here || wt.agents.length > 0);
+  let hue = 0;
+  return list.map(wt => ({
+    wt,
+    // The pane's folder is the accent, the main checkout is quiet, and every
+    // other folder gets a hue of its own.
+    colour: wt.here ? theme.accent : wt.main ? theme.dim : hueOf(hue++),
+    label: cut(wt.here || wt.main ? wt.name : wt.branch || wt.name, 12),
+  }));
+}
+
+const folderChip = (folder: Folder): Seg[] => chip(folder.label, theme.surface2, folder.colour);
+
+// Where a folder has got to, in one phrase on the right of its row.
+function folderState(ctx: Ctx, wt: WorktreeRun): Seg[] {
+  const agent = [...wt.agents].reverse().find(run => statusOf(run, ctx.now) === 'running');
+  if (wt.here && (agent || ctx.changes.some(change => change.running))) {
+    return [seg(spinner(ctx.frame), theme.accent), seg(' you + Claude', theme.ink)];
+  }
+
+  if (agent) {
+    return [seg(spinner(ctx.frame), theme.accent), seg(` ${modelName(agent.model)} ${glyph.sep} ${brief(ctx.now - agent.startedAt)}`, theme.text)];
+  }
+
+  if (wt.merged) return [seg(`${glyph.check} merged${wt.mergedAt ? ` ${clock(wt.mergedAt)}` : ''}`, theme.add)];
+  if (wt.removed) return [seg('removed', theme.faint)];
+  // Nothing wrote its head down before the folder went, so where it got to
+  // cannot be told either way.
+  if (wt.gone && !wt.known) return [seg('not recorded', theme.faint, {italic: true})];
+  if (!wt.ahead && !wt.dirty && !wt.gone) return [seg('clean', theme.faint)];
+  if (wt.dirty) return [seg(`${wt.dirty} changed`, theme.dim)];
+  return [seg('not merged', theme.faint)];
+}
+
+// One repository, several folders, as a map: the main checkout, the folder the
+// pane is in, and under it every folder an agent of this chat is working in.
+function worktreeMap(ctx: Ctx, folders: Folder[]): void {
+  const {cols, sel} = ctx;
+  const id = 'wt';
+  const here = id === sel;
+  const active = folders.filter(folder => folder.wt.active).length;
+  ctx.out.push(
+    pageRow(cols, [seg('WORKTREES', theme.faint, {bold: true}), seg(`   one repo, ${plural(folders.length, 'folder')}`, theme.dim)], active ? [seg(`${active} active`, theme.accent)] : [], {
+      id, pick: true, bg: here ? theme.surface2 : undefined, act: {type: 'toggle', set: 'folded', key: id},
+    }),
+  );
+  if (ctx.open.folded.has(id)) return;
+
+  // Read as a tree: the main checkout at the root, the pane's folder under it,
+  // and the agents' folders under that.
+  const main = folders.find(folder => folder.wt.main);
+  const mine = folders.find(folder => folder.wt.here && !folder.wt.main);
+  const rest = folders.filter(folder => folder !== main && folder !== mine);
+  const rows: {folder: Folder; depth: number; last: boolean}[] = [];
+  if (main) rows.push({folder: main, depth: 0, last: !mine && rest.length === 0});
+  if (mine) rows.push({folder: mine, depth: main ? 1 : 0, last: rest.length === 0});
+  const depth = (mine ? 1 : 0) + (main ? 1 : 0);
+  rest.forEach((folder, i) => rows.push({folder, depth: Math.min(2, depth), last: i === rest.length - 1}));
+
+  // The three columns of the map, measured so the longest state on the right
+  // always fits: the branch, where it is on disk, then how far it has gone.
+  const tight = cols < NARROW;
+  const whereCol = tight ? 0 : 16;
+  const nameCol = Math.max(10, cols - 3 - whereCol - STATE_COL);
+  for (const row of rows) {
+    const {wt} = row.folder;
+    const node = seg(wt.active ? glyph.dot : glyph.ring, row.folder.colour);
+    const joint = seg(row.last ? TEE_LAST : TEE, theme.spine);
+    const prefix = row.depth === 0 ? [node, sp(1)] : row.depth === 1 ? [joint, node, sp(1)] : [guide(true), sp(1), joint, node, sp(1)];
+    // A branch says more than a folder name; a detached head has only the name.
+    const name = wt.branch || wt.name;
+    // Two segments of the path when they fit, so a folder in the open says
+    // where it is; an agent's folder is named after the agent and needs none.
+    const where = wt.path.split(/[\\/]/).slice(-2).join('/');
+    ctx.out.push(
+      pageRow(
+        cols,
+        [
+          ...prefix,
+          // One column of the name's own field is always left clear, so the
+          // longest branch name never runs into the folder beside it.
+          seg(cut(name, nameCol - widthOf(prefix) - 1).padEnd(nameCol - widthOf(prefix)), wt.here ? theme.ink : theme.text, {bold: wt.here}),
+          ...(whereCol ? [seg((width(where) <= whereCol ? where : wt.name).padEnd(whereCol), theme.faint)] : []),
+        ],
+        [seg((wt.ahead ? `${AHEAD}${wt.ahead}` : '').padStart(4), theme.dim), sp(2), ...folderState(ctx, wt)],
+      ),
+    );
   }
 }
 
-const LETTER: Record<FileStatus, string> = {added: 'A', modified: 'M', deleted: 'D', renamed: 'R'};
-const LETTER_COLOUR: Record<FileStatus, string> = {added: theme.add, modified: theme.warn, deleted: theme.del, renamed: theme.link};
+// A worktree an agent is working in, as a block of the stream: the agent's own
+// task is the title, and the truth on the right is that none of it is in your
+// folder until it is merged.
+function worktreeBlock(ctx: Ctx, folder: Folder, id: string): void {
+  const {cols, sel, now} = ctx;
+  const {wt} = folder;
+  // The newest agent to work in it is the one the block is about.
+  const agent = wt.agents[wt.agents.length - 1]!;
+  const running = statusOf(agent, now) === 'running';
+  const here = id === sel;
+  const rail: Rail = {pins: [id], live: running};
+  const folded = ctx.open.folded.has(id);
+
+  ctx.out.push(
+    streamRow(cols, [...folderChip(folder), sp(1), seg(cut(agent.task, roomOf(cols) - 7 - widthOf(folderChip(folder))), running ? theme.ink : theme.text, {bold: running})], [seg(clock(agent.startedAt), running ? theme.dim : theme.faint)], {
+      mark: seg(running ? spinner(ctx.frame) : glyph.ring, folder.colour),
+      bg: here ? theme.surface2 : undefined,
+      live: running, id, pick: true, act: {type: 'toggle', set: 'folded', key: id},
+    }),
+  );
+
+  const merged = wt.merged ? [seg(`${glyph.check} merged${wt.mergedAt ? ` ${clock(wt.mergedAt)}` : ''}`, theme.add)] : [];
+  const truth = merged.length ? [] : [seg('not in your folder until it is merged', theme.faint, {italic: true})];
+  const took = span((running ? now : agent.endedAt) - agent.startedAt);
+  const n = wt.files.length;
+  const left: Seg[] = [seg('agent', theme.dim), sep(), seg(running ? `running ${took}` : took, running ? theme.accent : theme.dim)];
+  if (running) {
+    left.push(sp(3), ...chip(plural(n, 'file'), theme.surface2, theme.text));
+    if (wt.lines.added) left.push(sp(1), ...chip(`+${wt.lines.added}`, theme.tintAdd, theme.add));
+    if (wt.lines.removed) left.push(sp(1), ...chip(`${glyph.minus}${wt.lines.removed}`, theme.tintDel, theme.del));
+  } else {
+    left.push(seg(`   ${plural(n, 'file')} `, theme.dim), ...sizeCells(wt.lines.added, wt.lines.removed));
+  }
+
+  ctx.out.push(streamRow(cols, left, merged, rail));
+  if (folded) return;
+
+  // Two folders of it, then a count: the whole list belongs to the folder it
+  // is in, not to your stream.
+  const files: ChangedFile[] = wt.files.map((stat: FileStat) => ({
+    rel: stat.rel, path: path.resolve(wt.path, stat.rel), status: stat.status, added: stat.added, removed: stat.removed, known: true,
+  }));
+  const groups = groupByFolder(files);
+  let shown = 0;
+  const tight = cols < NARROW;
+  for (const group of groups.slice(0, WT_FOLDERS)) {
+    if (shown >= WT_FILES) break;
+    folderRow(ctx, group.key, [], rail);
+    for (const {file, label} of group.files.slice(0, WT_FILES - shown)) {
+      ctx.out.push(
+        streamRow(
+          cols,
+          [sp(1), seg(LETTER[file.status], LETTER_COLOUR[file.status], {bold: true}), sp(2), seg(label, theme.ink)],
+          [...(tight ? [] : [...sizeCells(file.added, file.removed), sp(2)]), ...counts(file.added, file.removed)],
+          rail,
+        ),
+      );
+      shown++;
+    }
+  }
+
+  const rest = files.length - shown;
+  if (rest > 0) ctx.out.push(streamRow(cols, [seg(glyph.closed, theme.dim), sp(1), seg(plural(rest, 'more file'), theme.dim)], truth, rail));
+  else if (truth.length) ctx.out.push(streamRow(cols, [], truth, rail));
+}
+
+// ---------- the stream ----------
+
+const startOfDay = (at: number): number => {
+  const date = new Date(at);
+  date.setHours(0, 0, 0, 0);
+  return date.getTime();
+};
+
+function byTurn(ctx: Ctx): void {
+  const folders = foldersInScope(ctx);
+  if (folders.length > 1) manyFolders(ctx, folders);
+  else oneFolder(ctx);
+}
+
+// One folder: a day heads the stream with its skyline, and every turn of that
+// day follows, newest first.
+function oneFolder(ctx: Ctx): void {
+  const {cols, changes, now, open} = ctx;
+  const byAgent = turnAgents(changes, ctx.agents);
+  const newest = changes[changes.length - 1];
+  // Flipped by hand, or the newest turn, but not both.
+  const isOpen = (change: TurnChange) => open.turns.has(turnKey(change)) !== (change === newest);
+  const days = daysOf(changes, now);
+
+  days.forEach((day, i) => {
+    if (i === 0) {
+      dayHead(ctx, dayLabel(day.day, now), day.chat, [
+        seg(plural(day.turns.length, 'turn'), theme.dim),
+        ...(day.span >= 1000 ? [sep(), seg(span(day.span), theme.dim)] : []),
+      ]);
+      skylineRow(ctx, day.turns, isOpen, day.added, day.removed);
+      ctx.out.push(blankRow(cols));
+    } else {
+      // A new day, or the same day in another chat: either way the stream
+      // breaks and the rule says which.
+      const was = days[i - 1]!;
+      ctx.out.push(dividerRow(cols, was.day === day.day ? day.chat : dayLabel(day.day, now)));
+    }
+
+    for (const change of [...day.turns].reverse()) {
+      const agents = byAgent.get(turnKey(change)) ?? [];
+      if (!isOpen(change)) {
+        pastTurn(ctx, change, agents, {});
+        continue;
+      }
+
+      openTurn(ctx, change, agents, {});
+      // One blank row after an open turn, below it only.
+      ctx.out.push(blankRow(cols));
+    }
+  });
+}
+
+// Several folders: the map heads the stream, every block's title says which
+// folder it happened in, and a worktree an agent works in is a block of its
+// own, in the order it all happened.
+function manyFolders(ctx: Ctx, folders: Folder[]): void {
+  const {cols, changes, now, open} = ctx;
+  worktreeMap(ctx, folders);
+  ctx.out.push(blankRow(cols));
+
+  const byAgent = turnAgents(changes, ctx.agents);
+  const here = folders.find(folder => folder.wt.here);
+  const newest = changes[changes.length - 1];
+  const isOpen = (change: TurnChange) => open.turns.has(turnKey(change)) !== (change === newest);
+
+  type Item = {at: number; change?: TurnChange; folder?: Folder};
+  const blocks: Item[] = folders
+    .filter(folder => !folder.wt.here && folder.wt.agents.length > 0)
+    .map(folder => ({at: folder.wt.agents[folder.wt.agents.length - 1]!.startedAt, folder}));
+  // Both lists are already in time order, so one walk merges them.
+  const turns: Item[] = changes.map(change => ({at: change.turn.at, change}));
+  const items: Item[] = [];
+  let b = blocks.length - 1;
+  for (let t = turns.length - 1; t >= 0; t--) {
+    while (b >= 0 && blocks[b]!.at > turns[t]!.at) items.push(blocks[b--]!);
+    items.push(turns[t]!);
+  }
+
+  while (b >= 0) items.push(blocks[b--]!);
+
+  let day = 0;
+  items.forEach((item, i) => {
+    const on = startOfDay(item.at);
+    if (on !== day) {
+      if (day === 0) {
+        const count = items.filter(other => other.change && startOfDay(other.at) === on).length;
+        dayHead(ctx, dayLabel(on, now), 'everything, in the order it happened', [seg(plural(count, 'turn'), theme.dim)]);
+        ctx.out.push(blankRow(cols));
+      } else {
+        ctx.out.push(dividerRow(cols, dayLabel(on, now)));
+      }
+
+      day = on;
+    }
+
+    if (item.folder) {
+      worktreeBlock(ctx, item.folder, `wb:${item.folder.wt.path}`);
+      ctx.out.push(blankRow(cols));
+      return;
+    }
+
+    const change = item.change!;
+    const agents = byAgent.get(turnKey(change)) ?? [];
+    const block: Block = {colour: here?.colour, tag: here ? [...folderChip(here), sp(1)] : [], who: 'you'};
+    if (!isOpen(change)) {
+      pastTurn(ctx, change, agents, {colour: here?.colour});
+      return;
+    }
+
+    openTurn(ctx, change, agents, block);
+    if (i < items.length - 1) ctx.out.push(blankRow(cols));
+  });
+}
+
+// ---------- the other two groupings, on the same columns ----------
 
 function byFile(ctx: Ctx): void {
   const {cols, sel, open} = ctx;
+  const tight = cols < NARROW;
   for (const history of ctx.histories) {
     const id = `h:${history.rel}`;
     const here = id === sel;
     const isOpen = open.hists.has(history.rel);
     const n = history.touches.length;
     ctx.out.push(
-      spineRow(
+      streamRow(
         cols,
-        [seg(LETTER[history.status], LETTER_COLOUR[history.status]), sp(2), ...pathSegs(history.rel, true)],
-        [seg(`${n} turn${n === 1 ? '' : 's'}`, theme.faint), sp(2), ...(history.measured ? counts(history.added, history.removed) : [seg('not recorded', theme.faint, {italic: true})])],
+        [sp(1), seg(LETTER[history.status], LETTER_COLOUR[history.status], {bold: true}), sp(2), ...pathSegs(history.rel, true)],
+        [
+          seg(plural(n, 'turn'), theme.faint),
+          sp(2),
+          ...(tight ? [] : [...(history.measured ? sizeCells(history.added, history.removed) : [sp(SIZE_CELLS)]), sp(2)]),
+          ...(history.measured ? counts(history.added, history.removed) : [seg('not recorded', theme.faint, {italic: true})]),
+        ],
         {mark: chevron(isOpen, here), id, pick: true, bg: here ? theme.surface2 : undefined, act: {type: 'toggle', set: 'hists', key: history.rel}},
       ),
     );
@@ -586,9 +1280,11 @@ function byFile(ctx: Ctx): void {
         history.rel,
         history.status === 'deleted' ? null : history.path,
         [seg(clock(touch.change.turn.at), theme.dim), sp(2), seg(touch.change.turn.prompt, theme.text)],
-        touch.known ? counts(touch.added, touch.removed) : [seg('not recorded', theme.faint, {italic: true})],
+        touch.known
+          ? [...(tight ? [] : [...sizeCells(touch.added, touch.removed), sp(2)]), ...counts(touch.added, touch.removed)]
+          : [seg('not recorded', theme.faint, {italic: true})],
         [id],
-        {nested: true},
+        {},
       );
     }
 
@@ -597,18 +1293,46 @@ function byFile(ctx: Ctx): void {
 }
 
 function flat(ctx: Ctx): void {
-  const {cols} = ctx;
+  const {cols, sel, open} = ctx;
+  const tight = cols < NARROW;
   if (!ctx.flat || ctx.flat.length === 0) return;
   for (const file of ctx.flat) {
-    fileRow(
-      ctx,
-      fileKey('git', file.rel),
-      file.rel,
-      file.status === 'deleted' ? null : file.path,
-      [seg(LETTER[file.status], LETTER_COLOUR[file.status]), sp(2), ...pathSegs(file.rel, true), ...(file.status === 'renamed' && file.fromRel ? [seg(`  from ${file.fromRel}`, theme.faint)] : [])],
-      file.binary ? [seg('binary', theme.faint)] : counts(file.added, file.removed),
-      [],
-      {nested: false},
+    const key = fileKey('git', file.rel);
+    const here = `f:${key}` === sel;
+    ctx.out.push(
+      streamRow(
+        cols,
+        [
+          sp(1),
+          seg(LETTER[file.status], LETTER_COLOUR[file.status], {bold: true}),
+          sp(2),
+          ...pathSegs(file.rel, true),
+          ...(file.status === 'renamed' && file.fromRel ? [seg(`  from ${file.fromRel}`, theme.faint)] : []),
+          ...(open.files.has(key) && ctx.diffs.get(key) ? [seg(`   ${plural(ctx.diffs.get(key)!.reduce((n, g) => n + (g.file?.hunks.length ?? 0), 0), 'hunk')}`, theme.dim)] : []),
+        ],
+        file.binary
+          ? [seg('binary', theme.faint)]
+          : [...(tight ? [] : [...sizeCells(file.added, file.removed), sp(2)]), ...counts(file.added, file.removed)],
+        {
+          mark: chevron(open.files.has(key), here),
+          bg: here ? theme.surface2 : undefined,
+          id: `f:${key}`, pick: true, act: {type: 'file', key},
+        },
+      ),
+    );
+    if (!open.files.has(key)) continue;
+    const groups = ctx.diffs.get(key);
+    if (!groups) {
+      ctx.out.push(streamRow(cols, [seg('Reading the diff…', theme.faint)], [], {pins: [`f:${key}`]}));
+      continue;
+    }
+
+    const keyed = groups.map(group => ({...group, key: `${key}#${group.key}`}));
+    const rows = viewRows(keyed, ctx.folded, ctx.opened, ctx.hideSpace);
+    ctx.out.push(
+      ...diffLines(rows, keyed, {
+        cols: cols - 1, fileKey: key, path: file.status === 'deleted' ? null : file.path, sel, pins: [`f:${key}`],
+      }).map(widen),
     );
   }
 }
