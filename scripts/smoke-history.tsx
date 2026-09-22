@@ -433,10 +433,10 @@ await wait(1800);
 // past the head of the stream to reach it. `g` walks back up to the top, so
 // the map and the day are drawn whatever the pane's height.
 await p.press('g');
-const opening = await p.show('changes: the map, the day, and the turn you are in');
+const opening = await p.show('changes: the day, and the turn you are in');
 check(opening.includes('TODAY'), 'the day should head the stream');
-check(opening.includes('WORKTREES'), 'a repository with two folders should head the stream with its map');
-check(/you \+ Claude/.test(opening), 'the folder the pane is in should say you and Claude are in it');
+check(!opening.includes('WORKTREES'), 'this folder alone is no map: a worktree is where an agent worked, not a head of the stream');
+check(/[▁▂▃▄▅▆▇█]{2} [▁▂▃▄▅▆▇█]{2} /.test(opening), 'and the day should keep its skyline whatever else is in scope');
 
 // The stream is newest first and `onto` only ever steps down, so the turns are
 // visited in the order they are drawn: the newest at the top, the one whose
@@ -499,21 +499,19 @@ if (await p.onto('mention the licence')) {
 }
 
 // ---- the worktrees, before the merge ------------------------------------
-await p.press('g', 'w');
+// The scope moves the cursor's row down the stream, which scrolls the head of
+// it away, so `g` walks back up after the switch rather than before it.
+await p.press('w');
 await wait(1200);
+await p.press('g');
 p.mark();
 const all = await p.show('changes: every worktree of the repository, scope all');
 // At 40 columns the grouping pills win and the scope pill gives way; the
 // menu still has it, and the map still heads the stream.
 check(COLS < 56 || all.includes('in all 2 worktrees'), 'the scope pill should say how many folders are in view');
-check(all.includes('WORKTREES'), 'the map should still head the stream');
-check(/▐agent-a7b1▌|▐agent-docs▌/.test(all), "a block from another folder should carry that folder's chip");
+check(all.includes('WORKTREES'), 'the map should head the stream, and only in this scope');
+check(/▐agent-docs▌/.test(all), "a turn typed in another folder should carry that folder's chip");
 check(saysIt(all, 'write the guide and commit it'), "that folder's own chat should be in the stream");
-// What the other folder's work says about itself is inside the block below
-// the map, and no short window holds both: walk down to it.
-await p.onto('Write the guide');
-await p.press(DOWN, DOWN);
-check(saysIt(p.since(), 'not in your folder until it is merged'), "an agent's worktree should say its work is not here yet");
 
 // ---- merge it, and take the folder away ---------------------------------
 run('merge', '-q', '--no-ff', 'agent-docs', '-m', 'Merge the guide');

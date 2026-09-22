@@ -1,7 +1,7 @@
 import path from 'node:path';
 import {statusOf, type AgentRun} from '../../core/agents';
 import type {DiffLine, FileDiff, FileStatus} from '../../core/diff';
-import {pathKey, type FileStat} from '../../core/git';
+import {pathKey} from '../../core/git';
 import {
   daySummary, folderShares, groupByFolder,
   type ChangedFile, type DayGroup, type FileHistory, type TurnChange,
@@ -17,9 +17,10 @@ import {diffLines, viewRows, type DiffGroup} from '../diffrows';
 import {glyph, hues, theme} from '../theme';
 import {wrap} from '../util';
 
-// The Changes view is one stream. A day heads it with its own skyline; a turn
-// is a block whose node sits in column 1 and whose rows all hang on the block's
-// own line; a diff opens in a well under the row of the file it belongs to.
+// The Changes view is one stream, whichever folders are in scope. A day heads
+// it with its own skyline; a turn is a block whose chevron sits in column 1 and
+// whose rows all hang on the block's own line; a diff opens in a well under the
+// row of the file it belongs to.
 // Nothing is a box, nothing is shown "down there", and every row in the view
 // starts its text in the same column.
 
@@ -78,10 +79,6 @@ const STEPS_SHOWN = 40;
 const SAYS_SHOWN = 2;
 // More commits than this on one turn and the older ones fold away.
 const COMMITS_SHOWN = 3;
-// A worktree's own block lists this many folders and files, then counts the
-// rest: the whole list belongs to the folder it is in, not to your stream.
-const WT_FOLDERS = 2;
-const WT_FILES = 4;
 // The newest turns of a day the skyline has room for.
 const SKYLINE_SHOWN = 20;
 // The column the skyline starts in, clear of the day label above it.
@@ -239,13 +236,10 @@ function dividerRow(cols: number, label: string): Line {
 // ---------- a turn ----------
 
 type Block = {
-  // The turn's node, and the chip in front of its title: which folder it
-  // happened in, when more than one is in scope.
+  // The turn's chevron, and the chip in front of its title: which folder it
+  // was typed in, when that was not this one.
   colour?: string;
   tag?: Seg[];
-  // `you` or `agent`: who was at the keyboard, which only means anything when
-  // the stream is covering more than this folder.
-  who?: string;
 };
 
 // The mark in column 1. A turn opens and closes in place, so it carries the
@@ -300,7 +294,6 @@ function chipsRow(ctx: Ctx, change: TurnChange, agents: AgentRun[], rail: Rail, 
   const {cols, now} = ctx;
   const head: Seg[] = [];
   const parts: Seg[][] = [];
-  if (o.who) head.push(seg(o.who, theme.dim), sep());
   const took = (change.running ? now : change.turn.endedAt) - change.turn.at;
   if (change.running) head.push(seg(`running ${span(took)}`, theme.accent), sp(3));
 
@@ -426,8 +419,8 @@ function turnFileRow(ctx: Ctx, change: TurnChange, file: ChangedFile, label: str
   fileRow(ctx, key, file.rel, file.status === 'deleted' ? null : file.path, left, right, pins, {live: change.running});
 }
 
-function folderRow(ctx: Ctx, name: string, note: Seg[], rail: Rail): void {
-  ctx.out.push(streamRow(ctx.cols, [seg(name, theme.dim)], note, rail));
+function folderRow(ctx: Ctx, name: string, rail: Rail): void {
+  ctx.out.push(streamRow(ctx.cols, [seg(name, theme.dim)], [], rail));
 }
 
 // The turn's files, grouped under the folder each one lives in, biggest folder
@@ -445,14 +438,10 @@ function fileRows(ctx: Ctx, change: TurnChange, agents: AgentRun[], rail: Rail):
 
   const groups = groupByFolder(change.files);
   let shown = 0;
-  let legend = writers.size > 0;
   for (const group of groups) {
     const room = all ? group.files.length : Math.max(0, FILES_SHOWN - shown);
     if (room === 0) break;
-    // The squares are new, so the first folder row of a turn that has any says
-    // what they mean, once.
-    folderRow(ctx, group.key, legend && cols >= NARROW ? [seg('the squares say who wrote it', theme.faint)] : [], rail);
-    legend = false;
+    folderRow(ctx, group.key, rail);
     for (const {file, label} of group.files.slice(0, room)) {
       const by = writers.get(file.path) ?? [];
       const tags: Seg[] = by.length ? [sp(3), ...by.slice(0, TAGS_SHOWN).map(i => seg(glyph.square, hueOf(i)))] : [];
@@ -601,7 +590,7 @@ function openTurn(ctx: Ctx, change: TurnChange, agents: AgentRun[], o: Block): v
 
 // The widest right side a past turn can have: the file count, the size cells,
 // the git mark and the clock. `2 files ▄▄▄▄▄ ◆3  12:41`
-const promptRoom = (cols: number): number => roomOf(cols) - (cols < NARROW ? 19 : 25) - 1;
+const promptRoom = (cols: number, tag: Seg[]): number => roomOf(cols) - (cols < NARROW ? 19 : 25) - 1 - widthOf(tag);
 
 // A past turn is one row: what you asked, how big the answer was, where it
 // stands in git, and when. Everything else is one press away.
@@ -639,8 +628,10 @@ function pastTurn(ctx: Ctx, change: TurnChange, agents: AgentRun[], o: Block): v
 
   // Every past turn cuts its prompt in the same column, whatever it has to say
   // on the right, so the stream reads as one list rather than as a ragged edge.
+  // A chip in front of it is the one thing that moves that column.
+  const tag = o.tag ?? [];
   ctx.out.push(
-    streamRow(cols, [seg(cut(change.turn.prompt, promptRoom(cols)), here ? theme.ink : theme.text)], right, {
+    streamRow(cols, [...tag, seg(cut(change.turn.prompt, promptRoom(cols, tag)), here ? theme.ink : theme.text)], right, {
       bg: here ? theme.surface2 : undefined,
       mark: nodeOf(ctx, change, false, here, o.colour),
       id, pick: true, act: {type: 'turn', key},
@@ -954,13 +945,17 @@ function worktreeMap(ctx: Ctx, folders: Folder[]): void {
   const {cols, sel} = ctx;
   const id = 'wt';
   const here = id === sel;
+  const folded = ctx.open.folded.has(id);
   const active = folders.filter(folder => isActive(ctx, folder.wt)).length;
   ctx.out.push(
-    pageRow(cols, [seg('WORKTREES', theme.faint, {bold: true}), seg(`   one repo, ${plural(folders.length, 'folder')}`, theme.dim)], active ? [seg(`${active} active`, theme.accent)] : [], {
-      id, pick: true, bg: here ? theme.surface2 : undefined, act: {type: 'toggle', set: 'folded', key: id},
-    }),
+    pageRow(
+      cols,
+      [chevron(!folded, here), sp(2), seg('WORKTREES', theme.faint, {bold: true}), seg(`   one repo, ${plural(folders.length, 'folder')}`, theme.dim)],
+      active ? [seg(`${active} active`, theme.accent)] : [],
+      {id, pick: true, bg: here ? theme.surface2 : undefined, hint: folded ? 'unfold' : 'fold', act: {type: 'toggle', set: 'folded', key: id}},
+    ),
   );
-  if (ctx.open.folded.has(id)) return;
+  if (folded) return;
 
   // Read as a tree: the main checkout at the root, the pane's folder under it,
   // and the agents' folders under that.
@@ -1004,97 +999,33 @@ function worktreeMap(ctx: Ctx, folders: Folder[]): void {
   }
 }
 
-// A worktree an agent is working in, as a block of the stream: the agent's own
-// task is the title, and the truth on the right is that none of it is in your
-// folder until it is merged.
-function worktreeBlock(ctx: Ctx, folder: Folder, id: string): void {
-  const {cols, sel, now} = ctx;
-  const {wt} = folder;
-  // The newest agent to work in it is the one the block is about.
-  const agent = wt.agents[wt.agents.length - 1]!;
-  const running = statusOf(agent, now) === 'running';
-  const here = id === sel;
-  const rail: Rail = {pins: [id], live: running};
-  const folded = ctx.open.folded.has(id);
-
-  ctx.out.push(
-    streamRow(cols, [...folderChip(folder), sp(1), seg(cut(agent.task, roomOf(cols) - 7 - widthOf(folderChip(folder))), running ? theme.ink : theme.text, {bold: running})], [seg(clock(agent.startedAt), running ? theme.dim : theme.faint)], {
-      mark: seg(running ? spinner(ctx.frame) : glyph.ring, folder.colour),
-      bg: here ? theme.surface2 : undefined,
-      live: running, id, pick: true, act: {type: 'toggle', set: 'folded', key: id},
-    }),
-  );
-
-  const merged = wt.merged ? [seg(`${glyph.check} merged${wt.mergedAt ? ` ${clock(wt.mergedAt)}` : ''}`, theme.add)] : [];
-  const truth = merged.length ? [] : [seg('not in your folder until it is merged', theme.faint, {italic: true})];
-  const took = span((running ? now : agent.endedAt) - agent.startedAt);
-  const n = wt.files.length;
-  const left: Seg[] = [seg('agent', theme.dim), sep(), seg(running ? `running ${took}` : took, running ? theme.accent : theme.dim)];
-  if (running) {
-    left.push(sp(3), ...chip(plural(n, 'file'), theme.surface2, theme.text));
-    if (wt.lines.added) left.push(sp(1), ...chip(`+${wt.lines.added}`, theme.tintAdd, theme.add));
-    if (wt.lines.removed) left.push(sp(1), ...chip(`${glyph.minus}${wt.lines.removed}`, theme.tintDel, theme.del));
-  } else if (n) {
-    left.push(seg(`   ${plural(n, 'file')} `, theme.dim), ...sizeCells(wt.lines.added, wt.lines.removed));
-  }
-  // A folder that is gone has no diff left to count, so it says nothing about
-  // one rather than saying `0 files`.
-
-  ctx.out.push(streamRow(cols, left, merged, rail));
-  if (folded) return;
-
-  // Two folders of it, then a count: the whole list belongs to the folder it
-  // is in, not to your stream.
-  const files: ChangedFile[] = wt.files.map((stat: FileStat) => ({
-    rel: stat.rel, path: path.resolve(wt.path, stat.rel), status: stat.status, added: stat.added, removed: stat.removed, known: true,
-  }));
-  const groups = groupByFolder(files);
-  let shown = 0;
-  const tight = cols < NARROW;
-  for (const group of groups.slice(0, WT_FOLDERS)) {
-    if (shown >= WT_FILES) break;
-    folderRow(ctx, group.key, [], rail);
-    for (const {file, label} of group.files.slice(0, WT_FILES - shown)) {
-      ctx.out.push(
-        streamRow(
-          cols,
-          [sp(1), seg(LETTER[file.status], LETTER_COLOUR[file.status], {bold: true}), sp(2), seg(label, theme.ink)],
-          [...(tight ? [] : [...sizeCells(file.added, file.removed), sp(2)]), ...counts(file.added, file.removed)],
-          rail,
-        ),
-      );
-      shown++;
-    }
-  }
-
-  const rest = files.length - shown;
-  if (rest > 0) ctx.out.push(streamRow(cols, [seg(glyph.closed, theme.dim), sp(1), seg(plural(rest, 'more file'), theme.dim)], truth, rail));
-  else if (truth.length) ctx.out.push(streamRow(cols, [], truth, rail));
-}
-
 // ---------- the stream ----------
 
-const startOfDay = (at: number): number => {
-  const date = new Date(at);
-  date.setHours(0, 0, 0, 0);
-  return date.getTime();
-};
-
 function byTurn(ctx: Ctx): void {
-  const folders = foldersInScope(ctx);
-  if (folders.length > 1) manyFolders(ctx, folders);
-  else oneFolder(ctx);
+  // A worktree is where an agent worked, never a block of the stream, so the
+  // wider scope adds one thing at the head — the map — and the stream under it
+  // is the same stream either way.
+  const folders = ctx.scope === 'all' ? foldersInScope(ctx) : [];
+  if (folders.length > 1) {
+    worktreeMap(ctx, folders);
+    ctx.out.push(blankRow(ctx.cols));
+  }
+
+  stream(ctx, folders);
 }
 
-// One folder: a day heads the stream with its skyline, and every turn of that
-// day follows, newest first.
-function oneFolder(ctx: Ctx): void {
+// A day heads the stream with its own skyline, and every turn of that day
+// follows, newest first. A turn typed in another folder — which only the wider
+// scope has any of — carries that folder's chip and its hue.
+function stream(ctx: Ctx, folders: Folder[]): void {
   const {cols, changes, now, open} = ctx;
   const byAgent = turnAgents(changes, ctx.agents);
   const newest = changes[changes.length - 1];
   // Flipped by hand, or the newest turn, but not both.
   const isOpen = (change: TurnChange) => open.turns.has(turnKey(change)) !== (change === newest);
   const days = daysOf(changes, now);
+  const folderOf = (change: TurnChange): Folder | undefined =>
+    folders.find(folder => !folder.wt.here && pathKey(folder.wt.path) === pathKey(change.folder));
 
   days.forEach((day, i) => {
     if (i === 0) {
@@ -1113,80 +1044,17 @@ function oneFolder(ctx: Ctx): void {
 
     for (const change of [...day.turns].reverse()) {
       const agents = byAgent.get(turnKey(change)) ?? [];
+      const folder = folderOf(change);
+      const block: Block = folder ? {colour: folder.colour, tag: [...folderChip(folder), sp(1)]} : {};
       if (!isOpen(change)) {
-        pastTurn(ctx, change, agents, {});
+        pastTurn(ctx, change, agents, block);
         continue;
       }
 
-      openTurn(ctx, change, agents, {});
+      openTurn(ctx, change, agents, block);
       // One blank row after an open turn, below it only.
       ctx.out.push(blankRow(cols));
     }
-  });
-}
-
-// Several folders: the map heads the stream, every block's title says which
-// folder it happened in, and a worktree an agent works in is a block of its
-// own, in the order it all happened.
-function manyFolders(ctx: Ctx, folders: Folder[]): void {
-  const {cols, changes, now, open} = ctx;
-  worktreeMap(ctx, folders);
-  ctx.out.push(blankRow(cols));
-
-  const byAgent = turnAgents(changes, ctx.agents);
-  const here = folders.find(folder => folder.wt.here);
-  const newest = changes[changes.length - 1];
-  const isOpen = (change: TurnChange) => open.turns.has(turnKey(change)) !== (change === newest);
-
-  type Item = {at: number; change?: TurnChange; folder?: Folder};
-  const blocks: Item[] = folders
-    .filter(folder => !folder.wt.here && folder.wt.agents.length > 0)
-    .map(folder => ({at: folder.wt.agents[folder.wt.agents.length - 1]!.startedAt, folder}));
-  // Both lists are already in time order, so one walk merges them.
-  const turns: Item[] = changes.map(change => ({at: change.turn.at, change}));
-  const items: Item[] = [];
-  let b = blocks.length - 1;
-  for (let t = turns.length - 1; t >= 0; t--) {
-    while (b >= 0 && blocks[b]!.at > turns[t]!.at) items.push(blocks[b--]!);
-    items.push(turns[t]!);
-  }
-
-  while (b >= 0) items.push(blocks[b--]!);
-
-  let day = 0;
-  items.forEach((item, i) => {
-    const on = startOfDay(item.at);
-    if (on !== day) {
-      if (day === 0) {
-        const count = items.filter(other => other.change && startOfDay(other.at) === on).length;
-        dayHead(ctx, dayLabel(on, now), 'everything, in the order it happened', [seg(plural(count, 'turn'), theme.dim)]);
-        ctx.out.push(blankRow(cols));
-      } else {
-        ctx.out.push(dividerRow(cols, dayLabel(on, now)));
-      }
-
-      day = on;
-    }
-
-    if (item.folder) {
-      worktreeBlock(ctx, item.folder, `wb:${item.folder.wt.path}`);
-      ctx.out.push(blankRow(cols));
-      return;
-    }
-
-    const change = item.change!;
-    const agents = byAgent.get(turnKey(change)) ?? [];
-    // Which folder it was typed in. A turn read from another worktree's own
-    // chats carries that folder, so its chip and its node are that folder's.
-    const folder = folders.find(f => pathKey(f.wt.path) === pathKey(change.folder)) ?? here;
-    const block: Block = {colour: folder?.colour, tag: folder ? [...folderChip(folder), sp(1)] : [], who: 'you'};
-    if (!isOpen(change)) {
-      pastTurn(ctx, change, agents, {colour: folder?.colour});
-      return;
-    }
-
-    openTurn(ctx, change, agents, block);
-    if (i < items.length - 1) ctx.out.push(blankRow(cols));
   });
 }
 
