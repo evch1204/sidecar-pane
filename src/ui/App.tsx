@@ -710,9 +710,12 @@ export function App({root, interactive, mouseDebug = false}: Props) {
     // One followed diff at a time: the one before it closes as this opens, so
     // the block does not grow a tail of everything the turn has ever touched.
     const want = fileKey(turn, fresh);
+    // Read the ref here, not inside the updater: React runs the updater during
+    // the next render, by which time the ref already names the new file.
+    const last = showing.current;
     setOpen(o => {
       const next = new Set(o.files);
-      if (showing.current) next.delete(showing.current);
+      if (last) next.delete(last);
       next.add(want);
       return {...o, files: next};
     });

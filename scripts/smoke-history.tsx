@@ -920,8 +920,11 @@ await wait(300);
 check(COLS < 56 || f.foot().includes('f following'), `and f should light it, and it reads "${f.foot().trim()}"`);
 writeFile('four.ts', 'export const gamma = 3;\n');
 await wait(5000);
-await f.show('changes: f handed it back, and the next file opened again');
+const again = await f.show('changes: f handed it back, and the next file opened again');
 check(onRow(f.cursorRow(), 'four.ts'), `f should hand it back, and the cursor is on "${f.cursorRow().trim()}"`);
+check(again.includes('export const gamma'), 'and the newest file should be the one with its diff open');
+// One followed diff at a time: a ten file turn must not end with ten of them.
+check(!again.includes('export const alpha'), 'the diff follow opened before it should have closed as this one opened');
 await f.quit();
 
 // ---- what must be true of every frame -----------------------------------
