@@ -310,7 +310,15 @@ export function App({root, interactive, mouseDebug = false}: Props) {
 
   const mine = useMemo(() => (chat ? history.changes.filter(c => c.chatId === chat) : history.changes), [history.changes, chat]);
   const histories = useMemo(() => byFile(mine), [mine]);
-  const newest = history.changes[history.changes.length - 1];
+  // The turn the bar's words, `working` and follow mode are all about: the
+  // newest by the clock. The changes arrive a chat at a time, so the last of
+  // them is the last turn of whichever chat was started last — start a quick
+  // second chat at two o'clock and all three would follow the one from nine
+  // that is still working.
+  const newest = useMemo(
+    () => history.changes.reduce<TurnChange | undefined>((best, change) => (best && best.turn.at > change.turn.at ? best : change), undefined),
+    [history.changes],
+  );
   const working = Boolean(newest?.running);
   const agentsRunning = runningAgents(history.agents, now);
   const worktrees = useWorktrees(root, history.agents, git, interactive, working || agentsRunning > 0);
