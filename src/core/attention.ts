@@ -73,16 +73,22 @@ function sizeOf(file: string): number {
 // result on it means the prompt is long over however the size reads.
 //
 // And the chat is still in that turn. A note left behind by a session that has
-// since finished, or been closed, is not a question anyone is waiting on.
+// since finished, or been closed, is not a question anyone is waiting on. The
+// twelve minute bound `isRunning` puts on a call that never came back is the
+// one part of that which may not decide this: a prompt you walk away from
+// appends nothing for as long as you are away, and Claude Code is blocked the
+// whole time. So a note on a call the transcript shows still open is its own
+// proof, and only a note on a call the transcript has never heard of falls
+// back on the turn reading as live.
 export function attention(root: string, sessions: Session[], now: number = Date.now()): Attention | null {
   const note = readNote(root);
   if (!note) return null;
 
   const session = sessions.find(one => one.id === note.sessionId);
   const newest = session?.turns[session.turns.length - 1];
-  if (!newest || !isRunning(newest, undefined, now)) return null;
+  if (!newest || newest.ended) return null;
 
   const call = note.toolUseId ? newest.actions.find(action => action.id === note.toolUseId) : undefined;
-  const outstanding = sizeOf(note.transcriptPath) === note.transcriptSize && !call?.done;
-  return outstanding ? note : null;
+  if (call?.done || sizeOf(note.transcriptPath) !== note.transcriptSize) return null;
+  return call || isRunning(newest, undefined, now) ? note : null;
 }

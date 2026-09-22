@@ -764,6 +764,23 @@ check(none.includes('~'), 'and mark its own figure as an estimate');
 console.log(`\n===== the bar, in three states\n${fresh}\n${quiet}\n${none}`);
 seen.push(fresh, quiet, none);
 
+// ---- a prompt nobody has answered for twenty minutes --------------------
+// Lunch. A turn parked on a permission prompt appends nothing while it waits,
+// so the bound that stops a call reading as live for ever would take exactly
+// the state the hook was written to report.
+lines.push(JSON.stringify({
+  type: 'user', turnOrigin: 'human', isSidechain: false, uuid: 'parked', sessionId: chat,
+  timestamp: at(21), cwd: project, gitBranch: 'improve-greet', message: {role: 'user', content: 'run the tests and fix what fails'},
+}));
+lines.push(acts(at(20), [{name: 'Bash', id: 'parked-call', input: {command: 'npm test', description: 'Run the tests'}}]));
+flush();
+fs.writeFileSync(path.join(home, slug(project), 'attention.json'), JSON.stringify({
+  at: Date.now(), tool: 'Bash', toolUseId: 'parked-call', sessionId: chat,
+  transcriptPath: transcript, transcriptSize: fs.statSync(transcript).size,
+}));
+await wait(4000);
+check(p.bar().includes('● asking you'), `a prompt left for twenty minutes should still be reported, and the bar reads "${p.bar().trim()}"`);
+
 await p.quit();
 
 // The bar the pane drew is the bar that fit beside a spinner and an agent
