@@ -67,9 +67,10 @@ export type ChangesInput = {
   // A turn of this folder's own chat is running, which is what makes the
   // folder active in the map even when no agent is.
   working?: boolean;
-  // Claude Code has a permission prompt up in the terminal beside the pane, so
-  // the step the running turn is on is waiting on you, not on the machine.
-  waiting?: boolean;
+  // The chat Claude Code has a permission prompt up for, so the step that
+  // chat's running turn is on is waiting on you, not on the machine. Only that
+  // one: with two chats, or in `all`, the others are working as usual.
+  waiting?: string;
 };
 
 const FILES_SHOWN = 8;
@@ -498,7 +499,7 @@ function stepsRow(ctx: Ctx, change: TurnChange, agents: AgentRun[], rail: Rail):
   const more = {...rail, id, pick: true, bg: here ? theme.surface2 : undefined, hint: isOpen ? 'close' : 'steps', act: {type: 'toggle', set: 'steps', key} as const};
   // What the step is waiting on takes the right of the row when there is
   // anything to say: a count of steps is the quietest thing on it.
-  const held = ctx.waiting ? [seg('waiting for you', theme.warn)] : quietNote(turn.endedAt, ctx.now);
+  const held = ctx.waiting && ctx.waiting === change.chatId ? [seg('waiting for you', theme.warn)] : quietNote(turn.endedAt, ctx.now);
 
   ctx.out.push(
     live

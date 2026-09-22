@@ -471,7 +471,7 @@ export function App({root, interactive, mouseDebug = false}: Props) {
         lines: changesLines({
           cols, now, frame, root, group, changes: timeline, histories, flat: diff ? diff.files : null, agents: streamAgents,
           open, diffs, folded, opened, hideSpace, sel: at, worktrees, scope, chatModel,
-          branch: git?.branch ?? '', working, waiting: Boolean(history.note),
+          branch: git?.branch ?? '', working, waiting: history.note?.sessionId,
         }),
       };
     }
