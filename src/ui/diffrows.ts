@@ -1,6 +1,6 @@
 import {gapSize, hunkLabel, type DiffLine, type FileDiff} from '../core/diff';
 import {layoutLine} from '../core/highlight';
-import {counts, seg, sp, wellBottom, wellRow, wellTop, wellWidth, type Line, type Seg} from './cells';
+import {chevron, counts, seg, sp, wellBottom, wellRow, wellTop, wellWidth, type Line, type Seg} from './cells';
 import {glyph, syntax, theme} from './theme';
 
 // One row of the diff as it appears on screen. This array is the single truth:
@@ -193,20 +193,27 @@ export function diffLines(rows: ViewRow[], groups: DiffGroup[], draw: Draw): Lin
       out.push(
         wellRow(
           cols,
-          [sp(1), seg(row.folded ? glyph.closed : glyph.open, here ? theme.accent : theme.dim), sp(1), seg(row.label, theme.link)],
+          [sp(1), chevron(!row.folded, here), sp(1), seg(row.label, theme.link)],
           [
             ...(row.named ? [seg(`${row.from}–${row.to}`, theme.faint), sp(2)] : []),
             ...(row.added ? [seg(`+${row.added}`, theme.add)] : []),
             ...(row.removed ? [sp(row.added ? 1 : 0), seg(`${glyph.minus}${row.removed}`, theme.del)] : []),
             sp(1),
           ],
-          {bg: here ? theme.surface2 : theme.scope, id, pick: true, pins, ...rail, act: {type: 'hunk', key: `${owner?.key}:${row.hunk}`}},
+          {
+            bg: here ? theme.surface2 : theme.scope,
+            id, pick: true, pins, ...rail,
+            hint: row.folded ? 'unfold' : 'fold',
+            act: {type: 'hunk', key: `${owner?.key}:${row.hunk}`},
+          },
         ),
       );
       return;
     }
 
     if (row.kind === 'gap') {
+      // The row says in words what Enter does, so it keeps them and takes no
+      // chevron. It opens the lines where they are, which is the default hint.
       out.push(
         wellRow(
           cols,
