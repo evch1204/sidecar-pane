@@ -8,7 +8,7 @@ import {loadFolders} from '../core/folders';
 import {changedLines, loadGit, pathKey, type GitState} from '../core/git';
 import {highlightLines} from '../core/highlight';
 import {formatMarkdown, isMarkdown} from '../core/markdown';
-import {newReadState, readSessions} from '../core/sessions';
+import {countChats, newReadState, readSessions} from '../core/sessions';
 import {openStore, take, type Store} from '../core/snapshot';
 import {visibleNodes} from '../core/tree';
 import {byFile, fileInTurn, loadTurns, type TurnChange} from '../core/turns';
@@ -19,6 +19,7 @@ import type {DiffGroup} from './diffrows';
 import {follow, scrollFromThumb, thumb} from './layout';
 import {footer, isAction, MENU_WIDTH, menuBar, menuBox, menus, pillRow, tabRow, type Command, type Hint, type Pill} from './menu';
 import {DOUBLE_CLICK_MS, MOUSE_OFF, MOUSE_ON, parseMouse, type MouseEvent} from './mouse';
+import {type Counts} from './splash';
 import {Screen} from './Screen';
 import {glyph, theme} from './theme';
 import {agentsBadge, agentsLines, agentsTabVisible, runningAgents} from './views/agents';
@@ -144,21 +145,28 @@ function useHistory(root: string, live: boolean, git: GitState | null) {
   const store = useRef<Store | null>(null);
   const latest = useRef(git);
   latest.current = git;
-  const [state, setState] = useState<{changes: TurnChange[]; agents: AgentRun[]; now: number; version: number; loaded: boolean}>({
-    changes: [], agents: [], now: Date.now(), version: 0, loaded: false,
-  });
+  const [state, setState] = useState<{
+    changes: TurnChange[]; agents: AgentRun[]; now: number; version: number; loaded: boolean; counts: Counts | null;
+  }>({changes: [], agents: [], now: Date.now(), version: 0, loaded: false, counts: null});
+  // How many chats there are, before anything has been opened. The first frame
+  // draws long before the read comes back and it has to say what it is doing.
+  const [chats] = useState(() => countChats(root));
 
   usePolling(async () => {
     store.current ??= openStore(root);
     const now = Date.now();
     const sessions = readSessions(root, reader.current);
     const agents = readAgents(root, agentReader.current);
+    // The transcripts are read; the commits are not. Say so now rather than at
+    // the end: on a big history the two are minutes apart.
+    const turns = sessions.reduce((n, session) => n + session.turns.length, 0);
+    setState(s => ({...s, counts: {chats: sessions.length, turns, agents: agents.length}}));
     if (store.current) await take(store.current, root, now);
     const changes = await loadTurns(root, store.current, sessions, now, latest.current);
-    setState(s => ({changes, agents, now, version: s.version + 1, loaded: true}));
+    setState(s => ({...s, changes, agents, now, version: s.version + 1, loaded: true}));
   }, [root], true, live);
 
-  return {...state, store: store.current};
+  return {...state, chats, store: store.current};
 }
 
 // Every folder of this repository the pane has something to say about. A
