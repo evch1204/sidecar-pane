@@ -1,8 +1,9 @@
 #!/usr/bin/env node
-// Connect, or disconnect, the limits feed.
+// Connect, or disconnect, the two things sidecar asks of Claude Code.
 //
 //   npm run connect      point Claude Code's status line at hooks/statusline.mjs
-//   npm run disconnect   put it back exactly as it was
+//                        and add hooks/attention.mjs to its permission prompts
+//   npm run disconnect   put both back exactly as they were
 //   node scripts/connect.mjs status
 //
 // Claude Code hands the "% of the 5 hour and weekly limit used" numbers to
@@ -11,6 +12,12 @@
 // There is one slot, so if something already owns it we write that whole
 // `statusLine` object down in <SIDECAR_HOME>/statusline-chain.json first and our
 // script runs it with the same input and prints its output. Both keep working.
+//
+// The permission prompt is the other half. Nothing records it — answer it and
+// it is gone — so `hooks/attention.mjs` is added to `hooks.PermissionRequest`,
+// beside whatever is already there. Hooks are a list, not a slot, so nothing
+// has to be chained and nothing of yours is touched: connect adds our one
+// entry, disconnect takes only that one back out.
 //
 // Nothing here is installed for you: one command does it, one undoes it, and a
 // timestamped copy of settings.json is written before any change.
@@ -33,14 +40,59 @@ const usageFile = () => path.join(sidecarHome(), 'usage.json');
 // and on Windows Claude Code runs the status line through Git Bash, where a
 // backslash is an escape.
 const slashes = text => text.replace(/\\/g, '/');
-const hookFile = () => slashes(path.resolve(fileURLToPath(import.meta.url), '..', '..', 'hooks', 'statusline.mjs'));
+const script = name => slashes(path.resolve(fileURLToPath(import.meta.url), '..', '..', 'hooks', name));
+const hookFile = () => script('statusline.mjs');
 const ourCommand = () => `node "${hookFile()}"`;
+const attentionCommand = () => `node "${script('attention.mjs')}"`;
 const fold = text => (process.platform === 'win32' ? text.toLowerCase() : text);
 
 // Ours is whatever runs our own script, however it was spelled.
 function isOurs(line) {
   const command = typeof line?.command === 'string' ? slashes(line.command) : '';
   return command !== '' && fold(command).includes(fold(hookFile()));
+}
+
+// The PermissionRequest entry we add, and how ours is told from anyone else's.
+// By name, not by path: a copy connected from another checkout of this repo is
+// still ours, and leaving it behind would write the note twice.
+const OURS = 'attention.mjs';
+const attentionEntry = () => ({
+  matcher: '*',
+  hooks: [{type: 'command', command: attentionCommand(), async: true, timeout: 5}],
+});
+
+const isAttention = entry =>
+  Array.isArray(entry?.hooks) &&
+  entry.hooks.some(one => typeof one?.command === 'string' && slashes(one.command).includes(OURS));
+
+const permissionHooks = data => data?.hooks?.PermissionRequest;
+const hasAttention = data => (Array.isArray(permissionHooks(data)) ? permissionHooks(data).some(isAttention) : false);
+
+// Never overwrite what is already there. If `hooks` is not the shape Claude
+// Code documents, stop and say so rather than guess at what was meant.
+function hookTrouble(data) {
+  const hooks = data.hooks;
+  if (hooks !== undefined && (!hooks || typeof hooks !== 'object' || Array.isArray(hooks))) return 'hooks is not an object';
+  const list = permissionHooks(data);
+  if (list !== undefined && !Array.isArray(list)) return 'hooks.PermissionRequest is not an array';
+  return '';
+}
+
+// Added at the end of the list, so whatever ran first still runs first.
+function addAttention(data) {
+  data.hooks ??= {};
+  data.hooks.PermissionRequest ??= [];
+  data.hooks.PermissionRequest.push(attentionEntry());
+}
+
+// Only ours comes out, and only the empty shells we would have left behind.
+function removeAttention(data) {
+  const list = permissionHooks(data);
+  if (!Array.isArray(list)) return;
+  const kept = list.filter(entry => !isAttention(entry));
+  if (kept.length) data.hooks.PermissionRequest = kept;
+  else delete data.hooks.PermissionRequest;
+  if (Object.keys(data.hooks).length === 0) delete data.hooks;
 }
 
 // A short name for whoever owns the slot now, for a message.
@@ -143,11 +195,19 @@ function connect() {
     return;
   }
 
-  const had = state.data.statusLine;
+  const trouble = hookTrouble(state.data);
+  if (trouble) {
+    refuse(`I did not change anything.\n\nIn ${slashes(state.file)}, ${trouble}.\nFix it and run npm run connect again.`);
+    return;
+  }
 
-  if (isOurs(had)) {
-    const chain = readChain();
-    const previous = previousOf(chain);
+  const had = state.data.statusLine;
+  const feedDone = isOurs(had);
+  const hookDone = hasAttention(state.data);
+  const chain = readChain();
+  const previous = previousOf(chain);
+
+  if (feedDone && hookDone) {
     if (previous && !chain?.previous) {
       // An old, hand-written chain file: keep it, in the shape we now read.
       writeChain(previous);
@@ -162,25 +222,30 @@ function connect() {
     return;
   }
 
-  const chained = had && typeof had === 'object';
+  const chained = !feedDone && had && typeof had === 'object';
   const backup = backupSettings(state);
   if (chained) writeChain(had);
-  state.data.statusLine = {type: 'command', command: ourCommand()};
+  if (!feedDone) state.data.statusLine = {type: 'command', command: ourCommand()};
+  if (!hookDone) addAttention(state.data);
   writeSettings(state);
 
-  say('Connected. The pane will show real percentages after Claude Code\'s next reply.\n');
+  say(feedDone
+    ? 'Connected the permission prompts. The status line was already sidecar.\n'
+    : 'Connected. The pane will show real percentages after Claude Code\'s next reply.\n');
   say(`  settings.json  ${slashes(state.file)}`);
-  say(`  statusLine     ${ourCommand()}`);
+  if (!feedDone) say(`  statusLine     ${ourCommand()}`);
+  if (!hookDone) say(`  hook           PermissionRequest  ${attentionCommand()}`);
   if (backup) say(`  backup         ${slashes(path.basename(backup))} (beside it)`);
   else say('  backup         none needed, the file did not exist yet');
   if (chained) {
     say(`  chained        ${ownerOf(had)}, saved in full to ${slashes(chainFile())}`);
     say('\nYour old status line still runs and still prints exactly what it printed before.');
     say('Sidecar only reads the numbers on the way past.');
-  } else {
+  } else if (!feedDone) {
     say('\nNothing was there before, so sidecar prints a short line of its own.');
   }
 
+  if (!hookDone) say('\nThe hook is added beside your other permission hooks, not over them. It prints\nnothing, so it never answers a prompt: it only writes down that one was asked.');
   say('\nTo undo: npm run disconnect');
 }
 
@@ -192,35 +257,45 @@ function disconnect() {
   }
 
   const had = state.data.statusLine;
-  if (!had) {
-    say('Not connected: there is no status line set. Nothing to change.');
+  const feedMine = isOurs(had);
+  const hookMine = hasAttention(state.data);
+
+  if (!feedMine && !hookMine) {
+    if (!had) say('Not connected: there is no status line set, and no hook of ours. Nothing to change.');
+    else {
+      say(`Not connected: the status line belongs to ${ownerOf(had)} now, not sidecar, and there is no hook of ours. I did not change anything.`);
+      say('Something may have rewritten it after you ran npm run connect.');
+    }
+
     return;
   }
 
-  if (!isOurs(had)) {
-    say(`Not connected: the status line belongs to ${ownerOf(had)} now, not sidecar. I did not change anything.`);
-    say('Something may have rewritten it after you ran npm run connect.');
-    return;
-  }
-
-  const previous = previousOf(readChain());
+  const previous = feedMine ? previousOf(readChain()) : null;
   const backup = backupSettings(state);
-  if (previous) state.data.statusLine = previous;
-  else delete state.data.statusLine;
+  if (feedMine) {
+    if (previous) state.data.statusLine = previous;
+    else delete state.data.statusLine;
+  }
+
+  if (hookMine) removeAttention(state.data);
   writeSettings(state);
 
   let removed = false;
-  try {
-    fs.rmSync(chainFile());
-    removed = true;
-  } catch {
-    // It was never written, or is already gone.
+  if (feedMine) {
+    try {
+      fs.rmSync(chainFile());
+      removed = true;
+    } catch {
+      // It was never written, or is already gone.
+    }
   }
 
   say('Disconnected. The pane will say the feed is quiet from now on.\n');
   say(`  settings.json  ${slashes(state.file)}`);
-  if (previous) say(`  statusLine     put back to ${ownerOf(previous)}`);
+  if (!feedMine) say(`  statusLine     left alone: it belongs to ${ownerOf(had) || 'nobody'} now, not sidecar`);
+  else if (previous) say(`  statusLine     put back to ${ownerOf(previous)}`);
   else say('  statusLine     removed, as there was none before');
+  if (hookMine) say('  hook           removed from PermissionRequest; your other hooks are untouched');
   if (removed) say(`  chain file     deleted: ${slashes(chainFile())}`);
   if (backup) say(`  backup         ${slashes(path.basename(backup))} (beside it)`);
   say(`\n${slashes(usageFile())} is left alone, so the last numbers are still there.`);
@@ -240,6 +315,14 @@ function status() {
     say(`  feed not connected: the status line belongs to ${ownerOf(state.data.statusLine)}`);
   } else {
     say('  feed not connected: no status line is set');
+  }
+
+  if (!state.broken) {
+    const trouble = hookTrouble(state.data);
+    const others = Array.isArray(permissionHooks(state.data)) ? permissionHooks(state.data).filter(entry => !isAttention(entry)).length : 0;
+    if (trouble) say(`  hook not read: ${trouble}`);
+    else if (hasAttention(state.data)) say(`  hook connected: PermissionRequest${others ? `, beside ${others} other${others === 1 ? '' : 's'}` : ''}`);
+    else say('  hook not connected: the pane cannot see a permission prompt');
   }
 
   const previous = previousOf(readChain());
