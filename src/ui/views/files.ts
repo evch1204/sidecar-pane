@@ -147,13 +147,14 @@ function peekLines(cols: number, root: string, peek: Peek, owner: string, sel: s
     const id = `g:${peek.path}`;
     const here = id === sel;
     const bg = here ? theme.surface2 : undefined;
-    const what = below ? 'enter jumps' : `enter shows ${Math.min(MORE_ROWS, left)}`;
+    const adds = Math.min(MORE_ROWS, left);
+    const what = below ? 'enter jumps' : `enter shows ${adds}`;
     const label = [seg(`${glyph.gap} ${rest}`, here ? theme.accent : theme.faint, {bg}), seg(`  ${glyph.sep}  ${what}`, theme.faint, {bg})];
     // The hint is the first thing to go in a narrow pane: the count matters more.
     const room = wellWidth(cols, true) - digits - 3;
     out.push(
       wellRow(cols, [sp(digits + 3, bg), ...(widthOf(label) <= room ? label : [label[0]!])], [], {
-        ...well, bg, id, pick: true, act: {type: 'more', path: peek.path},
+        ...well, bg, id, pick: true, hint: below ? 'jump' : `${adds} more lines`, act: {type: 'more', path: peek.path},
       }),
     );
   }
@@ -228,11 +229,16 @@ export function filesLines(input: FilesInput): Line[] {
     // every changed file: a folder is then a heading, not a control, so it
     // gets no chevron rather than one that does nothing.
     const fixed = input.changedOnly && node.isDir;
-    const mark = fixed ? sp(1) : chevron(node.isDir ? node.open : peeking, here);
+    const open = node.isDir ? node.open : peeking;
+    const mark = fixed ? sp(1) : chevron(open, here);
     const colour = node.isDir || change ? theme.ink : node.name.startsWith('.') ? theme.faint : theme.text;
+    // A folder opens, a file gets a peek under it, and both close again.
+    const hint = open ? 'close' : node.isDir ? 'open' : 'peek';
     out.push(
       pageRow(cols, [...guides, mark, sp(1), seg(node.isDir ? `${node.name}/` : node.name, colour, {bold: node.isDir})], right, {
-        bg, id, pick: true, act: fixed ? {type: 'none'} : {type: 'node', path: node.path, dir: node.isDir},
+        bg, id, pick: true,
+        ...(fixed ? {} : {hint}),
+        act: fixed ? {type: 'none'} : {type: 'node', path: node.path, dir: node.isDir},
       }),
     );
     if (peeking && peek) out.push(...peekLines(cols, input.root, peek, id, sel));
