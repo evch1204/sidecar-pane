@@ -89,6 +89,17 @@ export function projectDir(root: string): string {
   return path.join(claudeHome(), 'projects', slug);
 }
 
+// How many chats this project has, without opening any of them. The first
+// frame has to say something while the real read is still going, and one
+// `readdir` is the most it can afford.
+export function countChats(root: string): number {
+  try {
+    return fs.readdirSync(projectDir(root)).filter(name => name.endsWith('.jsonl')).length;
+  } catch {
+    return 0;
+  }
+}
+
 // A shell command that writes, as opposed to one that looks.
 const WRITER = /\b(sed\s+-i|tee|mv|cp|rm|rmdir|mkdir|touch|patch|chmod|npm\s+(?:i|install|ci)|git\s+(?:apply|checkout|restore|mv|rm|stash))\b/;
 const REDIRECT = /(?<![0-9&])>{1,2}(?!\s*(?:&|\/dev\/null))/;
