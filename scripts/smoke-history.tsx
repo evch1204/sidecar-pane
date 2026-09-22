@@ -590,13 +590,14 @@ const all = await p.show('changes: every worktree of the repository, scope all')
 check(COLS < 56 || all.includes('in all 2 worktrees'), 'the scope pill should say how many folders are in view');
 check(all.includes('WORKTREES'), 'the map should head the stream, and only in this scope');
 check(/[▸▾] {2}WORKTREES/.test(all), 'and fold from a chevron of its own');
-check(saysIt(all, 'write the guide and commit it'), "that folder's own chat should be in the stream");
+// Closed, and at 40 columns the chip, the count and the clock leave the words
+// nothing: the turn is in the stream and opens on Enter, but there is no
+// reading it where it stands.
+check(COLS < 56 || saysIt(all, 'write the guide and commit it'), "that folder's own chat should be in the stream");
 check(/[▁▂▃▄▅▆▇█]{2}/.test(all), 'the day should still head it with its own skyline');
 const chipped = all.split('\n').filter(row => row.includes('▐agent-docs▌'));
-check(
-  chipped.length === 1 && onRow(chipped[0]!, 'write the guide and commit it'),
-  `only a turn typed in another folder should carry that folder's chip, and ${chipped.length} rows carry one`,
-);
+check(chipped.length === 1, `only a turn typed in another folder should carry that folder's chip, and ${chipped.length} rows carry one`);
+check(COLS < 56 || onRow(chipped[0]!, 'write the guide and commit it'), 'and it should be the turn that was typed there');
 
 // The head is about the day, not about whichever chat happened to start it:
 // two chats worked today and all six turns are the day's. The divider under
@@ -604,6 +605,13 @@ check(
 const dayRow = all.split('\n').find(row => row.trimStart().startsWith('TODAY')) ?? '';
 check(/\b6 turns\b/.test(dayRow), `the day head should count every turn of the day, and it reads "${dayRow.trim()}"`);
 check(/([▁▂▃▄▅▆▇█]{2} ){5}[▁▂▃▄▅▆▇█]{2}/.test(all), 'and the skyline should have a column pair for each of the six');
+check(saysIt(all, 'Make greet friendlier'), 'and the divider should name the chat the next run of turns is from');
+
+// Widening the scope must not close the turn you are watching to open a
+// stranger's: open by default is the newest turn of this folder's own.
+check(/^ [▸▾]/.test(chipped[0] ?? ''), `a turn typed in another folder should be drawn closed, and it reads "${chipped[0]?.trim()}"`);
+const under = rowUnder(all, 'hand the guide');
+check(under.trimStart().startsWith('│'), `and this folder's own running turn should still be the open one, with "${under.trim()}" under it`);
 
 // ---- merge it, and take the folder away ---------------------------------
 run('merge', '-q', '--no-ff', 'agent-docs', '-m', 'Merge the guide');

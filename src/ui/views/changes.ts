@@ -1054,7 +1054,10 @@ function byTurn(ctx: Ctx): void {
 function stream(ctx: Ctx, folders: Folder[]): void {
   const {cols, changes, now, open} = ctx;
   const byAgent = turnAgents(changes, ctx.agents);
-  const newest = changes[changes.length - 1];
+  // The turn that starts open is the one you are in, which is the newest of
+  // this folder's own. Widening the scope must not close what you are watching
+  // to open a stranger's, and follow mode is aimed at the same turn.
+  const newest = [...changes].reverse().find(change => pathKey(change.folder) === pathKey(ctx.root)) ?? changes[changes.length - 1];
   // Flipped by hand, or the newest turn, but not both.
   const isOpen = (change: TurnChange) => open.turns.has(turnKey(change)) !== (change === newest);
   const days = daysOf(changes, now);
