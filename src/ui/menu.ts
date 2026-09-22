@@ -257,7 +257,9 @@ export function pillRow(cols: number, pills: Pill[], note: Seg[] = [], noteAct?:
   return draw(lit, lit.map(next), []);
 }
 
-export type Hint = [string, string];
+// A key, what it does, and the colour of those words when they are more than a
+// reminder — follow mode says it is on by lighting its own label.
+export type Hint = [key: string, label: string, tone?: string];
 
 export function footer(
   cols: number,
@@ -288,8 +290,8 @@ export function footer(
   const right = rightOf(label);
 
   const left: Seg[] = [sp(1)];
-  for (const [key, text] of hints) {
-    const next = [...(left.length > 1 ? [sp(2)] : []), seg(key, theme.text), seg(` ${text}`, theme.dim)];
+  for (const [key, text, tone] of hints) {
+    const next = [...(left.length > 1 ? [sp(2)] : []), seg(key, theme.text), seg(` ${text}`, tone ?? theme.dim)];
     if (widthOf(left) + widthOf(next) + widthOf(right) + 1 > cols) break;
     left.push(...next);
   }

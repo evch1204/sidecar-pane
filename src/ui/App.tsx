@@ -1088,24 +1088,28 @@ export function App({root, interactive, mouseDebug = false}: Props) {
 
   // What this row does first, then the way back out, then the menu that holds
   // everything else. A narrow pane keeps the ones at the front.
-  // A running fan-out changes what the row under the cursor is for, and a
-  // repository with more than one folder has one more key worth knowing.
-  const wtHint: Hint[] = worktrees.length > 1 ? [['w', 'worktree']] : [];
+  //
+  // The first hint is the row's own: only the view that built it knows what
+  // Enter will do there, and `open` is the answer when it did not say. The way
+  // back out is second, and only where there is something to go back to — a
+  // row inside something that is open is the one that has pins.
+  const verb: Hint = ['enter', current?.hint ?? 'open'];
+  const back: Hint[] = current?.pins?.length ? [['esc', 'back']] : [];
   const hints: Hint[] =
     slot === 'changes'
       ? inDiff
-        ? [['enter', 'fold'], ['esc', 'back'], ['m', 'menu'], ['↑↓', 'line'], [']', 'hunk'], ['o', 'open'], ['z', 'fold all']]
+        ? [verb, ...back, ['m', 'menu'], ['↑↓', 'line'], [']', 'hunk'], ['o', 'open'], ['z', 'fold all']]
         : agentsRunning
-          ? [...wtHint, ['enter', 'open an agent'], ['3', 'agents'], ['m', 'menu'], ['↑↓', 'move']]
-          : [...wtHint, ['enter', 'open'], ['esc', 'back'], ['m', 'menu'], ['↑↓', 'move'], [']', 'next'], ['v', 'group']]
+          ? [verb, ...back, ['3', 'agents'], ['m', 'menu'], ['↑↓', 'move']]
+          : [verb, ...back, ['m', 'menu'], ['↑↓', 'move'], [']', 'next'], ['v', 'group']]
       : slot === 'files'
         ? peekPath
-          ? [['o', 'read all'], ['esc', 'close'], ['m', 'menu'], [']', 'next change']]
-          : [['enter', 'peek'], ['m', 'menu'], ['↑↓', 'move'], ['o', 'read'], ['c', 'changed'], ['q', 'quit']]
+          ? [verb, ...back, ['o', 'read all'], ['m', 'menu'], [']', 'next change']]
+          : [verb, ...back, ['m', 'menu'], ['↑↓', 'move'], ['o', 'read'], ['c', 'changed'], ['q', 'quit']]
         : slot === 'reader'
           ? [['↑↓', 'line'], ['esc', 'back'], ['m', 'menu'], [']', 'change'], ['space', 'scroll'], ...(markdown ? [['r', raw ? 'page' : 'source'] as Hint] : [])]
           : slot === 'agents'
-            ? [['enter', 'open an agent'], ['esc', 'back'], ['m', 'menu'], ['↑↓', 'move']]
+            ? [verb, ...back, ['m', 'menu'], ['↑↓', 'move']]
             : [['↑↓', 'scroll'], ['m', 'menu'], ['q', 'quit']];
 
   // The last column is a minimap. The thumb is a background, so a change mark
