@@ -405,6 +405,10 @@ const click = (col: number, row: number) => `\u001B[<0;${col + 1};${row + 1}M`;
 const p = pane(project);
 await wait(1800);
 
+// The cursor opens on the turn you are in, and a short window has to scroll
+// past the head of the stream to reach it. `g` walks back up to the top, so
+// the map and the day are drawn whatever the pane's height.
+await p.press('g');
 const opening = await p.show('changes: the map, the day, and the turn you are in');
 check(opening.includes('TODAY'), 'the day should head the stream');
 check(opening.includes('WORKTREES'), 'a repository with two folders should head the stream with its map');
