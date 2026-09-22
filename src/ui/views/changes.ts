@@ -20,9 +20,8 @@ import {wrap} from '../util';
 // The Changes view is one stream, whichever folders are in scope. A day heads
 // it with its own skyline; a turn is a block whose chevron sits in column 1 and
 // whose rows all hang on the block's own line; a diff opens in a well under the
-// row of the file it belongs to.
-// Nothing is a box, nothing is shown "down there", and every row in the view
-// starts its text in the same column.
+// row of the file it belongs to. Nothing is a box, nothing is shown "down
+// there", and every row in the view starts its text in the same column.
 
 export type Open = {
   // Turns whose open state was flipped by hand. The newest turn starts open,
@@ -375,7 +374,7 @@ function fileRow(ctx: Ctx, key: string, rel: string, abs: string | null, left: S
   const live = o.live;
   ctx.out.push(
     streamRow(cols, [...left, ...(hunks ? [seg(`   ${plural(hunks, 'hunk')}`, theme.dim)] : [])], right, {
-      bg, id, pick: true, pins, live, act: {type: 'file', key}, ...(o.mark ? {mark: o.mark} : {}),
+      bg, id, pick: true, pins, live, hint: isOpen ? 'close diff' : 'diff', act: {type: 'file', key}, ...(o.mark ? {mark: o.mark} : {}),
     }),
   );
   if (!isOpen) return;
@@ -457,7 +456,7 @@ function fileRows(ctx: Ctx, change: TurnChange, agents: AgentRun[], rail: Rail):
   const moreId = `m:${key}`;
   ctx.out.push(
     streamRow(cols, [seg(glyph.closed, theme.dim), sp(1), seg(plural(rest, 'more file'), moreId === sel ? theme.accent : theme.dim)], [], {
-      ...rail, id: moreId, pick: true, bg: moreId === sel ? theme.surface2 : undefined, act: {type: 'toggle', set: 'more', key: `files:${key}`},
+      ...rail, id: moreId, pick: true, bg: moreId === sel ? theme.surface2 : undefined, hint: 'all files', act: {type: 'toggle', set: 'more', key: `files:${key}`},
     }),
   );
 }
@@ -476,7 +475,7 @@ function stepsRow(ctx: Ctx, change: TurnChange, agents: AgentRun[], rail: Rail):
   for (const action of turn.actions) tally.set(action.tool, (tally.get(action.tool) ?? 0) + 1);
   const summary = [...tally.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4).map(([tool, n]) => `${tool} ${n}`).join('  ');
   const last = turn.actions[turn.actions.length - 1]!;
-  const more = {...rail, id, pick: true, bg: here ? theme.surface2 : undefined, act: {type: 'toggle', set: 'steps', key} as const};
+  const more = {...rail, id, pick: true, bg: here ? theme.surface2 : undefined, hint: isOpen ? 'close' : 'steps', act: {type: 'toggle', set: 'steps', key} as const};
 
   ctx.out.push(
     live
@@ -519,7 +518,7 @@ function saysRows(ctx: Ctx, change: TurnChange, rail: Rail): void {
         ...rail,
         bg: here ? theme.surface2 : undefined,
         act: {type: 'toggle', set: 'says', key},
-        ...(i === 0 ? {id: saysId, pick: expands} : {}),
+        ...(i === 0 ? {id: saysId, pick: expands, hint: all ? 'close' : 'open'} : {}),
       }),
     );
   });
@@ -539,7 +538,7 @@ function commitRows(ctx: Ctx, change: TurnChange, branch: string, rail: Rail): v
     const rest = change.landed.length - shown.length;
     ctx.out.push(
       streamRow(cols, [seg(all ? glyph.open : glyph.closed, theme.dim), sp(1), seg(all ? 'fewer commits' : plural(rest, 'more commit'), here ? theme.accent : theme.dim)], [], {
-        ...rail, id, pick: true, bg: here ? theme.surface2 : undefined, act: {type: 'toggle', set: 'more', key},
+        ...rail, id, pick: true, bg: here ? theme.surface2 : undefined, hint: all ? 'close' : 'all commits', act: {type: 'toggle', set: 'more', key},
       }),
     );
   }
@@ -634,7 +633,7 @@ function pastTurn(ctx: Ctx, change: TurnChange, agents: AgentRun[], o: Block): v
     streamRow(cols, [...tag, seg(cut(change.turn.prompt, promptRoom(cols, tag)), here ? theme.ink : theme.text)], right, {
       bg: here ? theme.surface2 : undefined,
       mark: nodeOf(ctx, change, false, here, o.colour),
-      id, pick: true, act: {type: 'turn', key},
+      id, pick: true, hint: 'open', act: {type: 'turn', key},
     }),
   );
 }
@@ -762,7 +761,7 @@ function chartRows(ctx: Ctx, change: TurnChange, agents: AgentRun[], rail: Rail)
   ctx.out.push(
     streamRow(cols, left, [seg(`${tokens(spent)}${tight ? '' : ' tokens'}`, theme.dim)], {
       ...rail,
-      ...(crowd ? {id: rollId, pick: true, bg: here ? theme.surface2 : undefined, act: {type: 'toggle', set: 'folded', key: rollKey}} : {}),
+      ...(crowd ? {id: rollId, pick: true, bg: here ? theme.surface2 : undefined, hint: rolled ? 'unfold' : 'fold', act: {type: 'toggle', set: 'folded', key: rollKey}} : {}),
     }),
   );
 
@@ -814,7 +813,7 @@ function chartRow(ctx: Ctx, node: AgentNode, change: TurnChange, pins: string[],
         seg(span((status === 'running' ? now : agent.endedAt) - agent.startedAt).padStart(7), theme.dim),
         ...(tight ? [] : [sp(1), seg(tokens(agent.tokens).padStart(5), theme.faint)]),
       ],
-      {id, pick: true, pins, live, bg: here ? theme.surface2 : undefined, act: {type: 'toggle', set: 'agents', key: agent.id}},
+      {id, pick: true, pins, live, bg: here ? theme.surface2 : undefined, hint: isOpen ? 'close' : 'agent', act: {type: 'toggle', set: 'agents', key: agent.id}},
     ),
   );
 
@@ -1078,7 +1077,7 @@ function byFile(ctx: Ctx): void {
           ...(tight ? [] : [...(history.measured ? sizeCells(history.added, history.removed) : [sp(SIZE_CELLS)]), sp(2)]),
           ...(history.measured ? counts(history.added, history.removed) : [seg('not recorded', theme.faint, {italic: true})]),
         ],
-        {mark: chevron(isOpen, here), id, pick: true, bg: here ? theme.surface2 : undefined, act: {type: 'toggle', set: 'hists', key: history.rel}},
+        {mark: chevron(isOpen, here), id, pick: true, bg: here ? theme.surface2 : undefined, hint: isOpen ? 'close' : 'open', act: {type: 'toggle', set: 'hists', key: history.rel}},
       ),
     );
     if (!isOpen) continue;
@@ -1126,7 +1125,7 @@ function flat(ctx: Ctx): void {
         {
           mark: chevron(open.files.has(key), here),
           bg: here ? theme.surface2 : undefined,
-          id: `f:${key}`, pick: true, act: {type: 'file', key},
+          id: `f:${key}`, pick: true, hint: open.files.has(key) ? 'close diff' : 'diff', act: {type: 'file', key},
         },
       ),
     );
