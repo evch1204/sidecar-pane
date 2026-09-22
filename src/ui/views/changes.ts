@@ -10,7 +10,7 @@ import {modelName} from '../../core/usage';
 import type {WorktreeRun} from '../../core/worktrees';
 import {
   blankRow, brief, chevron, chip, counts, cut, INDENT, INDENT2, num, pageRow, plural, sep, seg, sizeCells, sizeLit, SIZE_CELLS,
-  skylineCol, sp, span, splitBar, streamRoom, streamRow, tokens, width, widthOf,
+  skylineCol, sp, span, spinner, splitBar, streamRoom, streamRow, tokens, turnMark, width, widthOf,
   type Group, type Line, type Seg, type Zone,
 } from '../cells';
 import {diffLines, viewRows, type DiffGroup} from '../diffrows';
@@ -102,7 +102,6 @@ const QUIET_SHOWN = 5 * 60_000;
 
 export const turnKey = (change: TurnChange): string => `${change.chatId}:${change.turn.id}`;
 export const fileKey = (scope: string, rel: string): string => `${scope}|${rel}`;
-export const spinner = (frame: number): string => glyph.spinner[frame % glyph.spinner.length]!;
 
 export function dayLabel(at: number, now: number): string {
   const startOf = (ms: number) => new Date(new Date(ms).toDateString()).getTime();
@@ -254,15 +253,6 @@ type Block = {
   tag?: Seg[];
 };
 
-// The mark in column 1. A turn opens and closes in place, so it carries the
-// same chevron every such row carries: dim, accent under the cursor, the
-// folder's hue when the stream is covering more than one. While it runs the
-// spinner says so instead, and Enter there still closes it.
-function nodeOf(ctx: Ctx, change: TurnChange, isOpen: boolean, here: boolean, colour?: string): Seg {
-  if (change.running) return seg(spinner(ctx.frame), theme.accent);
-  return seg(isOpen ? glyph.open : glyph.closed, here ? theme.accent : colour ?? theme.dim);
-}
-
 // Your own words are the title: they are the reason the files moved. One line
 // of them, and the row itself opens the whole prompt when there is more.
 function titleRow(ctx: Ctx, change: TurnChange, o: Block): void {
@@ -286,7 +276,7 @@ function titleRow(ctx: Ctx, change: TurnChange, o: Block): void {
         // Enter on any row of the title closes the turn, because every one of
         // them is the turn's own row.
         bg, live, act, hint: 'close',
-        ...(i === 0 ? {mark: nodeOf(ctx, change, true, here, o.colour), id, pick: true} : {pins: [id]}),
+        ...(i === 0 ? {mark: turnMark(change.running, true, here, ctx.frame, o.colour), id, pick: true} : {pins: [id]}),
       }),
     );
   });
@@ -648,7 +638,7 @@ function pastTurn(ctx: Ctx, change: TurnChange, agents: AgentRun[], o: Block): v
   ctx.out.push(
     streamRow(cols, [...tag, seg(cut(change.turn.prompt, promptRoom(cols, tag)), here ? theme.ink : theme.text)], right, {
       bg: here ? theme.surface2 : undefined,
-      mark: nodeOf(ctx, change, false, here, o.colour),
+      mark: turnMark(change.running, false, here, ctx.frame, o.colour),
       id, pick: true, hint: 'open', act: {type: 'turn', key},
     }),
   );
@@ -1182,9 +1172,7 @@ export function changesLines(input: ChangesInput): Line[] {
         ? input.flat === null
           ? 'This folder is not a git repo, so there is no last commit to compare with. "By turn" still works.'
           : 'Nothing has changed since the last commit. Every turn is still there under "By turn".'
-        : input.changes.length === 0
-          ? 'No Claude chats have touched this project yet. Start Claude Code in this folder.'
-          : 'Nothing changed in these turns. Press v for everything since the last commit.';
+        : 'Nothing changed in these turns. Press v for everything since the last commit.';
     for (const text of wrap(message, input.cols - 4)) ctx.out.push(pageRow(input.cols, [seg(text, theme.dim)]));
   }
 

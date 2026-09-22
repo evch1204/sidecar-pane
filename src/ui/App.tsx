@@ -15,7 +15,7 @@ import {visibleNodes} from '../core/tree';
 import {byFile, fileInTurn, loadTurns, type TurnChange} from '../core/turns';
 import {newUsageState, readLimits, readSpends, type Limits, type Spend} from '../core/usage';
 import {readWorktrees, type WorktreeRun} from '../core/worktrees';
-import {brief, cut, dimmed, overlay, seg, sp, widthOf, type Act, type Group, type Line, type Seg, type View} from './cells';
+import {brief, cut, dimmed, overlay, seg, sp, spinner, widthOf, type Act, type Group, type Line, type Seg, type View} from './cells';
 import type {DiffGroup} from './diffrows';
 import {follow as keepInView, scrollFromThumb, thumb} from './layout';
 import {footer, isAction, MENU_WIDTH, menuBar, menuBox, menus, pillRow, tabRow, type Command, type Hint, type Pill} from './menu';
@@ -24,7 +24,7 @@ import {splashLines, type Counts} from './splash';
 import {Screen} from './Screen';
 import {glyph, theme} from './theme';
 import {agentsBadge, agentsLines, agentsTabVisible, runningAgents} from './views/agents';
-import {changesLines, fileKey, spinner, turnKey, type Open} from './views/changes';
+import {changesLines, fileKey, turnKey, type Open} from './views/changes';
 import {
   changedPlaces, filesLines, firstReadId, MORE_ROWS, nodeId, paperMeasure, peekEnd, readerHead, readerIdAt,
   readerLineOf, readerLines, type Marks,

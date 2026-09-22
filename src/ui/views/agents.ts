@@ -6,11 +6,11 @@ import {modelName} from '../../core/usage';
 import type {WorktreeRun} from '../../core/worktrees';
 import {
   blankRow, brief, chevron, chip, countWord, cut, INDENT, INDENT2, padTo, pageRow, RIGHT_PAD, seg, sep, sizeCells, sp,
-  span, streamRoom, streamRow, tokens, width, widthOf, type Line, type Seg,
+  span, spinner, streamRoom, streamRow, tokens, turnMark, width, widthOf, type Line, type Seg,
 } from '../cells';
 import {glyph, hues, theme} from '../theme';
 import {wrap} from '../util';
-import {agentsByTurn, agentsFlat, agentStatus, agentTree, clock, dayLabel, spinner, turnKey, type Open} from './changes';
+import {agentsByTurn, agentsFlat, agentStatus, agentTree, clock, dayLabel, turnKey, type Open} from './changes';
 
 // When Claude hands work to subagents, its own screen mostly goes quiet. This
 // view is the part you cannot see from the terminal: who was started, for which
@@ -444,13 +444,6 @@ function branchRow(ctx: Ctx, slot: Slot, group: Group, pins: string[]): void {
 
 // ---- a turn ----------------------------------------------------------------
 
-// A turn's own mark, by the same rule the Changes view goes by: a chevron for
-// a turn you can open or close, and the spinner while it is still running,
-// which Enter still closes. The two views keep a copy each for now, so the
-// rule can be changed in one place once both have landed.
-const turnMark = (change: TurnChange, isOpen: boolean, here: boolean, frame: number): Seg =>
-  change.running ? seg(spinner(frame), theme.accent) : chevron(isOpen, here);
-
 // A past turn is one row: the prompt, how many agents it started and how long
 // they took, and when it was. Enter opens the block in its place.
 function closedBlock(input: AgentsInput, change: TurnChange, agents: AgentRun[]): Line {
@@ -468,7 +461,7 @@ function closedBlock(input: AgentsInput, change: TurnChange, agents: AgentRun[])
     id,
     pick: true,
     hint: 'open',
-    mark: turnMark(change, false, here, input.frame),
+    mark: turnMark(change.running, false, here, input.frame),
     bg: here ? theme.surface2 : undefined,
     act: {type: 'turn', key},
   });
@@ -496,7 +489,7 @@ function openBlock(input: AgentsInput, out: Line[], change: TurnChange, agents: 
       id,
       pick: true,
       hint: 'close',
-      mark: turnMark(change, true, here, input.frame),
+      mark: turnMark(change.running, true, here, input.frame),
       bg: here ? theme.surface2 : undefined,
       act: {type: 'turn', key},
     }),

@@ -1,8 +1,7 @@
 import {
-  bigDigits, bigWidth, cut, pageRow, plural, RIGHT_PAD, seg, sep, sp, widthOf, type Line, type Seg,
+  bigDigits, bigWidth, cut, pageRow, plural, RIGHT_PAD, seg, sep, sp, spinner, widthOf, type Line, type Seg,
 } from './cells';
 import {theme} from './theme';
-import {spinner} from './views/changes';
 
 // The card the pane draws before it has anything to show: on the first frame,
 // while the chats are being read, and in a folder Claude Code has never been

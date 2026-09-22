@@ -1,4 +1,5 @@
 import {fit, RIGHT_PAD, seg, sp, widthOf, type Act, type Group, type Line, type Seg, type View, type Zone} from './cells';
+import {NAME} from './splash';
 import {glyph, theme} from './theme';
 
 // The chrome: the menu bar on top, the tabs, the pills that say what state the
@@ -86,7 +87,7 @@ export function menus(state: MenuState): Menu[] {
 
   return [
     {
-      title: 'Sidecar',
+      title: NAME,
       items: [
         {label: 'Follow', key: 'f', checked: state.follow, command: {do: 'follow'}},
         {label: 'Mouse', key: 'M', checked: state.mouse, command: {do: 'mouse'}},

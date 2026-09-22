@@ -134,6 +134,19 @@ export function pageRow(cols: number, left: Seg[] = [], right: Seg[] = [], more:
 export const chevron = (isOpen: boolean, here: boolean): Seg =>
   seg(isOpen ? glyph.open : glyph.closed, here ? theme.accent : theme.dim);
 
+// Which frame of the one spinner the pane has to draw now.
+export const spinner = (frame: number): string => glyph.spinner[frame % glyph.spinner.length]!;
+
+// A turn's own mark, wherever a turn is drawn. It opens and closes in place,
+// so it carries the chevron every such row carries — in the folder's hue
+// where the stream is covering more than one — and while it runs the spinner
+// says that instead. Enter on the spinner still closes it.
+export const turnMark = (running: boolean, isOpen: boolean, here: boolean, frame: number, colour?: string): Seg => {
+  if (running) return seg(spinner(frame), theme.accent);
+  const mark = chevron(isOpen, here);
+  return colour && !here ? {...mark, color: colour} : mark;
+};
+
 // The left line. Column 1 carries a block's own mark on its header row and the
 // rail on every row under it, blank rows included, so the line never breaks.
 const spineMark = (live?: boolean): Seg => seg(glyph.spine, live ? theme.accent : theme.spine);
