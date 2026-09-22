@@ -62,16 +62,25 @@ export type TurnGit = 'none' | 'uncommitted' | 'committed' | 'merged';
 
 const stats = new Map<string, ChangedFile[]>();
 
-// A turn ends when the transcript says it ended, not when it goes quiet. This
-// is only the bound on the other case: Claude Code was closed mid-reply, so
+// A turn ends when the transcript says it ended, not when it goes quiet. These
+// are only the bound on the other case: Claude Code was closed mid-reply, so
 // nothing will ever write the line that ends the turn, and a turn with no end
 // would otherwise read as running for ever.
+//
+// Between calls there is nothing to wait for, so two minutes of silence is
+// already too long. Inside one there is: a call that has not come back writes
+// nothing while it runs, and Claude Code's own Bash timeout stops at ten
+// minutes — the same two bounds the agents go by. Without the longer one a
+// slow command, or a permission prompt nobody has answered, read as your turn.
 const QUIET = 120_000;
+const WAITING = 12 * 60_000;
 
 // Whether a turn is still going. The newest turn of a chat has no `next`, and
 // anything with one is over by definition.
 export function isRunning(turn: Turn, next: Turn | undefined, now: number): boolean {
-  return !next && !turn.ended && now - turn.endedAt < QUIET;
+  if (next || turn.ended) return false;
+  const last = turn.actions[turn.actions.length - 1];
+  return now - turn.endedAt < (last && !last.done ? WAITING : QUIET);
 }
 
 function claimed(root: string, turn: Turn): ChangedFile[] {
