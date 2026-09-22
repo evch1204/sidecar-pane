@@ -2,6 +2,7 @@ import path from 'node:path';
 import {useEffect, useMemo, useRef, useState} from 'react';
 import {useApp, useInput, useStdout} from 'ink';
 import {newAgentState, readAgents, type AgentRun} from '../core/agents';
+import {attention, type Attention} from '../core/attention';
 import {expandGap, loadDiff, type DiffLine, type DiffState} from '../core/diff';
 import {readFileView, type FileView} from '../core/file';
 import {loadFolders} from '../core/folders';
@@ -14,7 +15,7 @@ import {visibleNodes} from '../core/tree';
 import {byFile, fileInTurn, loadTurns, type TurnChange} from '../core/turns';
 import {newUsageState, readLimits, readSpends, type Limits, type Spend} from '../core/usage';
 import {readWorktrees, type WorktreeRun} from '../core/worktrees';
-import {dimmed, overlay, seg, sp, widthOf, type Act, type Group, type Line, type Seg, type View} from './cells';
+import {brief, cut, dimmed, overlay, seg, sp, widthOf, type Act, type Group, type Line, type Seg, type View} from './cells';
 import type {DiffGroup} from './diffrows';
 import {follow, scrollFromThumb, thumb} from './layout';
 import {footer, isAction, MENU_WIDTH, menuBar, menuBox, menus, pillRow, tabRow, type Command, type Hint, type Pill} from './menu';
@@ -50,6 +51,10 @@ const SPIN_MS = 250;
 const WHEEL_ROWS = 3;
 const GROUPS: Group[] = ['turn', 'file', 'flat'];
 const GROUP_PILL: Record<Group, string> = {turn: 'By turn', file: 'By file', flat: 'Uncommitted'};
+
+// The columns the bar gives a tool's name. Long enough for `WebFetch`, and the
+// elapsed time beside it is the half of `⠧ Bash 4m` that never gives way.
+const TOOL_COLS = 8;
 
 const NONE: ReadonlySet<string> = new Set();
 const CLOSED: Open = {turns: NONE, files: NONE, more: NONE, steps: NONE, says: NONE, agents: NONE, folded: NONE, hists: NONE};
@@ -147,7 +152,8 @@ function useHistory(root: string, live: boolean, git: GitState | null) {
   latest.current = git;
   const [state, setState] = useState<{
     changes: TurnChange[]; agents: AgentRun[]; now: number; version: number; loaded: boolean; counts: Counts | null;
-  }>({changes: [], agents: [], now: Date.now(), version: 0, loaded: false, counts: null});
+    note: Attention | null;
+  }>({changes: [], agents: [], now: Date.now(), version: 0, loaded: false, counts: null, note: null});
   // How many chats there are, before anything has been opened. The first frame
   // draws long before the read comes back and it has to say what it is doing.
   const [chats] = useState(() => countChats(root));
@@ -161,9 +167,13 @@ function useHistory(root: string, live: boolean, git: GitState | null) {
     // the end: on a big history the two are minutes apart.
     const turns = sessions.reduce((n, session) => n + session.turns.length, 0);
     setState(s => ({...s, counts: {chats: sessions.length, turns, agents: agents.length}}));
+    // Claude Code asking to run something is the one thing the transcript
+    // never records, so the note the hook left is read against the transcript
+    // that has just been read, every poll.
+    const note = attention(root, sessions, now);
     if (store.current) await take(store.current, root, now);
     const changes = await loadTurns(root, store.current, sessions, now, latest.current);
-    setState(s => ({...s, changes, agents, now, version: s.version + 1, loaded: true}));
+    setState(s => ({...s, changes, agents, now, note, version: s.version + 1, loaded: true}));
   }, [root], true, live);
 
   return {...state, chats, store: store.current};
@@ -536,13 +546,25 @@ export function App({root, interactive, mouseDebug = false}: Props) {
   // Reading comes first while it lasts: nothing else is known yet. Then agents
   // — while a fan-out is running, how many of them there are is the news, and
   // the turn they belong to is working by definition.
+  //
+  // Then the one word that is about you rather than about Claude. It is keyed
+  // on a turn that has not ended and a question nobody has answered, never on
+  // the turn running: a turn parked on a permission prompt appends nothing at
+  // all, and waiting is exactly what it is doing.
+  const lastAction = newest?.turn.actions[newest.turn.actions.length - 1];
+  const asking = Boolean(newest && !newest.turn.ended && (newest.turn.asking || history.note));
+  const sameDay = (ms: number) => new Date(ms).toDateString() === new Date(now).toDateString();
   const status: Seg[] = !history.loaded
     ? [seg(spinner(frame), theme.accent), seg(' reading', theme.dim)]
     : agentsRunning
       ? [seg(spinner(frame), theme.accent), seg(` ${agentsRunning} agent${agentsRunning === 1 ? '' : 's'}`, theme.ink)]
-      : working
-        ? [seg(spinner(frame), theme.accent), seg(' working', theme.ink)]
-        : [seg(glyph.dot, theme.faint), seg(' idle', theme.dim)];
+      : asking
+        ? [seg(glyph.dot, theme.warn), seg(' asking you', theme.warn)]
+        : working && newest
+          ? [seg(spinner(frame), theme.accent), seg(` ${lastAction ? `${cut(lastAction.tool, TOOL_COLS)} ` : ''}${brief(now - newest.turn.at)}`, theme.ink)]
+          : newest?.turn.ended && sameDay(newest.turn.endedAt)
+            ? [seg(glyph.dot, theme.ink), seg(' your turn', theme.text)]
+            : [seg(glyph.dot, theme.faint), seg(' idle', theme.dim)];
   // What is left of the bar once the menus and the status have had their
   // columns. The meters shrink in steps and then go, so the menus always fit.
   const barLeft = 2 + list.reduce((n, m) => n + m.title.length + 2, 0);
