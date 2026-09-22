@@ -52,9 +52,13 @@ function note(data) {
     transcriptPath,
     transcriptSize,
   };
-  // Written whole or not at all: the pane may read it mid-write.
-  fs.writeFileSync(`${file}.tmp`, JSON.stringify(saved));
-  fs.renameSync(`${file}.tmp`, file);
+  // Written whole or not at all: the pane may read it mid-write. The scratch
+  // name carries this process's id, because two Claude Code sessions in one
+  // folder can raise a prompt at the same moment and one fixed name would let
+  // them write over each other's half-written file.
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(saved));
+  fs.renameSync(tmp, file);
 }
 
 let input = '';
