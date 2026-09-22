@@ -410,9 +410,9 @@ Decisions, and why:
   merged 11:56`, `removed`, `not recorded`, `↑1 · not in demo yet`, or `clean`.
   One thing, because the first one that applies is the whole truth about that
   folder. At 40 columns the count gives way and the right side reads `not
-  merged`: which folder it is not in is the part you already know. *Open: after
-  the folder is merged and deleted the left side still reads `0 files ▄▄▄▄▄`,
-  which is a count of a folder that is gone rather than a count of nothing.*
+  merged`: which folder it is not in is the part you already know. Once the
+  folder is merged, removed or never recorded there is nothing left to count,
+  so the left side is `in agent-docs` alone rather than a count of nothing.
 - **Opening such an agent lists that folder's own files**, read from its git,
   as text rather than as rows that open: the diff for them is over there and
   nothing here could open it. The old `wrote …` line looked those files up in
@@ -514,9 +514,10 @@ hang them on.
   agent of its chats is working in, or worked in today. `all` is every worktree
   of the repository. `w`, or the scope pill, switches. The wider scope adds
   exactly two things to the same stream — the map, which folds from a chevron in
-  column 1, and the chip and hue on a turn from another folder. *Open: in `all`
-  the day's head still counts the turns of one chat and carries that chat's
-  title, not the day's.*
+  column 1, and the chip and hue on a turn from another folder. The day's head
+  counts every turn of the day across its chats, a divider names the chat each
+  run of turns belongs to, and the turn that starts open is still this
+  folder's own newest, not the newest by the clock.
 - **`all` really does widen the data.** A chat is keyed by the folder it was
   typed in, so a chat that ran in another worktree has a transcript directory
   of its own that is invisible from here. In `all`, `src/core/folders.ts`
