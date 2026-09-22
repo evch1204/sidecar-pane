@@ -708,6 +708,42 @@ export const agentsFlat = (nodes: AgentNode[]): AgentNode[] => nodes.flatMap(nod
 // nesting tells you.
 const TREE_MAX = 4;
 
+// A folder's name in a row. Its branch says more than the folder it happens to
+// be checked out into, except for the two folders you already know by name.
+const folderLabel = (wt: WorktreeRun): string => cut(wt.here || wt.main ? wt.name : wt.branch || wt.name, 12);
+
+// The folder an agent worked in, when it was not this one: its meta file names
+// the worktree it was given, or its transcript's `cwd` is another folder of
+// the same repository.
+function agentFolder(ctx: Ctx, agent: AgentRun): WorktreeRun | undefined {
+  const folder = agent.worktree?.path || agent.cwd;
+  if (!folder || pathKey(folder) === pathKey(ctx.root)) return undefined;
+  return ctx.worktrees?.find(wt => pathKey(wt.path) === pathKey(folder));
+}
+
+// Whether any of that folder's work has arrived where you are. The first of
+// these that applies is the whole truth about it, so the row says one thing.
+function factState(ctx: Ctx, wt: WorktreeRun): Seg[] {
+  const agent = [...wt.agents].reverse().find(run => statusOf(run, ctx.now) === 'running');
+  if (agent) return [seg(spinner(ctx.frame), theme.accent), seg(` ${modelName(agent.model)} ${glyph.sep} ${brief(ctx.now - agent.startedAt)}`, theme.text)];
+  if (wt.merged) return [seg(`${glyph.check} merged${wt.mergedAt ? ` ${clock(wt.mergedAt)}` : ''}`, theme.add)];
+  if (wt.removed) return [seg('removed', theme.faint)];
+  // Nothing wrote its head down before the folder went, so where it got to
+  // cannot be told either way.
+  if (wt.gone && !wt.known) return [seg('not recorded', theme.faint, {italic: true})];
+  if (wt.ahead > 0 || wt.dirty > 0) {
+    // A narrow row cannot hold both how far ahead it is and where it is not,
+    // and which of the two folders it is not in is the part you already know.
+    if (ctx.cols < NARROW) return [seg('not merged', theme.faint, {italic: true})];
+    return [
+      ...(wt.ahead ? [seg(`${glyph.ahead}${wt.ahead}`, theme.dim), seg(` ${glyph.sep} `, theme.faint)] : []),
+      seg(`not in ${path.basename(ctx.root)} yet`, theme.faint, {italic: true}),
+    ];
+  }
+
+  return [seg('clean', theme.faint)];
+}
+
 // The chart's own head row: the count first, then how they are getting on,
 // with the tokens they have spent on the right. A crowd rolls into this row.
 function chartRows(ctx: Ctx, change: TurnChange, agents: AgentRun[], rail: Rail): void {
@@ -798,16 +834,24 @@ function chartRow(ctx: Ctx, node: AgentNode, change: TurnChange, pins: string[],
     row([sp(1), seg(glyph.elbow, theme.faint), sp(2), seg(last.tool.padEnd(6), theme.dim), seg(target(ctx.root, last), theme.text)]);
   }
 
-  // How much it has done, and what it left behind.
-  const wrote = agent.wrote.map(file => path.basename(file));
-  const facts =
-    status === 'running' || wrote.length === 0
-      ? plural(agent.toolUses, 'tool use')
-      : `${plural(agent.toolUses, 'tool use')}  ${glyph.sep}  wrote ${wrote.slice(0, TAGS_SHOWN).join(', ')}${wrote.length > TAGS_SHOWN ? ` +${wrote.length - TAGS_SHOWN}` : ''}`;
-  if (agent.toolUses || wrote.length) row([seg(cut(facts, roomOf(cols) - widthOf(under)), theme.faint)]);
+  // A worktree is where an agent worked, never a block of the stream, so this
+  // one row is the whole of it: the folder, how much is in it, and whether any
+  // of that has arrived where you are.
+  const wt = agentFolder(ctx, agent);
+  if (wt) {
+    const n = wt.files.length;
+    const left = [seg('in ', theme.faint), seg(folderLabel(wt), theme.text)];
+    // At 40 columns the words on the right are the news, so the count gives way.
+    if (!tight) {
+      if (status === 'running') left.push(seg(`   ${plural(n, 'file')} so far`, theme.dim));
+      else left.push(seg(`   ${plural(n, 'file')} `, theme.dim), ...sizeCells(wt.lines.added, wt.lines.removed));
+    }
+
+    row(left, factState(ctx, wt));
+  }
 
   if (!isOpen) return;
-  row([seg(`${agent.type}  ${glyph.sep}  ${modelName(agent.model)}  ${glyph.sep}  ${tokens(agent.tokens)}`, theme.faint)]);
+  row([seg(`${agent.type}  ${glyph.sep}  ${modelName(agent.model)}  ${glyph.sep}  ${plural(agent.toolUses, 'tool use')}  ${glyph.sep}  ${tokens(agent.tokens)}`, theme.faint)]);
   // The notification says how it ended; without one the quiet is only a guess,
   // so the sentence stays vaguer.
   if (status === 'stopped') {
@@ -816,10 +860,33 @@ function chartRow(ctx: Ctx, node: AgentNode, change: TurnChange, pins: string[],
     row([seg(why, theme.warn)]);
   }
 
-  for (const file of agent.wrote) {
-    const rel = path.relative(ctx.root, file).split(path.sep).join('/');
-    const stat = change.files.find(f => f.path === file);
-    row([sp(1), ...pathSegs(rel, false)], stat?.known ? counts(stat.added, stat.removed) : []);
+  if (wt) {
+    // The files of that folder's own git, as text: the diff for them lives
+    // over there, and nothing here could open it.
+    const files: ChangedFile[] = wt.files.map(stat => ({
+      rel: stat.rel, path: path.resolve(wt.path, stat.rel), status: stat.status, added: stat.added, removed: stat.removed, known: true,
+    }));
+    let shown = 0;
+    for (const group of groupByFolder(files)) {
+      if (shown >= FILES_SHOWN) break;
+      row([seg(group.key, theme.dim)]);
+      for (const {file, label} of group.files.slice(0, FILES_SHOWN - shown)) {
+        row(
+          [sp(1), seg(LETTER[file.status], LETTER_COLOUR[file.status], {bold: true}), sp(2), seg(label, theme.ink)],
+          [...(tight ? [] : [...sizeCells(file.added, file.removed), sp(2)]), ...counts(file.added, file.removed)],
+        );
+        shown++;
+      }
+    }
+
+    const rest = files.length - shown;
+    if (rest > 0) row([seg(plural(rest, 'more file'), theme.faint)]);
+  } else {
+    for (const file of agent.wrote) {
+      const rel = path.relative(ctx.root, file).split(path.sep).join('/');
+      const stat = change.files.find(f => f.path === file);
+      row([sp(1), ...pathSegs(rel, false)], stat?.known ? counts(stat.added, stat.removed) : []);
+    }
   }
 
   for (const step of agent.steps.slice(-5)) {
@@ -847,7 +914,7 @@ function foldersInScope(ctx: Ctx): Folder[] {
     // The pane's folder is the accent, the main checkout is quiet, and every
     // other folder gets a hue of its own.
     colour: wt.here ? theme.accent : wt.main ? theme.dim : hueOf(hue++),
-    label: cut(wt.here || wt.main ? wt.name : wt.branch || wt.name, 12),
+    label: folderLabel(wt),
   }));
 }
 
