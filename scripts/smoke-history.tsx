@@ -471,6 +471,17 @@ check(saysIt(opening, 'in its own worktree'), 'and carry the end of them too, wr
 check(spinning(p.bar(), '1 agent'), `the bar should count the agent that is running, and it reads "${p.bar().trim()}"`);
 check(!saysIt(opening, 'w worktree'), 'and the footer should not spend a hint on the scope key');
 
+// The footer is the only sign follow is on, so it has to survive the widest
+// label the pane draws: this folder is `demo • improve-greet`, with an agent
+// running, which is the row the owner's own pane has.
+// The `g` above was a key press like any other, so follow is paused here.
+check(COLS < 62 || /f follow(?!ing)/.test(p.foot()), `paused, the footer should offer follow back, and it reads "${p.foot().trim()}"`);
+await p.press('f');
+await wait(300);
+check(COLS < 62 || p.foot().includes('f following'), `and while it is on the footer should say so, and it reads "${p.foot().trim()}"`);
+await p.press('g');
+await wait(300);
+
 // ---- the agent that worked in a worktree of its own ----------------------
 // One row under the agent says the whole of it: where it worked, how much is
 // there, and whether any of that has arrived in this folder yet.

@@ -1197,14 +1197,16 @@ export function App({root, interactive, mouseDebug = false}: Props) {
   const back: Hint[] = current?.pins?.length ? [['esc', 'back']] : [];
   // Follow mode says which it is where it is turned on and off: lit while the
   // pane is opening the running turn's files, quiet while the page is yours.
+  // It sits at the front because it is the only sign the pane is following,
+  // and the footer drops from the back.
   const trail: Hint = follow === 'on' ? ['f', 'following', theme.accent] : ['f', 'follow'];
   const hints: Hint[] =
     slot === 'changes'
       ? inDiff
         ? [verb, ...back, ['m', 'menu'], ['↑↓', 'line'], [']', 'hunk'], ['o', 'open'], ['z', 'fold all']]
         : agentsRunning
-          ? [verb, ...back, ['3', 'agents'], ['m', 'menu'], ['↑↓', 'move'], trail]
-          : [verb, ...back, ['m', 'menu'], ['↑↓', 'move'], trail, [']', 'next'], ['v', 'group']]
+          ? [verb, ...back, trail, ['3', 'agents'], ['m', 'menu'], ['↑↓', 'move']]
+          : [verb, ...back, trail, ['m', 'menu'], ['↑↓', 'move'], [']', 'next'], ['v', 'group']]
       : slot === 'files'
         ? peekPath
           ? [verb, ...back, ['o', 'read all'], ['m', 'menu'], [']', 'next change']]
