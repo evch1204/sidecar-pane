@@ -7,9 +7,9 @@ import {
   type ChangedFile, type DayGroup, type FileHistory, type TurnChange,
 } from '../../core/turns';
 import {modelName} from '../../core/usage';
-import type {WorktreeRun} from '../../core/worktrees';
+import {journeyOf, stateWord, type Landing, type StateWord, type WorktreeRun} from '../../core/worktrees';
 import {
-  blankRow, brief, chevron, chip, counts, cut, INDENT, INDENT2, num, pageRow, plural, sep, seg, sizeCells, sizeLit, SIZE_CELLS,
+  blankRow, brief, chevron, chip, counts, cut, INDENT, INDENT2, num, padTo, pageRow, plural, sep, seg, sizeCells, sizeLit, SIZE_CELLS,
   skylineCol, sp, span, spinner, splitBar, streamRoom, streamRow, tokens, turnMark, width, widthOf,
   type Group, type Line, type Seg, type Zone,
 } from '../cells';
@@ -36,6 +36,9 @@ export type Open = {
   // Rows that fold a crowd of agents away, keyed by turn.
   folded: ReadonlySet<string>;
   hists: ReadonlySet<string>;
+  // Branches that landed here whose files are open, keyed by folder path. A
+  // pane that has never drawn a landing has nothing here, so it may be left out.
+  landings?: ReadonlySet<string>;
 };
 
 export type ChangesInput = {
@@ -71,9 +74,23 @@ export type ChangesInput = {
   // chat's running turn is on is waiting on you, not on the machine. Only that
   // one: with two chats, or in `all`, the others are working as usual.
   waiting?: string;
+  // The one folder the stream is about, when a workspace was picked: `null`,
+  // or left out, is the pane's own. The turns come in already filtered to it.
+  focus?: string | null;
+  // Whether the side panel is on screen. When it is, it carries the list of
+  // workspaces and the name of the picked one, so the stream does not repeat
+  // them. Left out, there is no panel.
+  panel?: 'open' | 'folded' | 'off';
+  // Branches that merged into the pane's folder, newest first.
+  landings?: Landing[];
 };
 
 const FILES_SHOWN = 8;
+// A landing's files are a receipt, not the work itself, so fewer of them show
+// before the rest are counted.
+const LANDING_FILES = 6;
+// The columns between two stops of a journey, and so the width of each label.
+const JOURNEY_GAP = 13;
 // More agents than this in one turn and the Changes view rolls them into one
 // row. A file row carries this many squares before it counts the rest.
 const AGENTS_SHOWN = 3;
@@ -92,9 +109,6 @@ const DAY = 86_400_000;
 // parts that give way (the skyline totals, the chips after the first, the
 // legend's percentages, the size cells) are dropped.
 const NARROW = 56;
-
-// `↑22  ✓ merged 13:20`: how far ahead a folder is, then where it has got to.
-const STATE_COL = 22;
 
 // A spinner says something is happening; it never says for how long. Past this
 // much silence the row says the number instead, because that is the point at
@@ -216,7 +230,9 @@ function pathSegs(rel: string, bright: boolean): Seg[] {
   return [...(dir === '.' ? [] : [seg(`${dir}/`, theme.dim)]), seg(path.posix.basename(rel), bright ? theme.ink : theme.text)];
 }
 
-type Ctx = ChangesInput & {out: Line[]};
+// `lead` is how many rows sit above the stream itself: the workspaces and a
+// picked folder's head, which are not turns and so do not make it non-empty.
+type Ctx = ChangesInput & {out: Line[]; lead?: number};
 
 // Everything a block's rows hang on: the id that keeps them on screen while
 // they scroll, and whether the line is a live one.
@@ -664,8 +680,6 @@ function pastTurn(ctx: Ctx, change: TurnChange, agents: AgentRun[], o: Block): v
 
 // ---------- the agents of a turn, as the chart Claude Code prints ----------
 
-const guide = (on: boolean): Seg => (on ? seg(glyph.guide, theme.spine) : sp(1));
-
 // How far in an agent sits under the turn's line: one step a level, with the
 // guide of everything above it running down the left, the way the Files tree
 // draws what is inside a folder. An agent the chat started needs no step at
@@ -879,6 +893,13 @@ function chartRow(ctx: Ctx, node: AgentNode, change: TurnChange, pins: string[],
   }
 
   if (!isOpen) return;
+  // Opened, the folder also says how far along its way it is. It lines up
+  // under the agent's square rather than its task: the labels need the two
+  // columns, and a closed agent keeps the one row it always had.
+  if (wt) {
+    const prefix = [...indent, sp(2)];
+    for (const segs of journeyRows(ctx, wt, prefix, roomOf(cols))) ctx.out.push(streamRow(cols, segs, [], {pins: mine, live}));
+  }
   // What it was, what it ran on, and how much it did. At 40 columns the kind
   // is the part that says least — `general-purpose`, nearly always — so it is
   // the part that gives way.
@@ -931,17 +952,17 @@ function chartRow(ctx: Ctx, node: AgentNode, change: TurnChange, pins: string[],
   }
 }
 
-// ---------- the worktrees of the repository ----------
+// ---------- the workspaces of the repository ----------
 
 type Folder = {wt: WorktreeRun; colour: string; label: string};
 
-// The folders this view is covering: the pane's own plus wherever an agent of
-// its chats is working, or every worktree of the repository.
-function foldersInScope(ctx: Ctx): Folder[] {
-  const all = ctx.worktrees ?? [];
-  const list = ctx.scope === 'all' ? all : all.filter(wt => wt.here || wt.agents.length > 0);
+// Every folder of the repository, each with its hue. The hues are handed out
+// over the whole list, not over whatever part of it a row is drawing, so a
+// folder is the same colour in the list, on a chip, on a landing and on its
+// journey.
+function allFolders(ctx: Ctx): Folder[] {
   let hue = 0;
-  return list.map(wt => ({
+  return (ctx.worktrees ?? []).map(wt => ({
     wt,
     // The pane's folder is the accent, the main checkout is quiet, and every
     // other folder gets a hue of its own.
@@ -950,114 +971,302 @@ function foldersInScope(ctx: Ctx): Folder[] {
   }));
 }
 
-const folderChip = (folder: Folder): Seg[] => chip(folder.label, theme.surface2, folder.colour);
-
-// The pane's own folder is active while its own chat is working, whether or
-// not an agent is; every other folder is active while an agent is in it.
-const isActive = (ctx: Ctx, wt: WorktreeRun): boolean => wt.active || (wt.here && Boolean(ctx.working));
-
-// Where a folder has got to, in one phrase on the right of its row.
-function folderState(ctx: Ctx, wt: WorktreeRun): Seg[] {
-  const agent = [...wt.agents].reverse().find(run => statusOf(run, ctx.now) === 'running');
-  if (wt.here) {
-    // You are in this one, so it is the one folder whose state is not about
-    // where the work has got to: it is what is happening in it right now.
-    if (agent || ctx.working) return [seg(spinner(ctx.frame), theme.accent), seg(' you + Claude', theme.ink)];
-    return wt.dirty ? [seg(`${wt.dirty} changed`, theme.dim)] : [seg('clean', theme.faint)];
-  }
-
-  if (agent) {
-    return [seg(spinner(ctx.frame), theme.accent), seg(` ${modelName(agent.model)} ${glyph.sep} ${brief(ctx.now - agent.startedAt)}`, theme.text)];
-  }
-
-  if (wt.merged) return [seg(`${glyph.check} merged${wt.mergedAt ? ` ${clock(wt.mergedAt)}` : ''}`, theme.add)];
-  if (wt.removed) return [seg('removed', theme.faint)];
-  // Nothing wrote its head down before the folder went, so where it got to
-  // cannot be told either way.
-  if (wt.gone && !wt.known) return [seg('not recorded', theme.faint, {italic: true})];
-  if (!wt.ahead && !wt.dirty && !wt.gone) return [seg('clean', theme.faint)];
-  if (wt.dirty) return [seg(`${wt.dirty} changed`, theme.dim)];
-  return [seg('not merged', theme.faint)];
+// The folders this view is covering: the pane's own plus wherever an agent of
+// its chats is working, or every worktree of the repository.
+function foldersInScope(ctx: Ctx): Folder[] {
+  const all = allFolders(ctx);
+  return ctx.scope === 'all' ? all : all.filter(folder => folder.wt.here || folder.wt.agents.length > 0);
 }
 
-// One repository, several folders, as a map: the main checkout, the folder the
-// pane is in, and under it every folder an agent of this chat is working in.
-function worktreeMap(ctx: Ctx, folders: Folder[]): void {
-  const {cols, sel} = ctx;
-  const id = 'wt';
-  const here = id === sel;
-  const folded = ctx.open.folded.has(id);
-  const active = folders.filter(folder => isActive(ctx, folder.wt)).length;
+const folderChip = (folder: Folder): Seg[] => chip(folder.label, theme.surface2, folder.colour);
+
+const folderColour = (ctx: Ctx, wt: WorktreeRun): string =>
+  allFolders(ctx).find(folder => pathKey(folder.wt.path) === pathKey(wt.path))?.colour ?? theme.text;
+
+// What a workspace is called in a list of them. The pane's folder and the main
+// checkout are known by their branch; an agent's folder is named after a hash,
+// so the job the newest agent in it was given says more.
+function workspaceName(wt: WorktreeRun): string {
+  if (wt.here || wt.main) return wt.branch || wt.name;
+  return wt.agents[wt.agents.length - 1]?.task || wt.branch || wt.name;
+}
+
+// No agent file says Claude is working in the pane's own folder: that is the
+// chat's own turn, which only the caller knows about.
+const wordOf = (ctx: Ctx, wt: WorktreeRun): StateWord => stateWord(wt, ctx.now, wt.here && Boolean(ctx.working));
+
+// How long whoever is in a folder has been at it: the pane's own running turn,
+// or the newest agent still running there.
+function workingFor(ctx: Ctx, wt: WorktreeRun): number | null {
+  if (wt.here) {
+    const turn = [...ctx.changes].reverse().find(change => change.running && pathKey(change.folder) === pathKey(ctx.root));
+    if (turn) return ctx.now - turn.turn.at;
+  }
+
+  const agent = [...wt.agents].reverse().find(run => statusOf(run, ctx.now) === 'running');
+  return agent ? ctx.now - agent.startedAt : null;
+}
+
+// Where a folder has got to, as one sentence on the right of its row. It opens
+// with who is working in it, when anybody is, because that is the first thing
+// a glance down the list is for.
+function workspaceState(ctx: Ctx, wt: WorktreeRun, word: StateWord): Seg[] {
+  let says: Seg[];
+  if (word === 'working') {
+    const took = workingFor(ctx, wt);
+    // The pane's folder is where everything else is going, so `not merged`
+    // means nothing there: what is in it that git has not got yet does.
+    if (wt.here) says = wt.dirty ? [seg(`${wt.dirty} uncommitted`, theme.dim)] : took === null ? [] : [seg(brief(took), theme.dim)];
+    else says = [seg(`${took === null ? '' : `${brief(took)} ${glyph.sep} `}not merged`, theme.dim)];
+  } else if (word === 'dirty') {
+    says = [seg(`${wt.dirty} uncommitted`, theme.dim)];
+  } else if (word === 'ahead') {
+    says = [seg(`${glyph.ahead}${wt.ahead} ${glyph.sep} not merged`, theme.dim)];
+  } else if (word === 'merged') {
+    says = [seg(`${glyph.check} merged${wt.mergedAt ? ` ${clock(wt.mergedAt)}` : ''}`, theme.add)];
+  } else if (word === 'not recorded') {
+    // Nothing wrote its head down before the folder went, so where it got to
+    // cannot be told either way.
+    says = [seg('not recorded', theme.faint, {italic: true})];
+  } else {
+    says = [seg(word, theme.faint)];
+  }
+
+  if (word !== 'working') return says;
+  const who = wt.here && ctx.working ? 'you' : 'agent';
+  return [seg(who, theme.text), ...(says.length ? [seg(` ${glyph.sep} `, theme.faint), ...says] : [])];
+}
+
+// Every folder of the repository, one row each, and a press on one scopes the
+// stream to it. The pane's folder heads the list and the main checkout ends
+// it; between them the order is git's own, so a row never moves because
+// somebody started working in it. The picked one carries the accent bar in
+// column 1, which is a different thing from the cursor's own row.
+function workspaceRows(ctx: Ctx): void {
+  const {cols, sel, now, frame} = ctx;
+  const all = allFolders(ctx);
+  const rows = [...all.filter(f => f.wt.here), ...all.filter(f => !f.wt.here && !f.wt.main), ...all.filter(f => f.wt.main && !f.wt.here)];
+  const words = rows.map(folder => wordOf(ctx, folder.wt));
+  const active = words.filter(word => word === 'working').length;
   ctx.out.push(
-    pageRow(
-      cols,
-      [chevron(!folded, here), sp(2), seg('WORKTREES', theme.faint, {bold: true}), seg(`   one repo, ${plural(folders.length, 'folder')}`, theme.dim)],
-      active ? [seg(`${active} active`, theme.accent)] : [],
-      {id, pick: true, bg: here ? theme.surface2 : undefined, hint: folded ? 'unfold' : 'fold', act: {type: 'toggle', set: 'folded', key: id}},
-    ),
+    pageRow(cols, [seg('WORKSPACES', theme.faint, {bold: true})], [seg(`${active} active`, active ? theme.accent : theme.dim), seg(` of ${rows.length}`, theme.dim)]),
   );
-  if (folded) return;
 
-  // Read as a tree: the main checkout at the root, the pane's folder under it,
-  // and the agents' folders under that.
-  const main = folders.find(folder => folder.wt.main);
-  const mine = folders.find(folder => folder.wt.here && !folder.wt.main);
-  const rest = folders.filter(folder => folder !== main && folder !== mine);
-  const rows: {folder: Folder; depth: number; last: boolean}[] = [];
-  if (main) rows.push({folder: main, depth: 0, last: !mine && rest.length === 0});
-  if (mine) rows.push({folder: mine, depth: main ? 1 : 0, last: rest.length === 0});
-  const depth = (mine ? 1 : 0) + (main ? 1 : 0);
-  rest.forEach((folder, i) => rows.push({folder, depth: Math.min(2, depth), last: i === rest.length - 1}));
-
-  // The three columns of the map, measured so the longest state on the right
-  // always fits: the branch, where it is on disk, then how far it has gone.
-  const tight = cols < NARROW;
-  const whereCol = tight ? 0 : 16;
-  const nameCol = Math.max(10, cols - 3 - whereCol - STATE_COL);
-  for (const row of rows) {
-    const {wt} = row.folder;
-    const node = seg(isActive(ctx, wt) ? glyph.dot : glyph.ring, row.folder.colour);
-    const joint = seg(row.last ? glyph.teeLast : glyph.tee, theme.spine);
-    const prefix = row.depth === 0 ? [node, sp(1)] : row.depth === 1 ? [joint, node, sp(1)] : [guide(true), sp(1), joint, node, sp(1)];
-    // A branch says more than a folder name; a detached head has only the name.
-    const name = wt.branch || wt.name;
-    // Two segments of the path when they fit, so a folder in the open says
-    // where it is; an agent's folder is named after the agent and needs none.
-    const where = wt.path.split(/[\\/]/).slice(-2).join('/');
+  rows.forEach((folder, i) => {
+    const {wt} = folder;
+    const word = words[i]!;
+    const id = `ws:${wt.path}`;
+    const here = id === sel;
+    const picked = ctx.focus ? pathKey(ctx.focus) === pathKey(wt.path) : wt.here;
+    const quiet = word === 'merged' || word === 'clean' || word === 'removed' || word === 'not recorded';
+    const mark = word === 'working' ? seg(spinner(frame), theme.accent) : quiet ? seg(glyph.ring, theme.faint) : seg(glyph.dot, folder.colour);
     ctx.out.push(
       pageRow(
         cols,
         [
-          ...prefix,
-          // One column of the name's own field is always left clear, so the
-          // longest branch name never runs into the folder beside it.
-          seg(cut(name, nameCol - widthOf(prefix) - 1).padEnd(nameCol - widthOf(prefix)), wt.here ? theme.ink : theme.text, {bold: wt.here}),
-          ...(whereCol ? [seg((width(where) <= whereCol ? where : wt.name).padEnd(whereCol), theme.faint)] : []),
+          picked ? seg(glyph.bar, theme.accent) : sp(1),
+          sp(1),
+          mark,
+          sp(1),
+          seg(cut(workspaceName(wt), Math.max(8, cols - 40)), picked ? theme.ink : folder.colour, {bold: picked}),
         ],
-        [seg((wt.ahead ? `${glyph.ahead}${wt.ahead}` : '').padStart(4), theme.dim), sp(2), ...folderState(ctx, wt)],
+        workspaceState(ctx, wt, word),
+        {id, pick: true, bg: here ? theme.surface2 : undefined, hint: 'open', act: {type: 'focus', path: wt.here ? null : wt.path}},
       ),
     );
+  });
+
+  ctx.out.push(blankRow(cols));
+}
+
+// ---------- a folder's journey ----------
+
+// The four stops of a folder's way from started to removed, as a line of
+// nodes and, under it, what each stop was. A stop it has reached is lit in the
+// folder's hue, and so is the line between two lit stops. The labels are as
+// wide as the gaps, so each one sits under its own node. Under 56 columns, or
+// wherever the labels would not fit, the nodes say it alone.
+function journeyRows(ctx: Ctx, wt: WorktreeRun, prefix: Seg[], room: number): Seg[][] {
+  const {stage, labels} = journeyOf(wt, ctx.now);
+  const hue = folderColour(ctx, wt);
+  const lit = (i: number) => i < stage;
+  const nodes: Seg[] = [...prefix];
+  for (let i = 0; i < 4; i++) {
+    if (i) nodes.push(lit(i - 1) && lit(i) ? seg(glyph.heavy.repeat(JOURNEY_GAP), hue) : seg(glyph.rule.repeat(JOURNEY_GAP), theme.spine));
+    nodes.push(lit(i) ? seg(glyph.dot, hue) : seg(glyph.ring, theme.faint));
   }
+
+  // The lit node already says it merged, and `✓ merged 13:20` is one column
+  // too wide to leave a space before the label after it.
+  const check = `${glyph.check} `;
+  const names: Seg[] = [...prefix];
+  labels.forEach((label, i) => {
+    const text = cut(label.startsWith(check) ? label.slice(check.length) : label, JOURNEY_GAP);
+    const current = i === stage - 1;
+    names.push(seg(i < labels.length - 1 ? padTo(text, JOURNEY_GAP + 1) : text, current ? theme.ink : i < stage ? theme.dim : theme.faint, {bold: current}));
+  });
+
+  // A line cut short would read as a folder that stopped half way, so where
+  // even the nodes do not fit there is no journey at all.
+  if (widthOf(nodes) > room) return [];
+  return ctx.cols >= NARROW && widthOf(names) <= room ? [nodes, names] : [nodes];
+}
+
+// What a folder's own git says about the one it is going to, in a sentence.
+function whereItIs(ctx: Ctx, wt: WorktreeRun): string {
+  const mine = ctx.worktrees?.find(other => other.here);
+  // An agent's folder is measured against the pane's head, which is a sha;
+  // the branch that head is on is the name anybody would use for it.
+  const into = mine && wt.parent === mine.head ? ctx.branch || mine.branch || mine.name : wt.parent || ctx.branch || 'the branch';
+  if (wt.merged) return `everything it did is in ${into} now`;
+  if (wt.ahead > 0) return `${glyph.ahead}${wt.ahead} ahead of ${into} ${glyph.sep} not there until merged`;
+  if (wt.dirty > 0) return `${plural(wt.dirty, 'file')} edited, nothing committed ${glyph.sep} nothing there yet`;
+  return '';
+}
+
+// The head of a stream scoped to one folder: its name, its journey and where
+// its work stands. With the panel on screen the name is already there, lit, so
+// the stream leaves it out.
+function focusHead(ctx: Ctx, at: string): void {
+  const {cols} = ctx;
+  const folder = allFolders(ctx).find(f => pathKey(f.wt.path) === pathKey(at));
+  if ((ctx.panel ?? 'off') === 'off') {
+    ctx.out.push(pageRow(cols, [sp(1), seg('in ', theme.faint), seg(folder?.wt.name ?? path.basename(at), theme.ink, {bold: true})]));
+  }
+
+  if (folder) {
+    for (const segs of journeyRows(ctx, folder.wt, [sp(1)], cols - 3)) ctx.out.push(pageRow(cols, segs));
+    const where = whereItIs(ctx, folder.wt);
+    if (where) ctx.out.push(pageRow(cols, [sp(1), seg(where, theme.dim)]));
+  }
+
+  ctx.out.push(blankRow(cols));
+}
+
+// ---------- a branch that landed here ----------
+
+// A merge is the moment another folder's work arrives in this one, and until
+// now it arrived with no row of its own: forty files turned up under whichever
+// turn happened to be next. So it is a row, among the day's turns at the time
+// it was made, that opens to show what it brought.
+function landingRow(ctx: Ctx, landing: Landing): void {
+  const {cols, sel} = ctx;
+  const {wt} = landing;
+  const id = `l:${wt.path}`;
+  const here = id === sel;
+  const isOpen = ctx.open.landings?.has(wt.path) ?? false;
+  const tight = cols < NARROW;
+  const n = landing.files.length;
+  const mark = here ? chevron(isOpen, true) : {...chevron(isOpen, false), color: theme.add};
+  // The same columns as a past turn's right side, so the clocks line up.
+  const size = n
+    ? [seg(`${String(n).padStart(2)} ${n === 1 ? 'file ' : 'files'}`, theme.dim), ...(tight ? [] : [sp(1), ...sizeCells(landing.added, landing.removed)])]
+    : [seg('not recorded', theme.faint, {italic: true})];
+  ctx.out.push(
+    streamRow(
+      cols,
+      [seg(`${glyph.check} `, theme.add), seg('merged', theme.dim), sp(2), seg(workspaceName(wt), folderColour(ctx, wt), {bold: true})],
+      // Six columns: a past turn's git mark and the air after it.
+      [...size, sp(6), seg(clock(landing.at), theme.dim)],
+      {mark, id, pick: true, bg: here ? theme.surface2 : undefined, hint: isOpen ? 'close' : 'open', act: {type: 'toggle', set: 'landings', key: wt.path}},
+    ),
+  );
+  if (!isOpen) return;
+
+  // Its rows hang on a line in the colour of what arrived, not the grey of a
+  // turn: this is the one block in the stream that is somebody else's work.
+  const line = seg(glyph.spine, theme.add);
+  const row = (left: Seg[], right: Seg[] = [], more: Parameters<typeof streamRow>[3] = {}) =>
+    ctx.out.push(streamRow(cols, left, right, {mark: line, pins: [id], ...more}));
+
+  const facts = [
+    ...(wt.ahead > 0 ? [plural(wt.ahead, 'commit')] : []),
+    ...(wt.agents.length ? [brief(agentsSpan(wt.agents, ctx.now))] : []),
+    wt.gone ? 'folder removed' : 'folder kept',
+  ];
+  row([seg('from ', theme.faint), seg(wt.name, theme.text), ...facts.flatMap(fact => [sep(), seg(fact, theme.dim)])]);
+
+  // The files are text: their diff lives in that folder's git, and nothing
+  // here could open it.
+  if (n) {
+    row([]);
+    const moreKey = `l:${wt.path}`;
+    const all = ctx.open.more.has(moreKey);
+    const limit = all || n <= LANDING_FILES ? n : LANDING_FILES;
+    const files: ChangedFile[] = landing.files.map(stat => ({
+      rel: stat.rel, path: path.resolve(wt.path, stat.rel), status: stat.status, added: stat.added, removed: stat.removed, known: true,
+    }));
+    let shown = 0;
+    for (const group of groupByFolder(files)) {
+      if (shown >= limit) break;
+      row([seg(group.key, theme.dim)]);
+      for (const {file, label} of group.files.slice(0, limit - shown)) {
+        row(
+          [sp(1), seg(LETTER[file.status], LETTER_COLOUR[file.status], {bold: true}), sp(2), seg(label, theme.ink)],
+          [...(tight ? [] : [...sizeCells(file.added, file.removed), sp(2)]), ...counts(file.added, file.removed)],
+        );
+        shown++;
+      }
+    }
+
+    if (n > LANDING_FILES) {
+      const moreId = `lm:${wt.path}`;
+      const on = moreId === sel;
+      row([seg(all ? glyph.open : glyph.closed, theme.dim), sp(1), seg(all ? 'fewer files' : plural(n - shown, 'more file'), on ? theme.accent : theme.dim)], [], {
+        id: moreId, pick: true, bg: on ? theme.surface2 : undefined, hint: all ? 'close' : 'all files', act: {type: 'toggle', set: 'more', key: moreKey},
+      });
+    }
+  }
+
+  // The merge commit itself would close the block, but a landing does not
+  // carry it yet: `mergedAt` is all the worktree kept of it.
+  ctx.out.push(blankRow(cols));
+}
+
+// From the first of a folder's agents starting to the last one stopping.
+function agentsSpan(agents: AgentRun[], now: number): number {
+  const from = Math.min(...agents.map(agent => agent.startedAt));
+  const to = Math.max(...agents.map(agent => (statusOf(agent, now) === 'running' ? now : agent.endedAt)));
+  return Math.max(0, to - from);
+}
+
+const startOfDay = (at: number): number => new Date(at).setHours(0, 0, 0, 0);
+
+// Which run of turns each landing is drawn in: the newest run of its day that
+// had started by the time it landed, or that day's oldest when it landed
+// before any of them. A landing on a day the stream does not show is left out.
+function placeLandings(days: DayGroup[], landings: Landing[]): Map<DayGroup, Landing[]> {
+  const out = new Map<DayGroup, Landing[]>();
+  for (const landing of landings) {
+    const runs = days.filter(run => run.day === startOfDay(landing.at));
+    if (!runs.length) continue;
+    const run = runs.find(r => r.turns[0]!.turn.at <= landing.at) ?? runs[runs.length - 1]!;
+    out.set(run, [...(out.get(run) ?? []), landing]);
+  }
+
+  return out;
 }
 
 // ---------- the stream ----------
 
 function byTurn(ctx: Ctx): void {
-  // A worktree is where an agent worked, never a block of the stream, so the
-  // wider scope adds one thing at the head — the map — and the stream under it
-  // is the same stream either way.
+  // A worktree is where an agent worked, never a block of the stream. The
+  // list of them heads it whenever there is no panel to carry it, and the
+  // stream under it is the same stream in either scope.
   const folders = ctx.scope === 'all' ? foldersInScope(ctx) : [];
-  if (folders.length > 1) {
-    worktreeMap(ctx, folders);
-    ctx.out.push(blankRow(ctx.cols));
-  }
+  if ((ctx.panel ?? 'off') === 'off' && (ctx.worktrees?.length ?? 0) > 1) workspaceRows(ctx);
+  // Picked, one folder is the whole stream: every turn is from it, so none of
+  // them needs its chip.
+  if (ctx.focus) focusHead(ctx, ctx.focus);
+  ctx.lead = ctx.out.length;
 
-  stream(ctx, folders);
+  stream(ctx, ctx.focus ? [] : folders);
 }
 
 // A day heads the stream with its own skyline, and every turn of that day
 // follows, newest first. A turn typed in another folder — which only the wider
-// scope has any of — carries that folder's chip and its hue.
+// scope has any of — carries that folder's chip and its hue. A branch that
+// landed here that day sits among the turns at the time it landed.
 function stream(ctx: Ctx, folders: Folder[]): void {
   const {cols, changes, now, open} = ctx;
   const byAgent = turnAgents(changes, ctx.agents);
@@ -1070,6 +1279,9 @@ function stream(ctx: Ctx, folders: Folder[]): void {
   const days = daysOf(changes, now);
   const folderOf = (change: TurnChange): Folder | undefined =>
     folders.find(folder => !folder.wt.here && pathKey(folder.wt.path) === pathKey(change.folder));
+  // Landings are the pane's own folder's news, so a stream scoped to another
+  // folder has none.
+  const landed = placeLandings(days, ctx.focus ? [] : ctx.landings ?? []);
 
   days.forEach((day, i) => {
     if (i === 0) {
@@ -1087,7 +1299,9 @@ function stream(ctx: Ctx, folders: Folder[]): void {
       ctx.out.push(dividerRow(cols, was.day === day.day ? day.chat : dayLabel(day.day, now)));
     }
 
+    const pending = [...(landed.get(day) ?? [])];
     for (const change of [...day.turns].reverse()) {
+      while (pending.length && pending[0]!.at >= change.turn.at) landingRow(ctx, pending.shift()!);
       const agents = byAgent.get(turnKey(change)) ?? [];
       const folder = folderOf(change);
       const block: Block = folder ? {colour: folder.colour, tag: [...folderChip(folder), sp(1)]} : {};
@@ -1100,6 +1314,8 @@ function stream(ctx: Ctx, folders: Folder[]): void {
       // One blank row after an open turn, below it only.
       ctx.out.push(blankRow(cols));
     }
+
+    for (const landing of pending) landingRow(ctx, landing);
   });
 }
 
@@ -1199,9 +1415,12 @@ export function changesLines(input: ChangesInput): Line[] {
   else flat(ctx);
 
   // An empty view has to say what to do next, in one sentence.
-  if (ctx.out.length === 0) {
+  if (ctx.out.length === (ctx.lead ?? 0)) {
     const message =
-      input.group === 'flat'
+      // Another folder's agents are not turns of its own: a chat typed there is.
+      input.focus && input.group === 'turn'
+        ? 'No chat was typed in this folder, so it has no turns of its own. What its agents did is under the turn that started them.'
+        : input.group === 'flat'
         ? input.flat === null
           ? 'This folder is not a git repo, so there is no last commit to compare with. "By turn" still works.'
           : 'Nothing has changed since the last commit. Every turn is still there under "By turn".'
