@@ -172,45 +172,144 @@
       "x": 1288,
       "y": 0
     },
+    "V4-Agents.dc.html": {
+      "h": 1064,
+      "page": "v4",
+      "title": "Agents · who ran when, and where",
+      "w": 564,
+      "x": 1288,
+      "y": 0
+    },
+    "V4-Bar.dc.html": {
+      "h": 564,
+      "page": "v4",
+      "title": "The bar · session and week, in every state",
+      "w": 564,
+      "x": 0,
+      "y": 1500
+    },
     "V4-Changes.dc.html": {
+      "h": 1064,
+      "page": "v4",
+      "title": "Changes · the stream, redrawn",
+      "w": 564,
+      "x": 0,
+      "y": 0
+    },
+    "V4-Working.dc.html": {
+      "h": 1064,
+      "page": "v4",
+      "title": "While Claude works · the agent chart",
+      "w": 564,
+      "x": 644,
+      "y": 0
+    },
+    "V4-Worktrees.dc.html": {
+      "h": 1064,
+      "page": "v4",
+      "title": "Changes · across worktrees",
+      "w": 564,
+      "x": 1932,
+      "y": 0
+    },
+    "V5A-Workspaces.dc.html": {
+      "x": 1561,
+      "y": 1500,
+      "w": 564,
+      "h": 1064,
+      "page": "v5",
+      "is_interactive": true,
+      "title": "A · Under 64 columns · the list on top (click rows)"
+    },
+    "V5A-Palette.dc.html": {
+      "x": 2205,
+      "y": 1500,
+      "w": 564,
+      "h": 1064,
+      "page": "v5",
+      "title": "A · The palette · a shortcut, not the only way"
+    },
+    "V5A-Landing.dc.html": {
+      "x": 2849,
+      "y": 1500,
+      "w": 564,
+      "h": 1064,
+      "page": "v5",
+      "title": "A · A merge lands as a row of your stream"
+    },
+    "V5-States.dc.html": {
+      "x": 1932,
+      "y": 0,
+      "w": 564,
+      "h": 384,
+      "page": "v5",
+      "title": "Shared · a worktree's states, one word each"
+    },
+    "V5B-Map.dc.html": {
+      "x": 0,
+      "y": 3000,
+      "w": 564,
+      "h": 1064,
+      "page": "v5",
+      "title": "B · Worktrees · every folder as a lane on the clock, one open"
+    },
+    "V5B-Changes.dc.html": {
+      "x": 644,
+      "y": 3000,
+      "w": 564,
+      "h": 1064,
+      "page": "v5",
+      "title": "B · Changes · the rail is the menu, a chip says the folder"
+    },
+    "V5B-Rail.dc.html": {
+      "x": 1288,
+      "y": 3000,
+      "w": 564,
+      "h": 1064,
+      "page": "v5",
+      "title": "B · The rail expanded · menu and key legend are one thing"
+    },
+    "V5-Home.dc.html": {
       "x": 0,
       "y": 0,
       "w": 564,
       "h": 1064,
-      "title": "Changes · the stream, redrawn",
-      "page": "v4"
+      "page": "v5",
+      "is_interactive": true,
+      "title": "Home · where you are, what is happening, where the keys go"
     },
-    "V4-Working.dc.html": {
+    "V5-Opening.dc.html": {
       "x": 644,
       "y": 0,
       "w": 564,
       "h": 1064,
-      "title": "While Claude works · the agent chart",
-      "page": "v4"
+      "page": "v5",
+      "is_interactive": true,
+      "title": "The opening, live · plays when the board opens"
     },
-    "V4-Agents.dc.html": {
+    "V5-Opening-frames.dc.html": {
       "x": 1288,
       "y": 0,
       "w": 564,
       "h": 1064,
-      "title": "Agents · who ran when, and where",
-      "page": "v4"
+      "page": "v5",
+      "title": "The opening, frame by frame"
     },
-    "V4-Worktrees.dc.html": {
-      "x": 1932,
-      "y": 0,
-      "w": 564,
-      "h": 1064,
-      "title": "Changes · across worktrees",
-      "page": "v4"
-    },
-    "V4-Bar.dc.html": {
+    "V5A-Panel.dc.html": {
       "x": 0,
       "y": 1500,
-      "w": 564,
-      "h": 564,
-      "title": "The bar · session and week, in every state",
-      "page": "v4"
+      "w": 758,
+      "h": 1064,
+      "page": "v5",
+      "title": "A · The side panel, open · 80 columns and up"
+    },
+    "V5A-Panel-folded.dc.html": {
+      "x": 838,
+      "y": 1500,
+      "w": 643,
+      "h": 1064,
+      "page": "v5",
+      "title": "A · The side panel, folded · 64 to 79 columns, or b"
     }
   },
   "createdOnFiles": {
@@ -219,8 +318,8 @@
   },
   "designSystems": [],
   "launch": {
-    "view": "canvas",
-    "page": "v4"
+    "page": "v5",
+    "view": "canvas"
   },
   "notes": {
     "changes": {
@@ -284,47 +383,136 @@
       "y": 1200
     },
     "v4a": {
-      "x": 0,
-      "y": -300,
       "kind": "title1",
       "maxW": 2496,
       "page": "v4",
-      "text": "Version 4 · Proposal: shapes before words, the agent chart, worktrees"
-    },
-    "v4b": {
+      "text": "Version 4 · Proposal: shapes before words, the agent chart, worktrees",
+      "w": 240,
       "x": 0,
-      "y": 1200,
-      "kind": "title1",
-      "maxW": 2496,
-      "page": "v4",
-      "text": "The bar, and the notes behind the drawings"
-    },
-    "v4why": {
-      "x": 644,
-      "y": 1500,
-      "w": 560,
-      "page": "v4",
-      "fill": "orange",
-      "size": "m",
-      "text": "WHAT CHANGED FROM VERSION 3, AND WHY\n\n1. Numbers become shapes. Every file and every past turn gets five cells: how many are lit is how much changed, green and red is which way. You can see the big turn without reading.\n\n2. A past turn is ONE line, not two: prompt, size, time. The open turn is the only thing that talks.\n\n3. Files are grouped by folder, so \"src/ui/views/\" is written once, not six times. A coloured letter (M A D R, as git says it) replaces the word Edited.\n\n4. One bar says where the turn landed: 58% core, 31% ui, 11% docs.\n\n5. The day has a skyline: one column per turn, the open one lit. Click a column to jump.\n\n6. The spine runs through every turn again, as in Version 2: filled node = open, ring = closed, pulsing = running."
+      "y": -300
     },
     "v4agents": {
-      "x": 1288,
-      "y": 1500,
-      "w": 560,
-      "page": "v4",
       "fill": "blue",
-      "size": "m",
-      "text": "AGENTS, THE WAY CLAUDE CODE PRINTS THEM\n\nA1 to A4 go away: they were labels you had to decode. An agent is called what Claude called it (\"Write the WezTerm launcher\"), with a coloured square. The same square sits on the files that agent wrote, so nothing needs a legend.\n\nThe count comes first: \"3 agents · 2 running · 1 done\". Under each running agent is the line Claude Code shows: the tool it is in right now, and how many tool uses so far.\n\nThe Agents view adds time: one lane per agent on a shared clock, so you can SEE that three ran at once and one ran alone for 18 minutes. Lanes are grouped by the folder the agent worked in.\n\nAll of it is already on disk: the agent's own record holds its description, model, tool calls, tokens, start and end."
+      "page": "v4",
+      "size": 24,
+      "text": "AGENTS, THE WAY CLAUDE CODE PRINTS THEM\n\nA1 to A4 go away: they were labels you had to decode. An agent is called what Claude called it (\"Write the WezTerm launcher\"), with a coloured square. The same square sits on the files that agent wrote, so nothing needs a legend.\n\nThe count comes first: \"3 agents · 2 running · 1 done\". Under each running agent is the line Claude Code shows: the tool it is in right now, and how many tool uses so far.\n\nThe Agents view adds time: one lane per agent on a shared clock, so you can SEE that three ran at once and one ran alone for 18 minutes. Lanes are grouped by the folder the agent worked in.\n\nAll of it is already on disk: the agent's own record holds its description, model, tool calls, tokens, start and end.",
+      "w": 560,
+      "x": 1288,
+      "y": 1500
+    },
+    "v4b": {
+      "kind": "title1",
+      "maxW": 2496,
+      "page": "v4",
+      "text": "The bar, and the notes behind the drawings",
+      "w": 240,
+      "x": 0,
+      "y": 1200
+    },
+    "v4why": {
+      "fill": "orange",
+      "page": "v4",
+      "size": 24,
+      "text": "WHAT CHANGED FROM VERSION 3, AND WHY\n\n1. Numbers become shapes. Every file and every past turn gets five cells: how many are lit is how much changed, green and red is which way. You can see the big turn without reading.\n\n2. A past turn is ONE line, not two: prompt, size, time. The open turn is the only thing that talks.\n\n3. Files are grouped by folder, so \"src/ui/views/\" is written once, not six times. A coloured letter (M A D R, as git says it) replaces the word Edited.\n\n4. One bar says where the turn landed: 58% core, 31% ui, 11% docs.\n\n5. The day has a skyline: one column per turn, the open one lit. Click a column to jump.\n\n6. The spine runs through every turn again, as in Version 2: filled node = open, ring = closed, pulsing = running.",
+      "w": 560,
+      "x": 644,
+      "y": 1500
     },
     "v4worktrees": {
-      "x": 1932,
-      "y": 1500,
-      "w": 560,
-      "page": "v4",
       "fill": "green",
-      "size": "m",
-      "text": "HOW WORKTREES WOULD WORK\n\nToday the pane watches one folder. When Claude starts an agent in its own worktree, that agent's edits land in ANOTHER folder, so the pane shows nothing until the branch is merged. That happened all day today.\n\n1. Find them: \"git worktree list\" from the folder the pane was opened in. One repo, N folders.\n\n2. Each worktree is just another project to the pane: its own chats, its own snapshots, its own git status. The pane already keys everything by folder, so this is the same machinery run N times. Active worktrees poll fast, idle ones slowly.\n\n3. Which agent is where is exact, not guessed: every agent's record names its worktree path and branch, and every line of its transcript carries the folder it ran in.\n\n4. Default scope stays the folder you opened, PLUS any worktree an agent of yours is working in. \"in jiaolong ▾\" widens it to all (key: w).\n\n5. A worktree knows its state: ahead of its parent, running, merged. \"Not in your folder until it is merged\" is said on the row."
+      "page": "v4",
+      "size": 24,
+      "text": "HOW WORKTREES WOULD WORK\n\nToday the pane watches one folder. When Claude starts an agent in its own worktree, that agent's edits land in ANOTHER folder, so the pane shows nothing until the branch is merged. That happened all day today.\n\n1. Find them: \"git worktree list\" from the folder the pane was opened in. One repo, N folders.\n\n2. Each worktree is just another project to the pane: its own chats, its own snapshots, its own git status. The pane already keys everything by folder, so this is the same machinery run N times. Active worktrees poll fast, idle ones slowly.\n\n3. Which agent is where is exact, not guessed: every agent's record names its worktree path and branch, and every line of its transcript carries the folder it ran in.\n\n4. Default scope stays the folder you opened, PLUS any worktree an agent of yours is working in. \"in jiaolong ▾\" widens it to all (key: w).\n\n5. A worktree knows its state: ahead of its parent, running, merged. \"Not in your folder until it is merged\" is said on the row.",
+      "w": 560,
+      "x": 1932,
+      "y": 1500
+    },
+    "v5a": {
+      "kind": "title1",
+      "maxW": 2496,
+      "page": "v5",
+      "text": "Direction A · Workspaces: a list of folders on top, the detail under it",
+      "w": 240,
+      "x": 0,
+      "y": 1200
+    },
+    "v5b": {
+      "kind": "title1",
+      "maxW": 2496,
+      "page": "v5",
+      "text": "Direction B · Rail and map: the menu on the left edge, worktrees on a clock",
+      "w": 240,
+      "x": 0,
+      "y": 2700
+    },
+    "v5whyA": {
+      "fill": "orange",
+      "page": "v5",
+      "size": 24,
+      "text": "DIRECTION A · WORKSPACES, SIMPLIFIED\n\nThe pane as an IDE's side panel: a PRIMARY list on top, a SECONDARY panel under it.\n\n1. WORKSPACES is every folder of the repo, one row each: a mark, the name, and one sentence on the right: who is in it, then the first true thing about it (you · 3 uncommitted; agent · 43m · not merged; ✓ merged 13:20; clean). The \"who\" and \"ahead\" columns of the first draft are gone: both are one row in once you pick. Your own folder is just one row.\n\n2. Pick a row (w, or click) and the tabs and the stream under it belong to that folder. Your own folder keeps the grouping pills; a picked worktree has one short stream, so it gets a name line instead.\n\n3. A picked worktree opens on its journey line: started · committed · merged · removed, filled to where it is. The day head and skyline are gone from it: one turn does not need a skyline.\n\n4. m opens a palette: views, workspaces, toggles, each with its key. One place to learn the keys.\n\nBorrowed from Cursor's agents list and Conductor's workspace sidebar: row = branch, who, status. Cost: seven rows of every screen belong to the list, and it is the top-and-bottom layout the one-stream redesign moved away from. The owner chose it anyway; Home makes the trade easier, because the list is no longer the first thing you see.",
+      "w": 560,
+      "maxH": 640,
+      "x": 3493,
+      "y": 1500
+    },
+    "v5shared": {
+      "fill": "gray",
+      "page": "v5",
+      "size": 24,
+      "text": "WHAT BOTH DIRECTIONS ADD FOR WORKTREES\n\n1. THE JOURNEY. Four stops on one line: started, committed, merged, removed, filled to where the folder is. It answers \"is that agent's work in my folder yet?\" without a sentence.\n\n2. THE LANDING ROW. When a branch merges, your stream gets a row of its own: ✓ merged commit-backed turns · 7 files · 13:20. It opens like a turn: where it came from, what it brought, the commits. Forty files never appear from nowhere again.\n\n3. ONE WORD PER STATE, everywhere: working, ahead, dirty, merged, clean, removed, not recorded. The first true one is the whole truth. The States board is the vocabulary.\n\n4. YOUR OWN FOLDER IS A WORKTREE TOO: one row of the list, one lane of the map. Nothing is special-cased as \"you\".",
+      "w": 560,
+      "maxH": 640,
+      "x": 3493,
+      "y": 2220
+    },
+    "v5whyB": {
+      "fill": "blue",
+      "page": "v5",
+      "size": 24,
+      "text": "DIRECTION B · RAIL AND MAP\n\nThe menu is a rail on the left edge, like an IDE's activity bar, and the letter IS the key: C F A U W. A number under a letter is a live count: 2 agents running, 3 folders active. The tab row and the scope pill go away.\n\nWorktrees are a VIEW (W), drawn as a map on today's clock: one lane a folder, from the minute its agent started, to now (⠹), to landing here (✓), or to a stop (○). A merge is where a lane ends. A folder nobody is in is a flat line. Enter opens a lane in place, so the stream stays one list.\n\nIn Changes, a turn from another folder wears that folder's chip and hue, as Version 4 drew it, and the rail's W badge says how many are busy.\n\nm expands the rail into words: the menu and the key legend are one thing.\n\nCost: four columns on every row. Under 48 columns the rail should fold back into the tab row.",
+      "w": 560,
+      "maxH": 640,
+      "x": 3493,
+      "y": 3000
+    },
+    "v5verdict": {
+      "fill": "green",
+      "page": "v5",
+      "size": 24,
+      "text": "WHERE THIS STANDS\n\nThe owner picked Direction A. Home is the first page. At 80 columns and up the side panel is the primary panel; under that, the Workspaces list on top. B stays on the canvas as the road not taken, and its map could still become the Worktrees tab later.\n\nOpen decisions: whether Home replaces the splash card in the code or wraps it (the opening assumes it wraps it); whether the greeting is worth a row; whether the opening is on by default or opt-in; where the width rule for the panel sits (80 is a guess: it is 21 for the panel, 1 for the rule, and the 62 every board is drawn at).\n\nShip order: the journey line, the landing row and the state words first, at zero layout cost. Then Home. Then the panel. Then the opening, which is cosmetic and can wait.",
+      "w": 560,
+      "maxH": 640,
+      "x": 3493,
+      "y": 3720
+    },
+    "v5home": {
+      "kind": "title1",
+      "maxW": 2496,
+      "page": "v5",
+      "text": "Version 5 · Home, and the opening: the pane arrives, then says where you are",
+      "w": 240,
+      "x": 0,
+      "y": -300
+    },
+    "v5whyHome": {
+      "fill": "orange",
+      "page": "v5",
+      "size": 24,
+      "text": "HOME, AND THE OPENING\n\nThe pane opens on a page, not on a stream. Home says four things, with air between them: where you are (repo, branch, folder), NOW (the one line the bar squeezes into a word, expanded to three: your turn, the agents, what landed), TODAY (turns, the skyline, lines, hours), and GO TO: every view with a plain sentence and a live count. The key is the row. Enter goes there; h comes back.\n\nIt is a view, not an attract screen: the plan's rule stands. Nothing here is a thing to dismiss, because it carries facts you would otherwise open two views to read.\n\nTHE WORDMARK. Six rows of block capitals with a shadow edge in box glyphs: the face in a warm gradient from accent to gold, the shadow in faint. 57 columns, so it fits the 62 of a split. It replaces the 3-by-5 pixel font, which was fine for a number and plain for a name.\n\nTHE OPENING (about 3.4 s, skipped by any key, off with --no-opening). A terminal loading, in the diff's own idiom.\n0 ms · the cursor blinks twice where the name will start\n400 ms · the name is added the way a diff adds lines: each row typed left to right in green behind a +, and the moment a row is whole it settles into its own colours. Six rows, 130 ms each\n1250 ms · under it, the read reports: reading 58 chats… then 3 chats · 41 turns · 12 agents\n1310 ms · today's changes fill in as git's own stat bar, + and − one cell a tick, 29 green to 11 red in the day's real proportion, then the totals\n2470 ms · the card dims in two steps and clears\n2770 ms · the bar draws, then Home, one row a tick, the cursor mark sweeping down the margin ahead of the rows\n\nNothing moves across the screen. Every step is a cell appearing or changing colour, which is what a terminal does well. The live board is not a CSS animation: its own logic keeps a clock and draws each frame from the time, thirty times a second, the way the pane itself would. It plays when the board opens, and the row at the bottom plays it again.",
+      "w": 560,
+      "maxH": 640,
+      "x": 3493,
+      "y": 0
+    },
+    "v5nav": {
+      "fill": "gray",
+      "page": "v5",
+      "size": 24,
+      "text": "HOW YOU GET AROUND (any of these, never only one)\n\nCLICK. Every row that opens, every tab, every key row on Home, every folder in the panel, the View menu on the bar. The mouse is always enough.\n\nKEYS. The key is printed beside the thing: 1 2 3 4 for the views, h Home, w next workspace, enter open, esc back. Nothing needs the palette.\n\nTHE PALETTE (m). A shortcut for people who type: one list of every place and every toggle, filtered as you type. It is a third way, not the way. Opening it is m; closing it is esc; the tabs are still there under it.\n\nTHE SIDE PANEL, three widths. At 80 columns and up it is open: views, then workspaces, each with its key beside it. From 64 to 79 it folds to eight columns, and the fold is not a column of letters: each view keeps a glyph that says what it is (+− is Changes, ■ an agent, ▄▆ the meter, ⎇ a branch), the key that opens it, and its live mark, so the folded panel is still the legend and still the status. Under 64 it is gone and the tab row comes back. b folds or unfolds it by hand at any width. Open or folded, it pushes the content and never covers it.",
+      "w": 560,
+      "maxH": 640,
+      "x": 3493,
+      "y": 1500
     }
   },
   "order": [
@@ -354,7 +542,19 @@
     "V4-Working.dc.html",
     "V4-Agents.dc.html",
     "V4-Worktrees.dc.html",
-    "V4-Bar.dc.html"
+    "V4-Bar.dc.html",
+    "V5A-Workspaces.dc.html",
+    "V5A-Palette.dc.html",
+    "V5A-Landing.dc.html",
+    "V5-States.dc.html",
+    "V5B-Map.dc.html",
+    "V5B-Changes.dc.html",
+    "V5B-Rail.dc.html",
+    "V5-Home.dc.html",
+    "V5-Opening.dc.html",
+    "V5-Opening-frames.dc.html",
+    "V5A-Panel.dc.html",
+    "V5A-Panel-folded.dc.html"
   ],
   "pages": [
     {
@@ -372,6 +572,10 @@
     {
       "id": "v4",
       "name": "Version 4 · Proposal"
+    },
+    {
+      "id": "v5",
+      "name": "Version 5 · Two directions"
     }
   ],
   "title": "Sidecar pane redesign"
