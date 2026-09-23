@@ -37,6 +37,9 @@ type Props = {
   // --mouse-debug: show the last mouse report in the footer. Terminals differ
   // in how they count rows, and this says at a glance whether they agree.
   mouseDebug?: boolean;
+  // --no-opening or SIDECAR_NO_OPENING=1: go straight to the first frame
+  // without the three seconds of the name being typed in. On by default.
+  opening?: boolean;
 };
 
 // Each of these keeps its own cursor and scroll position.
@@ -264,7 +267,7 @@ function useFile(root: string, file: string | null, git: GitState | null, versio
   return {view, segments, marks};
 }
 
-export function App({root, interactive, mouseDebug = false}: Props) {
+export function App({root, interactive, mouseDebug = false, opening = true}: Props) {
   const {exit} = useApp();
   const {stdout} = useStdout();
   const {cols, rows} = useTerminalSize();

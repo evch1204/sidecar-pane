@@ -2,6 +2,7 @@ import {
   bigDigits, bigWidth, cut, pageRow, plural, RIGHT_PAD, seg, sep, sp, spinner, widthOf, type Line, type Seg,
 } from './cells';
 import {theme} from './theme';
+import {WORDMARK_COLS, wordmarkFits, wordmarkRows} from './wordmark';
 
 // The card the pane draws before it has anything to show: on the first frame,
 // while the chats are being read, and in a folder Claude Code has never been
@@ -34,30 +35,37 @@ export type Splash = {
 // branch rather than about where you are.
 const BRANCH_MAX = 40;
 
-// The wordmark is as wide as the pane lets it be, and the card hangs off its
-// left edge.
-const scaleFor = (cols: number): number => (bigWidth(NAME.toUpperCase(), 2) <= cols - 6 ? 2 : 1);
+// The block wordmark wherever a page row has room for it, and the pixel font
+// at scale 1 (27 columns) below that. Centred, not indented: a fixed indent
+// would push the last letter off the edge of a pane only just wide enough.
+// The card hangs off the wordmark's left edge. The opening types these same
+// rows in the same place, so a pane that skips it draws the name exactly where
+// the opening would have left it.
+export function nameRows(cols: number, tone: 'gradient' | 'add' = 'gradient'): {rows: Seg[][]; left: number} {
+  const word = NAME.toUpperCase();
+  const block = wordmarkFits(cols);
+  const rows = block
+    ? wordmarkRows(tone)
+    : bigDigits(word, tone === 'add' ? theme.add : theme.accent, {scale: 1, word: true});
+  const wide = block ? WORDMARK_COLS : bigWidth(word, 1);
+  return {rows, left: Math.max(0, Math.floor((cols - 2 - RIGHT_PAD - wide) / 2))};
+}
+
+// Where the pane is: the folder, and the branch when there is one.
+export const whereSegs = (folder: string, branch: string): Seg[] => [
+  seg(folder, theme.text),
+  ...(branch ? [sep(), seg(cut(branch, BRANCH_MAX), theme.text)] : []),
+];
 
 export function splashLines(cols: number, at: Splash): Line[] {
-  const word = NAME.toUpperCase();
-  const scale = scaleFor(cols);
-  // The content of a page row, and where the wordmark sits in it. Centred, not
-  // indented: at 62 columns the wordmark is 54 wide and a fixed indent would
-  // push its last letter off the edge.
-  const room = cols - 2 - RIGHT_PAD;
-  const left = Math.max(0, Math.floor((room - bigWidth(word, scale)) / 2));
-  const inner = room - left;
+  const {rows: name, left} = nameRows(cols);
+  const inner = cols - 2 - RIGHT_PAD - left;
   const row = (segs: Seg[]): Line => pageRow(cols, [sp(left), ...segs]);
 
-  const where: Seg[] = [
-    seg(at.folder, theme.text),
-    ...(at.branch ? [sep(), seg(cut(at.branch, BRANCH_MAX), theme.text)] : []),
-  ];
-
   return [
-    ...bigDigits(word, theme.accent, {scale, word: true}).map(row),
+    ...name.map(row),
     row([]),
-    row(where),
+    row(whereSegs(at.folder, at.branch)),
     ...state(at, inner).map(row),
     ...(at.reading ? [row([seg(spinner(at.frame), theme.accent), seg(' reading the commits', theme.dim)])] : []),
   ];

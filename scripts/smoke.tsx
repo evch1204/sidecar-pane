@@ -487,11 +487,11 @@ fs.rmSync(stage, {recursive: true, force: true});
   process.env.SIDECAR_HOME = path.join(quiet, 'sidecar');
   process.env.SIDECAR_CLAUDE_HOME = path.join(quiet, 'claude');
 
-  // Three rows of half blocks with nothing else on them: the name, in the
-  // pixel font.
+  // Three rows of blocks with nothing else on them: the name, in the block
+  // font and its shadow edge, or in the pixel font where the pane is narrow.
   const wordmark = (shot: string): boolean => {
     const rows = shot.split('\n').map(row => row.trim());
-    const big = (row = '') => row.length > 6 && /^[█▀▄ ]+$/.test(row);
+    const big = (row = '') => row.length > 6 && /^[█▀▄╗╔╝╚║═ ]+$/.test(row);
     return rows.some((_, i) => big(rows[i]) && big(rows[i + 1]) && big(rows[i + 2]));
   };
 
