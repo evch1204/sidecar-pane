@@ -35,7 +35,11 @@ if (interactive) {
   });
 }
 
+// The opening plays while the first read runs. A flag turns it off for one
+// run, and the environment turns it off for good, for anyone who has seen it.
+const opening = !args.includes('--no-opening') && process.env.SIDECAR_NO_OPENING !== '1';
+
 const app = render(
-  <App root={root} interactive={interactive} mouseDebug={args.includes('--mouse-debug')} />,
+  <App root={root} interactive={interactive} mouseDebug={args.includes('--mouse-debug')} opening={opening} />,
 );
 await app.waitUntilExit();
