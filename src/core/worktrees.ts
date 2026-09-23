@@ -118,8 +118,9 @@ const IDLE_MS = 30_000;
 const KEEP_REMEMBERED = 24;
 
 // The same folder the snapshots live in, with the same override, so everything
-// sidecar remembers about a project sits together.
-function storeDir(root: string): string {
+// sidecar remembers about a project sits together. The pane's own preferences
+// live there too, which is why it is shared.
+export function storeDir(root: string): string {
   const slug = path.resolve(root).replace(/[\\/:.]/g, '-');
   return path.join(process.env.SIDECAR_HOME || path.join(os.homedir(), '.sidecar'), slug);
 }
@@ -360,4 +361,70 @@ function row(
     },
     parent,
   };
+}
+
+// One word for where a folder has got to. The first true one is the whole
+// truth, so every row that names a folder's state names the same word.
+export type StateWord = 'working' | 'ahead' | 'dirty' | 'merged' | 'clean' | 'removed' | 'not recorded';
+
+// `busy` is the pane's own turn: no agent file says Claude is working in the
+// pane's folder, so the caller that knows has to say it.
+export function stateWord(wt: WorktreeRun, now: number, busy = false): StateWord {
+  if (busy || wt.agents.some(run => statusOf(run, now) === 'running')) return 'working';
+  if (wt.merged) return 'merged';
+  if (wt.removed) return 'removed';
+  if (wt.gone && !wt.known) return 'not recorded';
+  if (wt.ahead > 0) return 'ahead';
+  if (wt.dirty > 0) return 'dirty';
+  return 'clean';
+}
+
+// A time of day, 24 hour. The UI has its own; core may not borrow it.
+function clock(ms: number): string {
+  const date = new Date(ms);
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+}
+
+// The four stops of a worktree's journey, and how far it has got.
+export type Journey = {
+  stage: 0 | 1 | 2 | 3 | 4; // 1 started, 2 committed, 3 merged, 4 removed
+  labels: [string, string, string, string];
+};
+
+// `now` is taken for the same reason `stateWord` takes it, so the two are
+// called alike; every stop here is already a fact of the folder.
+export function journeyOf(wt: WorktreeRun, now: number): Journey {
+  const started = wt.agents.length ? Math.min(...wt.agents.map(run => run.startedAt)) : 0;
+  // Once it has merged, its commits are in the parent and `ahead` is back to
+  // nought, so "no commit yet" would be a lie about a folder that plainly
+  // committed.
+  const commits = wt.ahead > 0 ? plural(wt.ahead, 'commit') : wt.merged ? 'committed' : 'no commit yet';
+  const merged = wt.merged ? (wt.mergedAt ? `✓ merged ${clock(wt.mergedAt)}` : 'merged') : 'not merged';
+
+  // A folder git lists has at least been started, whatever else is true.
+  const stage: Journey['stage'] =
+    wt.merged && wt.gone ? 4
+      : wt.merged ? 3
+        : wt.ahead > 0 ? 2
+          : wt.agents.length || wt.dirty > 0 || !wt.gone ? 1
+            : 0;
+
+  return {
+    stage,
+    labels: [started ? `started ${clock(started)}` : 'started', commits, merged, wt.gone ? 'removed' : 'folder kept'],
+  };
+}
+
+const plural = (n: number, one: string): string => `${n} ${n === 1 ? one : `${one}s`}`;
+
+// A branch that arrived in the pane's folder: one row of its own in the stream.
+export type Landing = {wt: WorktreeRun; at: number; files: FileStat[]; added: number; removed: number};
+
+// Newest first, like the stream it is laid into. A merge with no time cannot
+// be placed among the turns, so it is left out rather than guessed at.
+export function landingsOf(worktrees: WorktreeRun[]): Landing[] {
+  return worktrees
+    .filter(wt => wt.merged && wt.mergedAt)
+    .map(wt => ({wt, at: wt.mergedAt!, files: wt.files, added: wt.lines.added, removed: wt.lines.removed}))
+    .sort((a, b) => b.at - a.at);
 }

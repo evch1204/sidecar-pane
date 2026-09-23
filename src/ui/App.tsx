@@ -275,8 +275,8 @@ export function App({root, interactive, mouseDebug = false}: Props) {
   const [follow, setFollow] = useState<Follow>('on');
   const [menu, setMenu] = useState<{open: number; item: number} | null>(null);
   const [frame, setFrame] = useState(0);
-  const [sel, setSel] = useState<Record<Slot, string | null>>({changes: null, files: null, agents: null, usage: null, reader: null});
-  const [scroll, setScroll] = useState<Record<Slot, number>>({changes: 0, files: 0, agents: 0, usage: 0, reader: 0});
+  const [sel, setSel] = useState<Record<Slot, string | null>>({home: null, changes: null, files: null, agents: null, usage: null, reader: null});
+  const [scroll, setScroll] = useState<Record<Slot, number>>({home: 0, changes: 0, files: 0, agents: 0, usage: 0, reader: 0});
 
   // Changes.
   const [group, setGroup] = useState<Group>('turn');
@@ -471,6 +471,9 @@ export function App({root, interactive, mouseDebug = false}: Props) {
   // ---- the lines of the current view -----------------------------------------
 
   const build = (at: string | null): {head: Line[]; lines: Line[]} => {
+    // Phase 2: Home's own page. Nothing opens on it yet.
+    if (slot === 'home') return {head: [], lines: []};
+
     if (slot === 'changes') {
       return {
         head: [],
@@ -515,7 +518,7 @@ export function App({root, interactive, mouseDebug = false}: Props) {
 
   // The cursor is remembered by id, so it stays on the same thing through a
   // refresh. When that thing is gone it falls to the nearest line that is left.
-  const lastIndex = useRef<Record<Slot, number>>({changes: 0, files: 0, agents: 0, usage: 0, reader: 0});
+  const lastIndex = useRef<Record<Slot, number>>({home: 0, changes: 0, files: 0, agents: 0, usage: 0, reader: 0});
   // The row a toggle was aimed at, and the screen row it was on. `waits` lets
   // it stand for a render or two while the row it names is still being built.
   const anchor = useRef<{id: string; y: number; slot: Slot; waits?: number} | null>(null);
@@ -554,7 +557,12 @@ export function App({root, interactive, mouseDebug = false}: Props) {
   const chatName = chat ? (history.changes.find(c => c.chatId === chat)?.chat ?? 'one chat') : null;
   const inDiff = Boolean(current?.pins?.some(id => id.startsWith('f:')));
   const markdown = slot === 'reader' && Boolean(readerPath && isMarkdown(readerPath));
-  const list = menus({view, group, hideSpace, changedOnly, chat: chatName, folders: worktrees.length, scope, inDiff, markdown, raw, follow: follow === 'on', mouse});
+  const list = menus({
+    view, group, hideSpace, changedOnly, chat: chatName, folders: worktrees.length, scope, inDiff, markdown, raw, follow: follow === 'on', mouse,
+    // Phase 2: the side panel and the workspaces. Until then there is no panel
+    // and nothing is picked, which is what the pane draws today.
+    panel: 'off', focus: null, workspaces: [],
+  });
   // The card, and not the stream, on the two occasions there is no stream: the
   // first frames, and a folder Claude Code has never been run in. Files is left
   // alone — the tree is worth looking at whether or not anything was ever typed
@@ -859,6 +867,12 @@ export function App({root, interactive, mouseDebug = false}: Props) {
         return say(mouse ? 'Mouse off. Select and copy freely.' : 'Mouse on.');
       case 'quit':
         return exit();
+      // Phase 2: Home, the side panel, the workspaces and the opening.
+      case 'home':
+      case 'panel':
+      case 'focus':
+      case 'skip':
+        return;
     }
   };
 
@@ -880,13 +894,23 @@ export function App({root, interactive, mouseDebug = false}: Props) {
         return act.what === 'chat' ? run({do: 'chat', to: act.on ? chat : null}) : run({do: 'changedOnly', on: act.on});
       case 'scope':
         return run({do: 'scope', to: act.scope});
+      // Phase 2: picking a workspace, the side panel and the opening.
+      case 'focus':
+      case 'panel':
+      case 'skip':
+        return;
 
       case 'turn':
         return setOpen(o => ({...o, turns: flipped(o.turns, act.key)}));
       case 'file':
         return setOpen(o => ({...o, files: flipped(o.files, act.key)}));
-      case 'toggle':
-        return setOpen(o => ({...o, [act.set]: flipped(o[act.set], act.key)}));
+      case 'toggle': {
+        // Phase 2: landing rows open once the stream draws them.
+        const set = act.set;
+        if (set === 'landings') return;
+        return setOpen(o => ({...o, [set]: flipped(o[set], act.key)}));
+      }
+
       case 'hunk':
         return setFolded(flipped(folded, act.key));
       case 'gap': {
@@ -1145,7 +1169,7 @@ export function App({root, interactive, mouseDebug = false}: Props) {
         if (id.startsWith('t:') && lines[cursor + 1]?.pins?.includes(id)) return perform({type: 'turn', key: id.slice(2)});
         const isOpen =
           (act?.type === 'file' && open.files.has(act.key)) ||
-          (act?.type === 'toggle' && open[act.set].has(act.key));
+          (act?.type === 'toggle' && act.set !== 'landings' && open[act.set].has(act.key));
         return isOpen ? perform(act) : undefined;
       }
 

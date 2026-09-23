@@ -59,6 +59,11 @@ export const theme = {
   // are pitched to read as a tint of the figure on them and nothing more.
   tintAdd: '#12301D',
   tintDel: '#33161A',
+
+  // The wordmark's face runs from `accent` to `gold`, left to right. The
+  // same value as `warn`, under its own name, so the gradient does not read
+  // as a warning in the code that draws it.
+  gold: '#E5C07B',
 } as const;
 
 // Models are told apart by colour alone — the same hue carries a model's own
@@ -97,6 +102,21 @@ const digits: Record<string, string[]> = {
   // A wave across the middle band, so `~` reads as "about" next to a figure.
   '~': ['....', '....', '.#.#', '#.#.', '....'],
   ' ': ['.', '.', '.', '.', '.'],
+};
+
+// The pane's name as it opens: six rows a letter, only the seven letters of
+// SIDECAR. `█` is the face; every other glyph is the shadow edge, so the
+// face can take a colour of its own and the shadow stay quiet. Every row of a
+// letter is exactly as wide as its first, which is what lets the rows of a
+// word be laid side by side and still line up.
+const block: Record<string, string[]> = {
+  S: ['███████╗', '██╔════╝', '███████╗', '╚════██║', '███████║', '╚══════╝'],
+  I: ['██╗', '██║', '██║', '██║', '██║', '╚═╝'],
+  D: ['██████╗ ', '██╔══██╗', '██║  ██║', '██║  ██║', '██████╔╝', '╚═════╝ '],
+  E: ['███████╗', '██╔════╝', '█████╗  ', '██╔══╝  ', '███████╗', '╚══════╝'],
+  C: [' ██████╗', '██╔════╝', '██║     ', '██║     ', '╚██████╗', ' ╚═════╝'],
+  A: [' █████╗ ', '██╔══██╗', '███████║', '██╔══██║', '██║  ██║', '╚═╝  ╚═╝'],
+  R: ['██████╗ ', '██╔══██╗', '██████╔╝', '██╔══██╗', '██║  ██║', '╚═╝  ╚═╝'],
 };
 
 // The same five pixel rows, for a word rather than a number: the pane's own
@@ -195,8 +215,19 @@ export const glyph = {
   chipR: '▌',
   columns: [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'],
   spinner: ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'],
+  // The side panel's own toggle: fold it away, or open it back out.
+  fold: '«',
+  unfold: '»',
+  // A branch, as git tools draw one: the Workspaces row of the folded panel.
+  // `branch` already names the tree joint, so this one is `gitBranch`.
+  gitBranch: '⎇',
+  // A list of things to read: Files in the folded panel.
+  list: '≡',
+  // Usage in the folded panel: two bars of a meter in one cell each.
+  miniMeter: ['▄', '▆'],
   digits,
   font,
+  block,
 } as const;
 
 type Style = {color?: string; bold?: boolean; italic?: boolean; underline?: boolean; bg?: string};

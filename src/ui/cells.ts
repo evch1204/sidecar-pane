@@ -1,4 +1,5 @@
 import stringWidth from 'string-width';
+import {sizeLit, SIZE_CELLS} from '../core/size';
 import {glyph, theme} from './theme';
 
 // The whole pane is drawn from one thing: a list of lines, each a list of
@@ -10,7 +11,7 @@ import {glyph, theme} from './theme';
 // block's left line (`streamRow`), and a row inside a well. Nothing is a box.
 
 export type Group = 'turn' | 'file' | 'flat';
-export type View = 'changes' | 'files' | 'agents' | 'usage';
+export type View = 'home' | 'changes' | 'files' | 'agents' | 'usage';
 
 // What happens when a line, or part of one, is clicked or entered.
 export type Act =
@@ -19,7 +20,7 @@ export type Act =
   | {type: 'item'; menu: number; item: number}
   | {type: 'turn'; key: string}
   | {type: 'file'; key: string}
-  | {type: 'toggle'; set: 'more' | 'steps' | 'says' | 'agents' | 'hists' | 'folded'; key: string}
+  | {type: 'toggle'; set: 'more' | 'steps' | 'says' | 'agents' | 'hists' | 'folded' | 'landings'; key: string}
   | {type: 'hunk'; key: string}
   | {type: 'gap'; file: string; group: number; hunk: number}
   | {type: 'node'; path: string; dir: boolean}
@@ -34,6 +35,13 @@ export type Act =
   // How much of the repository the Changes view covers: the folder the pane is
   // in, or every worktree of it.
   | {type: 'scope'; scope: 'mine' | 'all'}
+  // Pick one folder of the repository to look at: null is the pane's own. All
+  // of them at once is not a folder, so that stays `scope`.
+  | {type: 'focus'; path: string | null}
+  // Fold or unfold the side panel; with no `to`, whichever it is not.
+  | {type: 'panel'; to?: 'open' | 'folded'}
+  // Stop the opening and go straight to Home.
+  | {type: 'skip'}
   // The reader's two pills: a markdown file as a page, or as it is written.
   | {type: 'page'; raw: boolean}
   | {type: 'back'}
@@ -402,19 +410,9 @@ export function splitBar(parts: [number, string][]): Seg[] {
   return parts.filter(([cells]) => cells > 0).map(([cells, color]) => seg(glyph.lower.repeat(cells), color));
 }
 
-// How big a change is, in five cells. Lines, not files: a one line fix and a
-// rewrite are the two ends of this scale, and the steps are wide because what
-// is being read is "small, medium, big", not a number.
-export const SIZE_CELLS = 5;
-
-export function sizeLit(total: number): number {
-  if (total <= 0) return 0;
-  if (total < 10) return 1;
-  if (total < 50) return 2;
-  if (total < 150) return 3;
-  if (total < 500) return 4;
-  return SIZE_CELLS;
-}
+// How big a change is, in five cells. The scale itself lives in core, so
+// Home's facts and the rows here read a turn's size the same way.
+export {sizeLit, SIZE_CELLS};
 
 // Which way the change went. A turn that removed anything at all keeps at
 // least one red cell, and one that added anything keeps at least one green,
@@ -438,7 +436,7 @@ export function sizeCells(added: number, removed: number): Seg[] {
 // The eighths a turn's size reads as in the day's skyline. Nothing is ever
 // zero: a turn that changed nothing is still a turn, and an empty column would
 // read as a gap in the day.
-const SKYLINE = [1, 2, 3, 5, 6, 8];
+export const SKYLINE = [1, 2, 3, 5, 6, 8];
 
 // One turn of the day, two columns wide so the chart keeps its shape in a
 // narrow pane.

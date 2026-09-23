@@ -14,6 +14,13 @@ export type Command =
   // How much of the repository the Changes view covers: this folder, or every
   // worktree of it.
   | {do: 'scope'; to?: 'mine' | 'all'}
+  | {do: 'home'}
+  // Fold or unfold the side panel; with no `to`, whichever it is not.
+  | {do: 'panel'; to?: 'open' | 'folded'}
+  // Pick one folder to look at, null for the pane's own; with no `to`, the
+  // next one along.
+  | {do: 'focus'; to?: string | null}
+  | {do: 'skip'}
   | {do: 'whitespace'}
   | {do: 'changedOnly'; on?: boolean}
   | {do: 'raw'}
@@ -40,6 +47,12 @@ export type MenuState = {
   // covering. One folder and there is nothing to switch, so no item is shown.
   folders: number;
   scope: 'mine' | 'all';
+  // Where the side panel is, and `off` when the pane is too narrow for it.
+  panel: 'open' | 'folded' | 'off';
+  // The one folder the views are looking at, or null for the pane's own, and
+  // every folder there is to pick from.
+  focus: string | null;
+  workspaces: {path: string; label: string}[];
   // The cursor is inside a diff, so folding every hunk means something.
   inDiff: boolean;
   // A markdown file is open in the reader, so it can be read as written.
