@@ -252,8 +252,16 @@ const listRows = (): number => {
 // The row the cursor is on, by where it is and what it says: under the list,
 // and a row of the stream itself (a turn, or a branch that landed), never one
 // of the folders. A short pane has already scrolled the list away to show it.
-if (!hasChats) skip(4, NO_CHATS);
-else {
+if (!hasChats) {
+  skip(4, NO_CHATS);
+  // The list's rows are still laid out behind the card. Keys that would
+  // step to one and pick it must do nothing while it is hidden.
+  const pillsName = () => /\bin (.+?)\s*▾?\s*$/.exec(plain(frame()).split('\n').find(row => row.includes('By turn')) ?? '')?.[1]?.trim() ?? '';
+  const own = pillsName();
+  await press(DOWN, DOWN, ENTER);
+  await wait(600);
+  check(own !== '' && pillsName() === own && plain(frame()).includes('no chats yet'), `down, down, enter on the card should leave the pane on its own folder "${own}", and the pills row reads "in ${pillsName()}"`);
+} else {
   const at = listAt();
   const n = listRows();
   const lit = cursorAt();

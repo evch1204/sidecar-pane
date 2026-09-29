@@ -1318,6 +1318,9 @@ export function App({root, interactive, mouseDebug = false, opening = true}: Pro
 
     if (mouseDebug) say(`${event.kind} ${event.button} col ${event.x} row ${event.y}`);
     const inStream = event.y >= top.length && event.y < top.length + height;
+    // Under the card the stream's rows are still laid out, and a click or a
+    // wheel there would act on a row nobody can see. The chrome still works.
+    if (card && (event.kind === 'wheel' || (inStream && event.kind === 'down'))) return;
     // A click that goes somewhere leaves follow mode alone; one that does
     // something to the page, or lands on it and does nothing but move the
     // cursor, is you taking it over. Home is only ever going somewhere.
@@ -1446,9 +1449,11 @@ export function App({root, interactive, mouseDebug = false, opening = true}: Pro
       }
 
       // Past the menu, a key is either going somewhere or taking the page:
-      // Enter goes by what the row under the cursor does.
+      // Enter goes by what the row under the cursor does. Over the card there is
+      // no page to take.
       const entering = key.return || key.rightArrow;
       const going =
+        card ||
         view === 'home' || GOING_KEYS.has(input) || (entering && current?.act !== undefined && GOING_ACTS.has(current.act.type));
       if (!going) pause();
 
@@ -1467,6 +1472,19 @@ export function App({root, interactive, mouseDebug = false, opening = true}: Pro
       if (input === '2') return run({do: 'view', view: 'files'});
       if (input === '3') return run({do: 'view', view: 'agents'});
       if (input === '4') return run({do: 'view', view: 'usage'});
+      // How the stream is shown, the same keys as the menu's items. `v` is the
+      // way off the card, which only By turn has.
+      if (slot === 'changes') {
+        if (input === 'v') return run({do: 'group', group: GROUPS[(GROUPS.indexOf(group) + 1) % GROUPS.length]!});
+        if (input === 's') return run({do: 'chat'});
+        if (input === 'W') return run({do: 'whitespace'});
+        if (input === 'z') return run({do: 'foldAll'});
+      }
+
+      // The card hides the stream, not the rows behind it: past here every key
+      // acts on the stream, and a cursor you cannot see must not move, open or
+      // pick anything. Its place is kept for when the stream is back.
+      if (card) return;
 
       const page = Math.max(1, height - 2);
       if (key.upArrow || input === 'k') return step(-1);
@@ -1524,10 +1542,6 @@ export function App({root, interactive, mouseDebug = false, opening = true}: Pro
       }
 
       if (slot === 'changes') {
-        if (input === 'v') return run({do: 'group', group: GROUPS[(GROUPS.indexOf(group) + 1) % GROUPS.length]!});
-        if (input === 's') return run({do: 'chat'});
-        if (input === 'W') return run({do: 'whitespace'});
-        if (input === 'z') return run({do: 'foldAll'});
         if (input === 'o') {
           if (!current?.at) return refuse('Move onto a line of a diff first.');
           reveal(current.at.path);
