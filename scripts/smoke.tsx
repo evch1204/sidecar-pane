@@ -94,6 +94,19 @@ const check = (ok: boolean, what: string) => {
   console.error(`  FAILED: ${what}`);
 };
 
+// Checks that cannot run against this folder: they are counted, and said once
+// why, rather than passed.
+let skipped = 0;
+const said = new Set<string>();
+const skip = (n: number, why: string) => {
+  skipped += n;
+  if (said.has(why)) return;
+  said.add(why);
+  console.log(`skipped: ${why}`);
+};
+const NO_CHATS = 'this folder has no chats, so the stream checks did not run';
+const ONE_FOLDER = 'this repository has one folder, so the workspace checks did not run';
+
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 // Every frame any pane printed, for the checks that are about all of them.
@@ -198,9 +211,32 @@ await show('home: where you are, what is happening, what today has been, where e
   check(!shot.split('\n').slice(0, 4).some(row => /Changes {3}Files/.test(row)), 'Home should have no tab row');
 }
 
+// The folders git lists that are still on disk.
+const onDisk = execFileSync('git', ['-C', target, 'worktree', 'list', '--porcelain'], {encoding: 'utf8'})
+  .split('\n')
+  .filter(line => line.startsWith('worktree '))
+  .filter(line => fs.existsSync(line.slice(9).trim())).length;
+
+// The pane reads the worktrees on a poll of its own. Home's `w  Workspaces`
+// row, and its count, only appear once it has read more than one folder, so
+// that row is what is waited for before anything counts or steps through them.
+const homeHasFolders = () => /\bw {2}Workspaces\b.*\d+ active/.test(plain(frame()));
+const waitForFolders = async (): Promise<boolean> => {
+  for (let n = 0; n < 40 && !homeHasFolders(); n++) await wait(125);
+  return homeHasFolders();
+};
+if (onDisk > 1) check(await waitForFolders(), `this repository has ${onDisk} folders, and Home's "w  Workspaces" row never showed a count, so the pane never read them`);
+
 await press('1');
 await wait(400);
+// The first frames are the card while the chats are read; after that the
+// card stays only where Claude Code has never been run.
+const readingCard = () => /reading/.test(plain(frame())) && !plain(frame()).includes('no chats yet');
+for (let n = 0; n < 30 && readingCard(); n++) await wait(100);
 await show('changes: the bar, the tabs, the pills and the stream');
+// Every check about the stream needs turns in it. A folder with none shows
+// the card instead, and those checks are skipped there, not passed.
+const hasChats = !plain(frame()).includes('no chats yet');
 
 // The Workspaces list heads the stream whenever there is no panel and the
 // repository has more than one folder. The cursor starts under it, on the
@@ -216,34 +252,34 @@ const listRows = (): number => {
 // The row the cursor is on, by where it is and what it says: under the list,
 // and a row of the stream itself (a turn, or a branch that landed), never one
 // of the folders. A short pane has already scrolled the list away to show it.
-{
+if (!hasChats) skip(4, NO_CHATS);
+else {
   const at = listAt();
   const n = listRows();
   const lit = cursorAt();
   check(lit >= 0 && lit > (at < 0 ? -1 : at + n), `the cursor should start under the Workspaces list (rows ${at}..${at + n}), and it is on row ${lit}, "${cursorRow().trim()}"`);
   check(/^ [▾▸⠀-⣿] /.test(cursorRow()) || cursorRow().includes('merged'), `the cursor should start on the newest turn or landing, and it is on "${cursorRow().trim()}"`);
+
+  // Every folder git lists that is still on disk is a row of the list, so a
+  // repository with more than one and no list is a failure. The list is
+  // counted from the top of the stream: `g` goes to its first row, and a
+  // notch of the wheel brings its head row back in.
+  await press('g', wheelUp(20, streamTop() + 2));
+  await wait(200);
+  if (onDisk < 2) skip(1, ONE_FOLDER);
+  else {
+    const listed = listRows();
+    check(listed >= onDisk, `this repository has ${onDisk} folders, so the Workspaces list should have at least ${onDisk} rows, and it has ${listed}`);
+  }
+
+  // A branch that landed after the newest turn began sits above it.
+  const turnHead = () => /^ [▾⠀-⣿] /.test(cursorRow());
+  for (let n = 0; n < 40 && !turnHead(); n++) await press(DOWN);
+  check(turnHead(), `the cursor should be on the newest turn, and it is on "${cursorRow().trim()}"`);
+
+  await press(DOWN, DOWN, ENTER);
+  await show('changes: a row of the open turn, entered');
 }
-
-// The folders git lists that are still on disk: every one of them is a row of
-// the list, so a repository with more than one and no list is a failure, not
-// a check to skip. The list is counted from the top of the stream: `g` goes to
-// its first row, and a notch of the wheel brings its head row back in.
-await press('g', wheelUp(20, streamTop() + 2));
-await wait(200);
-const listed = listRows();
-const onDisk = execFileSync('git', ['-C', target, 'worktree', 'list', '--porcelain'], {encoding: 'utf8'})
-  .split('\n')
-  .filter(line => line.startsWith('worktree '))
-  .filter(line => fs.existsSync(line.slice(9).trim())).length;
-check(onDisk < 2 || listed >= onDisk, `this repository has ${onDisk} folders, so the Workspaces list should have at least ${onDisk} rows, and it has ${listed}`);
-
-// A branch that landed after the newest turn began sits above it.
-const turnHead = () => /^ [▾⠀-⣿] /.test(cursorRow());
-for (let n = 0; n < 40 && !turnHead(); n++) await press(DOWN);
-check(turnHead(), `the cursor should be on the newest turn, and it is on "${cursorRow().trim()}"`);
-
-await press(DOWN, DOWN, ENTER);
-await show('changes: a row of the open turn, entered');
 
 await press('m');
 await show('the View menu, open over a dimmed pane');
@@ -443,14 +479,19 @@ await show('usage: the Agents tab is hidden again unless something runs');
 await press('1', 'h');
 await wait(300);
 check(plain(frame()).includes('GO TO'), '`h` from Changes should go Home');
+// Never `w` blind: Home says how many folders there are once they are read.
+const folders = onDisk > 1 && (await waitForFolders());
+if (onDisk > 1 && !folders) check(false, `Home's "w  Workspaces" row never showed a count, so \`w\` was not pressed`);
 await press('1');
 await wait(300);
 
 // ---- d: w picks the next workspace -------------------------------------------
 // The pills row's right end says which folder the stream is about. Before `w`
 // that is this folder's scope pill; after it, the folder `w` picked, which is
-// also the one the Workspaces list marks.
-if (onDisk > 1) {
+// also the one the Workspaces list marks. A folder with no chats has the
+// card where the list would be, so there only the pills row is checked.
+if (onDisk < 2) skip(7, ONE_FOLDER);
+else if (folders) {
   const pillsRow = () => plain(frame()).split('\n').find(row => row.includes('By turn')) ?? '';
   const nameOf = (row: string) => /\bin (.+?)\s*▾?\s*$/.exec(row)?.[1]?.trim() ?? '';
   // A narrow pane gives the pills row's right end up to the grouping pills,
@@ -460,6 +501,13 @@ if (onDisk > 1) {
   for (let n = 0; n < 3 && !byTurn(); n++) await press('v');
   await press(...Array.from({length: 12}, () => UP));
   await wait(300);
+  // With the panel off, the list at the head of the stream has every folder
+  // in it before one of them is stepped to.
+  if (hasChats) {
+    for (let n = 0; n < 40 && listRows() < 2; n++) await wait(125);
+    check(listRows() >= 2, `the Workspaces list should show at least two folders before \`w\`, and it shows ${listRows()}`);
+  }
+
   const before = nameOf(pillsRow());
   // The picked row's name: its left side only. The mark before it spins and
   // the sentence after it carries an elapsed time, and neither is the row.
@@ -470,21 +518,24 @@ if (onDisk > 1) {
   await show('changes: w picked the next workspace');
   const after = nameOf(pillsRow());
   const marked = markedRow();
-  check(marked !== '' && marked !== markedBefore, `w should mark the next folder in the Workspaces list, and it marks "${marked.trim()}"`);
+  if (hasChats) check(marked !== '' && marked !== markedBefore, `w should mark the next folder in the Workspaces list, and it marks "${marked.trim()}"`);
   if (before) {
     check(after !== '' && after !== before, `w should pick another folder, and the pills row still reads "in ${after}"`);
+    check(!/^all \d+ worktrees/.test(after), `w from this folder should pick the next folder before every folder at once, and the pills row reads "in ${after}"`);
     check(!pillsRow().includes('▾'), 'a picked folder is named, not offered as a scope to widen');
     // Both name the folder by its branch, each cut to its own room.
     const stem = (name: string) => name.replace(/…$/, '');
     const shorter = Math.min(stem(after).length, stem(marked).length);
-    check(shorter > 0 && stem(after).slice(0, shorter) === stem(marked).slice(0, shorter), `the Workspaces list should mark "${after}", and it marks "${marked.trim()}"`);
+    if (hasChats) check(shorter > 0 && stem(after).slice(0, shorter) === stem(marked).slice(0, shorter), `the Workspaces list should mark "${after}", and it marks "${marked.trim()}"`);
   }
   await press('h');
   await wait(300);
   check(plain(frame()).includes('Good ') && !plain(frame()).includes(`in ${after}`), 'Home should never be about a picked folder');
-  await press('1', UP, UP, UP, UP, UP, UP, UP, UP, UP, UP, ESC);
-  await wait(400);
-  check(nameOf(pillsRow()) === before && markedRow() === markedBefore, `esc at the top of a picked folder should go back to "${before || markedBefore}", and it reads "${nameOf(pillsRow()) || markedRow()}"`);
+  if (hasChats) {
+    await press('1', UP, UP, UP, UP, UP, UP, UP, UP, UP, UP, ESC);
+    await wait(400);
+    check(nameOf(pillsRow()) === before && markedRow() === markedBefore, `esc at the top of a picked folder should go back to "${before || markedBefore}", and it reads "${nameOf(pillsRow()) || markedRow()}"`);
+  } else skip(before ? 3 : 4, NO_CHATS);
 }
 
 await press('M', DOWN);
@@ -743,4 +794,4 @@ if (failed) {
   process.exit(1);
 }
 
-console.log(`\nAll checks passed at ${COLS}x${ROWS}.`);
+console.log(`\nAll checks passed at ${COLS}x${ROWS}${skipped ? `, and ${skipped} were skipped` : ''}.`);
