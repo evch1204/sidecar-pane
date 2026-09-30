@@ -1297,12 +1297,16 @@ export function App({root, interactive, mouseDebug = false, opening = true}: Pro
 
   // Motion reports only while there is a folded panel to peek, and never once
   // the mouse is off: the terminal would otherwise send one per cell crossed
-  // for nothing.
+  // for nothing. Leaving motion turns the plain mouse back on, so it is only
+  // left that way while the mouse is still on: `M` has already turned
+  // everything off, and this must not undo it.
+  const mouseOn = useRef(mouse);
+  mouseOn.current = mouse;
   useEffect(() => {
     if (!interactive || !mouse || mode !== 'folded') return;
     stdout.write(MOUSE_MOVE_ON);
     return () => {
-      stdout.write(MOUSE_MOVE_OFF);
+      if (mouseOn.current) stdout.write(MOUSE_MOVE_OFF);
     };
   }, [interactive, mouse, mode]);
 

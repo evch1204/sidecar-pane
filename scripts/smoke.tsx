@@ -747,6 +747,32 @@ fs.rmSync(stage, {recursive: true, force: true});
   await wait(400);
   check(rowsOf(p.frame()).some(row => row.includes('By turn')), 'a click on the panel\'s Changes row should open Changes');
   check(!rowsOf(p.frame()).some(row => /Changes {3}Files {3}/.test(row)), 'with the panel on, the tab row is not drawn');
+
+  // Folding the panel turns motion reports on, and unfolding it turns them
+  // off. To the terminal 1000, 1002 and 1003 are one setting, so leaving 1003
+  // has to turn 1002 back on, or no click or wheel reaches the pane again.
+  // This harness has no terminal to switch modes, so the bytes the pane wrote
+  // are the check that counts; the click after it only shows the pane still
+  // takes one.
+  await p.press('b');
+  await wait(400);
+  check(rowsOf(p.frame())[1]?.[1] === '»', 'b should fold the open panel again');
+  await p.press('b');
+  await wait(400);
+  const sent = p.raw();
+  const left = sent.lastIndexOf('\u001B[?1003l');
+  check(left >= 0, 'folding and unfolding the panel should turn motion reports on and off');
+  check(left >= 0 && sent.indexOf('\u001B[?1002h', left) > left, 'leaving motion reports should turn 1002 back on after it, or the terminal reports no mouse at all');
+  // Files has rows in any repository. The panel's own lit row and the lit
+  // pill over the stream are left out: only the cursor to the right of the
+  // panel's rule, below the pills, counts.
+  const litAt = () => p.frame().split('\n').findIndex((row, y) => y > 2 && row.split('│').slice(1).join('│').includes(CURSOR_BG));
+  await p.press('2');
+  await wait(400);
+  const before = litAt();
+  await p.press(click(30, before + 2));
+  await wait(400);
+  check(before > 0 && litAt() === before + 2, `after folding and unfolding the panel, a click two rows below the cursor should move it there, and it went from row ${before} to ${litAt()}`);
   await p.quit();
 
   const n = pane(target, {cols: 40, rows: 40});

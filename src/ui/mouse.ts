@@ -16,8 +16,13 @@ export const MOUSE_OFF = '\u001B[?1003l\u001B[?1006l\u001B[?1002l\u001B[?1000l';
 // 1003 reports the pointer moving with no button held. Only the folded side
 // panel asks for it, to peek open under the pointer, and only while it is
 // folded: every cell crossed is a report, and nothing else wants them.
+//
+// To the terminal, 1000, 1002 and 1003 are one setting, not three. Turning
+// 1003 off turns the mouse off altogether rather than going back to 1002, so
+// leaving it has to say which one comes back. 1006 is how reports are
+// written, not which, and it stays as it was.
 export const MOUSE_MOVE_ON = '\u001B[?1003h';
-export const MOUSE_MOVE_OFF = '\u001B[?1003l';
+export const MOUSE_MOVE_OFF = '\u001B[?1003l\u001B[?1000h\u001B[?1002h';
 
 export type MouseKind = 'down' | 'up' | 'drag' | 'move' | 'wheel';
 
